@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AnyDownload — Archive Progress</title>
+    <link rel="stylesheet" href="archive.css">
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="page-header">
+        <img class="app-icon" src="../icons/image-downloader.svg" alt="">
+        <div class="header-copy">
+          <p class="eyebrow">AnyDownload</p>
+          <h1>Archive Progress</h1>
+          <p id="job-summary" class="subtitle">Loading the selected images…</p>
+        </div>
+      </header>
+
+      <section id="progress-panel" class="card progress-card" aria-labelledby="status-heading">
+        <div class="status-row">
+          <div>
+            <p class="section-label">Status</p>
+            <h2 id="status-heading">Opening archive job…</h2>
+          </div>
+          <button id="cancel-button" class="danger-button" type="button" disabled>Cancel</button>
+        </div>
+
+        <progress id="job-progress" max="1" value="0" aria-describedby="progress-description"></progress>
+        <p id="progress-description" class="progress-description" aria-live="polite">Waiting to start</p>
+
+        <dl class="stats" aria-label="Archive statistics">
+          <div>
+            <dt>Fetched</dt>
+            <dd><span id="fetched-count">0</span> / <span id="total-count">0</span></dd>
+          </div>
+          <div>
+            <dt>Failures</dt>
+            <dd id="failure-count">0</dd>
+          </div>
+          <div>
+            <dt>Image bytes</dt>
+            <dd id="byte-count">0 B</dd>
+          </div>
+          <div>
+            <dt>Destination</dt>
+            <dd id="destination-label">Downloads</dd>
+          </div>
+        </dl>
+
+        <div class="current-box">
+          <span>Current item</span>
+          <strong id="current-item">None</strong>
+        </div>
+      </section>
+
+      <section id="fatal-panel" class="card fatal-card" aria-labelledby="fatal-heading" hidden>
+        <p class="section-label">Archive not created</p>
+        <h2 id="fatal-heading">This archive job could not continue</h2>
+        <p id="fatal-message"></p>
+        <p>Return to AnyDownload on the source page, select the images, and start the ZIP again.</p>
+      </section>
+
+      <div class="results-grid">
+        <section class="card" aria-labelledby="downloads-heading">
+          <div class="section-heading">
+            <div>
+              <p class="section-label">Files</p>
+              <h2 id="downloads-heading">Archive downloads</h2>
+            </div>
+            <button id="show-downloads-button" class="quiet-button" type="button" hidden>Open Downloads</button>
+          </div>
+          <p id="downloads-empty" class="empty-state">Archive files will appear here as Firefox finishes them.</p>
+          <ol id="downloads-list" class="result-list" aria-live="polite"></ol>
+        </section>
+
+        <section class="card" aria-labelledby="failures-heading">
+          <div class="section-heading">
+            <div>
+              <p class="section-label">Skipped items</p>
+              <h2 id="failures-heading">Fetch failures</h2>
+            </div>
+          </div>
+          <p id="failures-empty" class="empty-state">No failures so far.</p>
+          <ol id="failures-list" class="result-list failure-list" aria-live="polite"></ol>
+        </section>
+      </div>
+    </main>
+
+    <script src="../shared/core.js"></script>
+    <script src="../shared/archive.js"></script>
+    <script src="archive.js"></script>
+  </body>
+</html>

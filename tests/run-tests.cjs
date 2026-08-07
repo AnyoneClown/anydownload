@@ -7,29 +7,63 @@ const Core = require("../extension/shared/core.js");
 
 const root = path.resolve(__dirname, "../extension");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
+
+function assertLocalResource(basePath, resourcePath, label) {
+  assert.ok(
+    typeof resourcePath === "string" && resourcePath.length > 0,
+    `${label} must name a local resource`
+  );
+  assert.ok(!/^(?:[a-z]+:|\/\/|#)/i.test(resourcePath), `${label} must be local: ${resourcePath}`);
+  const absoluteResourcePath = path.resolve(basePath, resourcePath);
+  assert.ok(
+    absoluteResourcePath.startsWith(`${root}${path.sep}`) && fs.existsSync(absoluteResourcePath),
+    `${label} is missing: ${resourcePath}`
+  );
+  return absoluteResourcePath;
+}
+
 assert.equal(
   manifest.action && manifest.action.default_popup,
   "popup/popup.html",
   "The toolbar action must open the compact popup"
 );
 const popupRelativePath = manifest.action.default_popup;
-const popupPath = path.resolve(root, popupRelativePath);
-assert.ok(
-  popupPath.startsWith(`${root}${path.sep}`) && fs.existsSync(popupPath),
-  `Manifest popup is missing: ${popupRelativePath}`
+const popupPath = assertLocalResource(root, popupRelativePath, "Manifest popup");
+assert.equal(manifest.sidebar_action && manifest.sidebar_action.default_title, "AnyDownload images");
+assert.equal(manifest.sidebar_action && manifest.sidebar_action.default_panel, "sidebar/sidebar.html");
+assert.equal(manifest.sidebar_action && manifest.sidebar_action.open_at_install, false);
+const sidebarPath = assertLocalResource(
+  root,
+  manifest.sidebar_action.default_panel,
+  "Manifest sidebar panel"
 );
+for (const [size, iconPath] of Object.entries(manifest.sidebar_action.default_icon || {})) {
+  assertLocalResource(root, iconPath, `Sidebar ${size}px icon`);
+}
 const popupCss = fs.readFileSync(path.join(root, "popup/popup.css"), "utf8");
 const popupHtml = fs.readFileSync(popupPath, "utf8");
 const popupJs = fs.readFileSync(path.join(root, "popup/popup.js"), "utf8");
 const backgroundJs = fs.readFileSync(path.join(root, "background.js"), "utf8");
+const archiveJs = fs.readFileSync(path.join(root, "shared/archive.js"), "utf8");
+const archivePagePath = path.join(root, "archive/archive.html");
+const archivePageHtml = fs.readFileSync(archivePagePath, "utf8");
+const archivePageJs = fs.readFileSync(path.join(root, "archive/archive.js"), "utf8");
+const archivePageCss = fs.readFileSync(path.join(root, "archive/archive.css"), "utf8");
 const previewHtml = fs.readFileSync(path.join(root, "preview/preview.html"), "utf8");
 const previewJs = fs.readFileSync(path.join(root, "preview/preview.js"), "utf8");
+const sidebarHtml = fs.readFileSync(sidebarPath, "utf8");
+const sidebarJs = fs.readFileSync(path.join(root, "sidebar/sidebar.js"), "utf8");
 
 assert.equal(manifest.manifest_version, 3);
-assert.equal(manifest.version, "1.4.1");
+assert.equal(manifest.version, "1.6.1");
 assert.equal(Core.MAX_BATCH_TOTAL_URL_LENGTH, 2000000);
 assert.deepEqual(manifest.permissions.sort(), ["activeTab", "downloads", "menus", "scripting", "storage"]);
-assert.deepEqual(manifest.background.scripts, ["shared/core.js", "shared/collector.js", "background.js"]);
+assert.deepEqual(manifest.optional_host_permissions, ["<all_urls>"]);
+assert.deepEqual(
+  manifest.background.scripts,
+  ["shared/core.js", "shared/collector.js", "shared/archive.js", "background.js"]
+);
+assert.match(manifest.content_security_policy.extension_pages, /connect-src http: https: data: blob:/);
 assert.deepEqual(
   manifest.browser_specific_settings.gecko.data_collection_permissions.required,
   ["none"]
@@ -42,7 +76,7 @@ const popupScriptSources = Array.from(
 );
 assert.deepEqual(
   popupScriptSources,
-  ["../shared/core.js", "../shared/collector.js", "popup.js"],
+  ["../shared/core.js", "../shared/collector.js", "../shared/filters.js", "popup.js"],
   "Popup scripts must load in dependency order"
 );
 const popupResourcePaths = [
@@ -53,12 +87,7 @@ const popupResourcePaths = [
   )
 ];
 for (const resourcePath of popupResourcePaths) {
-  assert.ok(!/^(?:[a-z]+:|\/\/|#)/i.test(resourcePath), `Popup resource must be local: ${resourcePath}`);
-  const absoluteResourcePath = path.resolve(path.dirname(popupPath), resourcePath);
-  assert.ok(
-    absoluteResourcePath.startsWith(`${root}${path.sep}`) && fs.existsSync(absoluteResourcePath),
-    `Popup resource is missing: ${resourcePath}`
-  );
+  assertLocalResource(path.dirname(popupPath), resourcePath, "Popup resource");
 }
 assert.match(popupCss, /html,\s*body\s*\{[^}]*width:\s*470px;[^}]*height:\s*600px;[^}]*min-width:\s*0;[^}]*min-height:\s*0;/s);
 assert.doesNotMatch(popupCss, /html,\s*body\s*\{[^}]*max-(?:width|height):/s);
@@ -67,9 +96,10 @@ assert.match(popupCss, /\.app-shell\s*\{[^}]*grid-template-rows:\s*auto auto aut
 assert.match(popupCss, /\.app-shell\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s);
 assert.match(popupCss, /\.app-shell\s*>\s*\*\s*\{[^}]*min-width:\s*0;/s);
 assert.match(popupCss, /\.app-header\s*\{[^}]*grid-template-columns:\s*38px\s+minmax\(0,\s*1fr\)\s+auto;/s);
-assert.match(popupCss, /html\.manager-window,\s*html\.manager-window body\s*\{[^}]*width:\s*100%;[^}]*height:\s*100%;/s);
-assert.match(popupCss, /html\.manager-window \.app-shell\s*\{[^}]*height:\s*100vh;/s);
-assert.match(popupCss, /html:not\(\.manager-window\) \.summary-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s);
+assert.match(popupCss, /html\.responsive-surface,\s*html\.responsive-surface body\s*\{[^}]*width:\s*100%;[^}]*height:\s*100%;/s);
+assert.match(popupCss, /html\.responsive-surface \.app-shell\s*\{[^}]*height:\s*100vh;/s);
+assert.match(popupCss, /html:not\(\.responsive-surface\) \.summary-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s);
+assert.match(popupCss, /html:not\(\.responsive-surface\) \.selection-actions\s*\{[^}]*justify-content:\s*flex-start;/s);
 assert.match(popupCss, /@media\s*\(max-width:\s*420px\)[\s\S]*\.open-window-button \.button-label\s*\{[^}]*display:\s*none;/s);
 assert.match(popupCss, /\.image-list\s*\{[^}]*overflow-x:\s*hidden;/s);
 assert.match(popupCss, /\.image-row\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*0;/s);
@@ -87,6 +117,22 @@ assert.match(popupCss, /\.folder-options\s*\{[^}]*display:\s*flex;[^}]*flex:\s*1
 assert.match(popupHtml, /id="ignored-button"[^>]*aria-pressed="false"/);
 assert.match(popupHtml, /id="clear-ignored-button"/);
 assert.match(popupHtml, /src="\.\.\/shared\/collector\.js"/);
+assert.match(popupHtml, /src="\.\.\/shared\/filters\.js"/);
+assert.match(popupHtml, /id="bulk-download-button"[^>]*title="Download all selected images"[^>]*hidden[^>]*disabled/);
+assert.match(popupHtml, /id="archive-download-button"[^>]*title="Download selected images as one ZIP archive"[^>]*hidden[^>]*disabled/);
+assert.match(popupHtml, /id="archive-footer-button"[^>]*disabled>Download ZIP<\/button>/);
+assert.match(popupHtml, /id="sidebar-follow-button"[^>]*hidden>Enable auto-follow<\/button>/);
+assert.match(popupHtml, /id="sidebar-button"[^>]*title="Open Firefox Sidebar"[^>]*aria-label="Open Firefox Sidebar"/);
+assert.match(popupHtml, /id="photos-only-input"[^>]*type="checkbox"/);
+assert.match(popupHtml, /id="live-capture-button"[^>]*aria-pressed="false"/);
+assert.match(popupHtml, /id="smart-filter-panel"[^>]*hidden/);
+assert.match(popupHtml, /id="smart-filters-button"[^>]*aria-expanded="false"[^>]*aria-controls="smart-filter-panel"/);
+assert.match(popupHtml, /id="min-width-input"[^>]*type="number"[^>]*min="0"/);
+assert.match(popupHtml, /id="min-height-input"[^>]*type="number"[^>]*min="0"/);
+assert.match(popupHtml, /id="format-filter-select"/);
+assert.match(popupHtml, /id="orientation-filter-select"/);
+assert.match(popupHtml, /id="include-unknown-input"[^>]*type="checkbox"[^>]*checked/);
+assert.match(popupHtml, /id="reset-filters-button"/);
 assert.match(popupJs, /browser\.tabs\.create\(createProperties\)/);
 assert.match(popupJs, /browser\.storage\.session\.set\(\{ \[key\]: payload \}\)/);
 assert.doesNotMatch(popupJs, /areaName\s*=\s*"local"/);
@@ -104,6 +150,11 @@ assert.match(popupJs, /dimensionProbeScheduler\.cancelQueued/);
 assert.match(popupJs, /isPaused:\s*\(\)\s*=>\s*state\.busy/);
 assert.match(popupJs, /rootMargin:\s*"0px"/);
 assert.match(popupJs, /sourceTabIdFromUrl/);
+assert.match(popupJs, /launchOptionsFromUrl/);
+assert.match(popupJs, /sidebar:\s*params\.get\("sidebar"\) === "1"/);
+assert.match(popupJs, /liveCapture:\s*params\.get\("live"\) === "1"/);
+assert.match(popupJs, /const sidebarMode = launchOptions\.sidebar/);
+assert.match(popupJs, /const responsiveSurface = managerWindowMode \|\| sidebarMode/);
 assert.match(popupJs, /initialize\(\)\.catch\(handleInitializationError\)/);
 assert.match(popupJs, /AnyDownload popup initialization failed/);
 assert.match(popupJs, /elements\["folder-help"\]\.hidden = false/);
@@ -111,22 +162,104 @@ assert.match(popupJs, /elements\["folder-help"\]\.hidden = true/);
 assert.match(popupJs, /setAttribute\("aria-invalid", "true"\)/);
 assert.match(popupJs, /browser\.tabs\.get\(state\.sourceTabId\)/);
 assert.match(popupJs, /classList\.add\("manager-window"\)/);
+assert.match(popupJs, /classList\.add\("sidebar-panel"\)/);
+assert.match(popupJs, /classList\.add\("responsive-surface"\)/);
 assert.match(popupJs, /type:\s*"OPEN_MANAGER_WINDOW"/);
 assert.match(popupJs, /sourceTabId:\s*state\.sourceTabId/);
+assert.match(popupJs, /liveCapture:\s*Boolean\(options && options\.liveCapture\)/);
+assert.match(popupJs, /browser\.sidebarAction\.open\(\)/);
+assert.match(popupJs, /elements\["sidebar-button"\]\.addEventListener\("click", openFirefoxSidebar\)/);
+assert.match(popupJs, /browser\.tabs\.onActivated\.addListener/);
+assert.match(popupJs, /browser\.tabs\.onUpdated\.addListener/);
+assert.match(popupJs, /else if \(changeInfo\.url\)/);
+assert.match(popupJs, /if \(!value\) \{[\s\S]*?return true;/);
+assert.match(popupJs, /browser\.permissions\.request\(SIDEBAR_ALL_URLS_PERMISSION\)/);
+assert.match(popupJs, /state\.sidebarPermissionNeeded = !state\.sidebarHasBroadAccess/);
+assert.doesNotMatch(
+  popupJs,
+  /if \(!responsiveSurface\)\s*\{\s*await openManagerWindow\(\{ liveCapture: true \}\)/,
+  "Live capture must toggle in the compact popup instead of opening a manager window"
+);
+assert.match(popupJs, /Filters\.matchesSmartFilters/);
+assert.match(popupJs, /Filters\.hasActiveSmartFilters/);
+assert.match(popupJs, /smartFilters:\s*Filters\.normalizeFilters\(\)/);
+assert.match(popupJs, /elements\["bulk-download-button"\]\.addEventListener\("click", downloadSelectedImages\)/);
+assert.match(popupJs, /elements\["archive-download-button"\]\.addEventListener\("click", downloadSelectedArchive\)/);
+assert.match(popupJs, /elements\["archive-footer-button"\]\.addEventListener\("click", downloadSelectedArchive\)/);
+assert.match(popupJs, /function hostPermissionPatternsForImages\(images\)/);
+assert.match(popupJs, /browser\.permissions\.request\(\{ origins \}\)/);
+assert.doesNotMatch(
+  popupJs,
+  /type:\s*"DOWNLOAD_ARCHIVE"/,
+  "ZIP jobs must not depend on one long-lived runtime message to the event background"
+);
+assert.match(popupJs, /`archiveJobRequest:\$\{jobId\}`/);
+assert.match(popupJs, /archive\/archive\.html\?job=\$\{encodeURIComponent\(jobId\)\}/);
+assert.match(popupJs, /await browser\.storage\.session\.set\(\{/);
+assert.match(popupJs, /await browser\.tabs\.create\(createProperties\)/);
+assert.match(popupJs, /items:\s*images\.map\(\(image\) => \(\{ url: image\.url \}\)\)/);
+assert.match(popupJs, /collectLiveGalleryFingerprint/);
+assert.match(popupJs, /scanPage\(\{[\s\S]*preserveSelection:\s*true,[\s\S]*live:\s*true[\s\S]*\}\)/);
 assert.match(backgroundJs, /contexts:\s*\["image"\]/);
 assert.match(backgroundJs, /browser\.menus\.onClicked\.addListener/);
 assert.match(backgroundJs, /targetElementId/);
 assert.doesNotMatch(backgroundJs, /browser\.action\.onClicked\.addListener/);
 assert.match(backgroundJs, /message\.type === "OPEN_MANAGER_WINDOW"/);
 assert.match(backgroundJs, /browser\.tabs\.get\(message\.sourceTabId\)/);
+assert.match(backgroundJs, /function managerWindowUrl\(sourceTabId, options = \{\}\)/);
+assert.match(backgroundJs, /options\.liveCapture === true \? "&live=1" : ""/);
+assert.match(backgroundJs, /openResizableImageWindow\(tab, \{[\s\S]*liveCapture:\s*Boolean\(message\.liveCapture\)[\s\S]*\}\)/);
 assert.match(backgroundJs, /browser\.windows\.create/);
 assert.match(backgroundJs, /type:\s*"popup"/);
 assert.match(backgroundJs, /sourceTabId/);
 assert.doesNotMatch(backgroundJs, /browser\.action\.openPopup/);
+assert.match(backgroundJs, /message\.type === "DOWNLOAD_ARCHIVE"/);
+assert.match(backgroundJs, /Archive\.createStoredZip/);
+assert.match(backgroundJs, /anydownload-errors\.txt/);
+assert.match(backgroundJs, /MAX_ARCHIVE_ITEMS\s*=\s*500/);
+assert.match(backgroundJs, /MAX_ARCHIVE_ENTRY_BYTES\s*=\s*64 \* 1024 \* 1024/);
+assert.match(backgroundJs, /MAX_ARCHIVE_TOTAL_BYTES\s*=\s*256 \* 1024 \* 1024/);
+assert.match(backgroundJs, /MAX_ARCHIVE_FETCH_CONCURRENCY\s*=\s*2/);
+assert.match(backgroundJs, /MAX_ARCHIVE_FETCH_TIMEOUT_MS\s*=\s*120000/);
+assert.match(backgroundJs, /new AbortController\(\)/);
+assert.match(backgroundJs, /Another ZIP archive is already being built/);
+assert.match(backgroundJs, /terminal && terminal\.state === "interrupted"/);
+assert.match(archiveJs, /function createStoredZip\(entries, options\)/);
+assert.match(archiveJs, /function crc32\(value\)/);
+assert.match(archivePageHtml, /^<!doctype html>/i);
+assert.match(archivePageHtml, /id="job-progress"/);
+assert.match(archivePageHtml, /id="cancel-button"/);
+assert.match(archivePageHtml, /src="\.\.\/shared\/core\.js"/);
+assert.match(archivePageHtml, /src="\.\.\/shared\/archive\.js"/);
+assert.match(archivePageHtml, /src="archive\.js"/);
+assert.match(archivePageJs, /MAX_ARCHIVE_ITEMS\s*=\s*500/);
+assert.match(archivePageJs, /MAX_ARCHIVE_PART_BYTES\s*=\s*64 \* 1024 \* 1024/);
+assert.match(archivePageJs, /browserObject\.storage\.session\.remove\(storageKey\)/);
+assert.match(archivePageJs, /waitForDownloadTerminal/);
+assert.match(archivePageJs, /downloadsApi\.search\(\{ id: downloadId \}\)/);
+assert.match(archivePageJs, /archivePartFilename/);
+assert.match(archivePageCss, /@media\s*\(max-width:\s*480px\)/);
 assert.match(previewHtml, /id="image-button"[^>]*aria-pressed="false"/);
 assert.match(previewJs, /browser\.storage\.session/);
 
+assert.match(sidebarHtml, /^<!doctype html>/i, "Sidebar must use standards mode");
+assert.match(sidebarHtml, /id="sidebar-status"[^>]*role="status"[^>]*aria-live="polite"/);
+assert.match(sidebarHtml, /id="open-manager-link"[^>]*href="\.\.\/popup\/popup\.html\?sidebar=1"/);
+const sidebarScriptSources = Array.from(
+  sidebarHtml.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*><\/script>/gi),
+  (match) => match[1]
+);
+assert.deepEqual(sidebarScriptSources, ["sidebar.js"]);
+for (const resourcePath of sidebarScriptSources) {
+  assertLocalResource(path.dirname(sidebarPath), resourcePath, "Sidebar resource");
+}
+assert.match(sidebarJs, /browser\.runtime\.getURL\("popup\/popup\.html\?sidebar=1"\)/);
+assert.match(sidebarJs, /window\.location\.replace\(managerUrl\)/);
+
 for (const relativePath of [
+  "archive/archive.css",
+  "archive/archive.html",
+  "archive/archive.js",
   "background.js",
   "icons/image-downloader.svg",
   "popup/popup.css",
@@ -135,8 +268,12 @@ for (const relativePath of [
   "preview/preview.css",
   "preview/preview.html",
   "preview/preview.js",
+  "shared/filters.js",
+  "shared/archive.js",
   "shared/collector.js",
-  "shared/core.js"
+  "shared/core.js",
+  "sidebar/sidebar.html",
+  "sidebar/sidebar.js"
 ]) {
   assert.ok(fs.existsSync(path.join(root, relativePath)), `Missing ${relativePath}`);
 }
@@ -197,7 +334,17 @@ assert.match(dataIgnoreKey, /^data:\d+:[a-f0-9]{16}$/);
 assert.equal(dataIgnoreKey, Core.ignoreKeyForUrl("data:image/png;base64,AA=="));
 assert.match(Core.ignoreKeyForUrl("data:IMAGE/PNG;base64,AA=="), /^data:\d+:[a-f0-9]{16}$/);
 
-for (const relativePath of ["background.js", "popup/popup.js", "preview/preview.js", "shared/collector.js", "shared/core.js"]) {
+for (const relativePath of [
+  "background.js",
+  "archive/archive.js",
+  "popup/popup.js",
+  "preview/preview.js",
+  "shared/collector.js",
+  "shared/core.js",
+  "shared/filters.js",
+  "shared/archive.js",
+  "sidebar/sidebar.js"
+]) {
   const source = fs.readFileSync(path.join(root, relativePath), "utf8");
   assert.doesNotThrow(() => new Function(source), `${relativePath} has a syntax error`);
 }

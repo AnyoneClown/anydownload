@@ -2,7 +2,12 @@
 
 const assert = require("assert").strict;
 const {
+  accumulateLiveImages,
+  collectLiveGalleryFingerprint,
   createDimensionProbeScheduler,
+  hostPermissionPatternsForImages,
+  launchOptionsFromUrl,
+  reconcileScanSelection,
   sourceTabIdFromUrl
 } = require("../extension/popup/popup.js");
 
@@ -13,6 +18,109 @@ assert.equal(
 assert.equal(sourceTabIdFromUrl("moz-extension://fixture/popup/popup.html?sourceTabId=-1"), null);
 assert.equal(sourceTabIdFromUrl("moz-extension://fixture/popup/popup.html?sourceTabId=1.5"), null);
 assert.equal(sourceTabIdFromUrl("not a URL"), null);
+assert.deepEqual(
+  launchOptionsFromUrl("moz-extension://fixture/popup/popup.html?sourceTabId=73&live=1"),
+  { sidebar: false, liveCapture: true }
+);
+assert.deepEqual(
+  launchOptionsFromUrl("moz-extension://fixture/popup/popup.html?sidebar=1"),
+  { sidebar: true, liveCapture: false }
+);
+assert.deepEqual(launchOptionsFromUrl("not a URL"), { sidebar: false, liveCapture: false });
+
+assert.deepEqual(
+  hostPermissionPatternsForImages([
+    { url: "https://cdn.example.test/photo.jpg?size=full" },
+    { url: "https://cdn.example.test/second.webp" },
+    { url: "http://images.example.test:8080/image.png" },
+    { url: "data:image/png;base64,AA==" },
+    { url: "not a URL" }
+  ]),
+  ["http://images.example.test/*", "https://cdn.example.test/*"],
+  "Archive permission prompts must be deduplicated and limited to selected HTTP(S) origins"
+);
+assert.deepEqual(hostPermissionPatternsForImages([]), []);
+
+{
+  const attributes = { src: "https://images.test/first.jpg", class: "gallery-image" };
+  const node = {
+    localName: "img",
+    currentSrc: attributes.src,
+    getAttribute(name) {
+      return attributes[name] || "";
+    }
+  };
+  const previousDocument = global.document;
+  global.document = {
+    URL: "https://gallery.test/page",
+    images: { length: 1 },
+    documentElement: { scrollHeight: 1800, scrollWidth: 1200 },
+    querySelectorAll() {
+      return [node];
+    }
+  };
+  try {
+    const first = collectLiveGalleryFingerprint({ maxElements: 2500 });
+    const repeated = collectLiveGalleryFingerprint({ maxElements: 2500 });
+    assert.equal(first.fingerprint, repeated.fingerprint, "An unchanged gallery fingerprint must be stable");
+    assert.equal(first.pageUrl, "https://gallery.test/page");
+    attributes.src = "https://images.test/second.jpg";
+    node.currentSrc = attributes.src;
+    const changed = collectLiveGalleryFingerprint({ maxElements: 2500 });
+    assert.notEqual(changed.fingerprint, first.fingerprint, "A virtualized image src change must be detected");
+  } finally {
+    global.document = previousDocument;
+  }
+}
+
+{
+  const first = { url: "https://images.test/first.jpg", width: 800, height: 600 };
+  const unchecked = { url: "https://images.test/unchecked.jpg", width: 800, height: 600 };
+  const replacement = { url: first.url, width: 2400, height: 1600 };
+  const added = { url: "https://images.test/added.jpg", width: 1200, height: 800 };
+  const rejected = { url: "https://images.test/logo.png", width: 80, height: 40 };
+  const accumulated = accumulateLiveImages(
+    [first, unchecked],
+    [replacement, added, rejected],
+    { maxImages: 10, maxPayloadLength: 10000 }
+  );
+  assert.equal(accumulated.trimmed, false);
+  assert.deepEqual(accumulated.images.map((image) => image.url), [
+    first.url,
+    unchecked.url,
+    added.url,
+    rejected.url
+  ]);
+  assert.equal(accumulated.images[0].width, 2400, "The newest metadata must replace an older live record");
+
+  const selected = reconcileScanSelection(
+    accumulated.images,
+    [first, unchecked],
+    new Set([first.url]),
+    true,
+    (image) => image.url !== rejected.url
+  );
+  assert.deepEqual(
+    [...selected],
+    [first.url, added.url],
+    "Live capture must preserve known checked/unchecked state and select only eligible new images"
+  );
+  const freshSelection = reconcileScanSelection(
+    accumulated.images,
+    [first, unchecked],
+    new Set(),
+    false,
+    (image) => image.url !== rejected.url
+  );
+  assert.deepEqual([...freshSelection], [first.url, unchecked.url, added.url]);
+
+  const bounded = accumulateLiveImages([first], [added], {
+    maxImages: 1,
+    maxPayloadLength: 10000
+  });
+  assert.equal(bounded.trimmed, true);
+  assert.deepEqual(bounded.images.map((image) => image.url), [first.url]);
+}
 
 function createHarness(options = {}) {
   const probes = [];

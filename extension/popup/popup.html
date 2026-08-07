@@ -19,6 +19,7 @@
             <span aria-hidden="true">↗</span>
             <span class="button-label">Open window</span>
           </button>
+          <button id="sidebar-button" class="icon-button sidebar-button" type="button" title="Open Firefox Sidebar" aria-label="Open Firefox Sidebar">◫</button>
           <button id="rescan-button" class="icon-button" type="button" title="Scan the page again" aria-label="Scan the page again">↻</button>
         </div>
       </header>
@@ -52,28 +53,79 @@
             <button id="clear-ignored-button" class="text-button danger-button" type="button" hidden>Restore all</button>
             <button id="select-all-button" class="text-button" type="button">Select all</button>
             <button id="select-none-button" class="text-button" type="button">Clear</button>
+            <button id="bulk-download-button" class="text-button bulk-download-button" type="button" title="Download all selected images" hidden disabled>Download</button>
+            <button id="archive-download-button" class="text-button archive-download-button" type="button" title="Download selected images as one ZIP archive" hidden disabled>ZIP</button>
           </div>
         </div>
         <label class="search-box">
           <span class="visually-hidden">Filter images</span>
           <input id="filter-input" type="search" placeholder="Filter by URL, alt text, or type…" autocomplete="off">
         </label>
+        <div class="filter-toolbar">
+          <label class="option-row photos-only-toggle" title="Hide likely logos, icons, avatars, trackers, and other non-photo assets">
+            <input id="photos-only-input" type="checkbox">
+            <span>Photos only</span>
+          </label>
+          <button id="smart-filters-button" class="text-button filter-toggle-button" type="button" aria-expanded="false" aria-controls="smart-filter-panel">Filters</button>
+          <button id="live-capture-button" class="text-button live-capture-button" type="button" aria-pressed="false" title="Watch this gallery for images loaded while you scroll">Live capture</button>
+          <button id="sidebar-follow-button" class="text-button sidebar-follow-button" type="button" title="Allow the Sidebar to follow every active webpage" hidden>Enable auto-follow</button>
+        </div>
+        <div id="smart-filter-panel" class="smart-filter-panel" hidden>
+          <label class="compact-field">
+            <span>Min width</span>
+            <input id="min-width-input" type="number" min="0" max="1000000" step="1" inputmode="numeric" value="0">
+          </label>
+          <label class="compact-field">
+            <span>Min height</span>
+            <input id="min-height-input" type="number" min="0" max="1000000" step="1" inputmode="numeric" value="0">
+          </label>
+          <label class="compact-field">
+            <span>Format</span>
+            <select id="format-filter-select">
+              <option value="any">Any</option>
+              <option value="jpeg">JPEG</option>
+              <option value="png">PNG</option>
+              <option value="webp">WebP</option>
+              <option value="avif">AVIF</option>
+              <option value="gif">GIF</option>
+              <option value="svg">SVG</option>
+            </select>
+          </label>
+          <label class="compact-field">
+            <span>Orientation</span>
+            <select id="orientation-filter-select">
+              <option value="any">Any</option>
+              <option value="landscape">Landscape</option>
+              <option value="portrait">Portrait</option>
+              <option value="square">Square</option>
+            </select>
+          </label>
+          <label class="option-row unknown-size-toggle" title="Keep originals whose full dimensions have not been detected yet">
+            <input id="include-unknown-input" type="checkbox" checked>
+            <span>Include unknown sizes</span>
+          </label>
+          <button id="reset-filters-button" class="text-button" type="button">Reset</button>
+        </div>
       </section>
 
       <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
       <main id="image-list" class="image-list" role="list" aria-label="Images found on this page"></main>
 
       <footer class="action-bar">
-        <div>
+        <div class="action-copy">
           <strong id="selected-label">0 selected</strong>
           <span id="action-detail">Choose images to download</span>
         </div>
-        <button id="download-button" class="primary-button" type="button" disabled>Download selected</button>
+        <div class="action-buttons">
+          <button id="archive-footer-button" class="secondary-button" type="button" disabled>Download ZIP</button>
+          <button id="download-button" class="primary-button" type="button" disabled>Download selected</button>
+        </div>
       </footer>
     </div>
 
     <script src="../shared/core.js"></script>
     <script src="../shared/collector.js"></script>
+    <script src="../shared/filters.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

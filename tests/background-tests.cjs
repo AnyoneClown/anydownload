@@ -43,6 +43,12 @@ function storageArea(initial = {}) {
   const tabGets = [];
   const scriptingCalls = [];
   const badgeCalls = [];
+  const fetchRequests = [];
+  const fetchFixtures = new Map();
+  const zipCalls = [];
+  const createdObjectUrls = [];
+  const revokedObjectUrls = [];
+  const createdBlobs = [];
   const local = storageArea({
     destinationFolder: "Context images/example.test",
     askForSingle: false
@@ -57,6 +63,122 @@ function storageArea(initial = {}) {
   let nextManagerTabId = 181;
   let nextUuid = 1;
   let nextTimer = 1;
+  let nextObjectUrl = 1;
+  let activeFetches = 0;
+  let maximumActiveFetches = 0;
+  let nextDownloadState = "complete";
+  let nextDownloadError = "";
+  const timers = new Map();
+
+  class BlobFixture {
+    constructor(parts, options = {}) {
+      this.parts = parts;
+      this.type = options.type || "";
+      createdBlobs.push(this);
+    }
+  }
+
+  class AbortControllerFixture {
+    constructor() {
+      const listeners = new Set();
+      this.signal = {
+        aborted: false,
+        addEventListener(type, listener) {
+          if (type === "abort") {
+            listeners.add(listener);
+          }
+        }
+      };
+      this.abortListeners = listeners;
+    }
+
+    abort() {
+      this.signal.aborted = true;
+      for (const listener of this.abortListeners) {
+        listener();
+      }
+      this.abortListeners.clear();
+    }
+  }
+
+  class URLFixture extends URL {}
+  URLFixture.createObjectURL = (blob) => {
+    const objectUrl = `blob:anydownload-${nextObjectUrl++}`;
+    createdObjectUrls.push({ objectUrl, blob });
+    return objectUrl;
+  };
+  URLFixture.revokeObjectURL = (objectUrl) => {
+    revokedObjectUrls.push(objectUrl);
+  };
+
+  function httpFixture(bytes, options = {}) {
+    const data = Uint8Array.from(bytes);
+    const response = {
+      ok: options.ok !== false,
+      status: options.status || (options.ok === false ? 500 : 200),
+      statusText: options.statusText || "",
+      headers: {
+        get(name) {
+          const normalizedName = String(name).toLowerCase();
+          if (normalizedName === "content-length") {
+            return options.contentLength == null ? String(data.byteLength) : String(options.contentLength);
+          }
+          if (normalizedName === "content-type") {
+            return options.contentType || "image/jpeg";
+          }
+          return null;
+        }
+      },
+      async arrayBuffer() {
+        return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      }
+    };
+    if (options.stream) {
+      response.body = {
+        getReader() {
+          let consumed = false;
+          return {
+            async read() {
+              if (consumed) {
+                return { done: true, value: undefined };
+              }
+              consumed = true;
+              return { done: false, value: data };
+            },
+            async cancel() {}
+          };
+        }
+      };
+    }
+    return response;
+  }
+
+  async function fetchFixture(url, options) {
+    fetchRequests.push({ url, options });
+    activeFetches += 1;
+    maximumActiveFetches = Math.max(maximumActiveFetches, activeFetches);
+    await Promise.resolve();
+    activeFetches -= 1;
+    const fixture = fetchFixtures.get(url);
+    if (fixture instanceof Error) {
+      throw fixture;
+    }
+    if (typeof fixture === "function") {
+      return fixture(options);
+    }
+    if (!fixture) {
+      throw new Error(`Missing fetch fixture for ${url}`);
+    }
+    return fixture;
+  }
+
+  const Archive = {
+    createStoredZip(entries, options) {
+      zipCalls.push({ entries: entries.slice(), options });
+      const parts = [Uint8Array.from([0x50, 0x4b, 0x05, 0x06])];
+      return { parts, size: parts[0].byteLength, entryCount: entries.length };
+    }
+  };
 
   const collector = function contextCollectorFixture() {};
   const browser = {
@@ -80,7 +202,10 @@ function storageArea(initial = {}) {
         return 91;
       },
       async search() {
-        return [];
+        const item = { id: 91, state: nextDownloadState, error: nextDownloadError };
+        nextDownloadState = "complete";
+        nextDownloadError = "";
+        return [item];
       }
     },
     menus: {
@@ -192,21 +317,29 @@ function storageArea(initial = {}) {
   };
 
   const sandbox = {
+    AbortController: AbortControllerFixture,
+    ImageDownloaderArchive: Archive,
     ImageDownloaderCore: Core,
     ImageDownloaderCollector: collector,
-    Blob: class BlobFixture {},
+    Blob: BlobFixture,
+    Date,
     TextEncoder,
     Uint8Array,
-    URL,
+    URL: URLFixture,
     atob(value) {
       return Buffer.from(value, "base64").toString("binary");
     },
     browser,
-    clearTimeout() {},
+    clearTimeout(timerId) {
+      timers.delete(timerId);
+    },
     console,
     crypto: { randomUUID: () => `00000000-0000-4000-8000-${String(nextUuid++).padStart(12, "0")}` },
-    setTimeout() {
-      return nextTimer++;
+    fetch: fetchFixture,
+    setTimeout(callback, delay) {
+      const timerId = nextTimer++;
+      timers.set(timerId, { callback, delay });
+      return timerId;
     }
   };
   vm.runInNewContext(source, sandbox, { filename: "background.js" });
@@ -298,6 +431,32 @@ function storageArea(initial = {}) {
   assert.equal(updatedWindows[0].details.width, undefined, "Reusing a manager must preserve user-resized bounds");
   assert.ok(badgeCalls.some((call) => call.type === "text" && call.details.text === "✓"));
 
+  const liveOpenResult = await runtimeMessage({
+    type: "OPEN_MANAGER_WINDOW",
+    sourceTabId: tab.id,
+    liveCapture: true
+  });
+  assert.equal(liveOpenResult.ok, true);
+  assert.equal(liveOpenResult.reused, true);
+  assert.equal(createdWindows.length, 1, "Live capture must reuse an existing manager window");
+  assert.equal(updatedTabs.length, 2);
+  assert.equal(updatedTabs[1].tabId, normalManager.tabId);
+  const liveManagerUrl = new URL(updatedTabs[1].details.url);
+  assert.equal(liveManagerUrl.searchParams.get("sourceTabId"), "41");
+  assert.equal(liveManagerUrl.searchParams.get("live"), "1");
+  assert.deepEqual(
+    [...liveManagerUrl.searchParams.keys()].sort(),
+    ["launch", "live", "sourceTabId"]
+  );
+  assert.notEqual(
+    liveManagerUrl.searchParams.get("launch"),
+    reusedManagerUrl.searchParams.get("launch"),
+    "A live launch must reload the reused manager"
+  );
+  assert.equal(updatedWindows[1].windowId, normalManager.windowId);
+  assert.equal(updatedWindows[1].details.focused, true);
+  assert.equal(updatedWindows[1].details.width, undefined, "Live reuse must preserve user-resized bounds");
+
   const privateTab = {
     id: 42,
     incognito: true,
@@ -363,6 +522,222 @@ function storageArea(initial = {}) {
   assert.equal(staleResult.ok, false);
   assert.match(staleResult.error, /stale/i);
   assert.equal(createdWindows.length, windowsBeforeInvalidRequests);
+
+  const archiveUrls = [
+    "https://assets.example.test/a/photo.jpg?size=full",
+    "https://assets.example.test/b/photo.jpg?size=original",
+    "https://assets.example.test/c/third.webp",
+    "https://assets.example.test/d/four.png"
+  ];
+  archiveUrls.forEach((url, index) => {
+    fetchFixtures.set(url, httpFixture(
+      [index + 1, index + 2, index + 3],
+      index === 3 ? { stream: true, contentLength: 65536 } : {}
+    ));
+  });
+  const downloadsBeforeArchive = downloadRequests.length;
+  const successfulArchive = await runtimeMessage({
+    type: "DOWNLOAD_ARCHIVE",
+    folder: "Archive tests/gallery",
+    incognito: true,
+    items: [
+      ...archiveUrls.map((url) => ({ url })),
+      { url: "data:image/png;base64,AQID" }
+    ]
+  });
+  assert.equal(successfulArchive.ok, true);
+  assert.equal(successfulArchive.total, 5);
+  assert.equal(successfulArchive.archived, 5);
+  assert.equal(successfulArchive.failed, 0);
+  assert.equal(successfulArchive.folder, "Archive tests/gallery");
+  assert.equal(successfulArchive.filename, "gallery.zip");
+  assert.equal(successfulArchive.errors.length, 0);
+  assert.equal(downloadRequests.length, downloadsBeforeArchive + 1, "An archive must use one Firefox download");
+  const archiveDownload = downloadRequests[downloadRequests.length - 1];
+  assert.match(archiveDownload.url, /^blob:anydownload-/);
+  assert.equal(archiveDownload.filename, "Archive tests/gallery/gallery.zip");
+  assert.equal(archiveDownload.conflictAction, "uniquify");
+  assert.equal(archiveDownload.saveAs, false);
+  assert.equal(archiveDownload.incognito, true);
+  assert.equal(fetchRequests.length, 4, "Embedded data images must be decoded without fetch");
+  assert.ok(fetchRequests.every((request) => request.options.credentials === "include"));
+  assert.ok(fetchRequests.every((request) => request.options.cache === "no-store"));
+  assert.ok(fetchRequests.every((request) => request.options.signal && typeof request.options.signal.aborted === "boolean"));
+  assert.equal(maximumActiveFetches, 2, "Archive fetching must never exceed two concurrent requests");
+  assert.equal(zipCalls.length, 1);
+  assert.ok(zipCalls[0].options.date instanceof Date);
+  assert.deepEqual(
+    Array.from(zipCalls[0].entries, (entry) => entry.name),
+    ["photo.jpg", "photo-2.jpg", "third.webp", "four.png", "image-0005.png"]
+  );
+  assert.deepEqual(
+    Array.from(zipCalls[0].entries[zipCalls[0].entries.length - 1].data),
+    [1, 2, 3]
+  );
+  assert.equal(
+    zipCalls[0].entries[3].data.buffer.byteLength,
+    zipCalls[0].entries[3].data.byteLength,
+    "A short body must not retain its oversized Content-Length allocation"
+  );
+  assert.equal(createdBlobs[createdBlobs.length - 1].type, "application/zip");
+  assert.ok(
+    revokedObjectUrls.includes(archiveDownload.url),
+    "The ZIP object URL must be retained through completion and then revoked"
+  );
+
+  const partialGoodUrl = "https://assets.example.test/partial/kept.jpg";
+  const partialDeniedUrl = "https://assets.example.test/partial/denied.jpg";
+  const partialLargeUrl = "https://assets.example.test/partial/large.jpg";
+  fetchFixtures.set(partialGoodUrl, httpFixture([9, 8, 7]));
+  fetchFixtures.set(partialDeniedUrl, httpFixture([], {
+    ok: false,
+    status: 403,
+    statusText: "Forbidden"
+  }));
+  fetchFixtures.set(partialLargeUrl, httpFixture([1], {
+    contentLength: (64 * 1024 * 1024) + 1
+  }));
+  const downloadsBeforePartial = downloadRequests.length;
+  const partialArchive = await runtimeMessage({
+    type: "DOWNLOAD_ARCHIVE",
+    folder: "Archive tests/partial",
+    items: [
+      { url: partialGoodUrl },
+      { url: partialDeniedUrl },
+      { url: partialLargeUrl }
+    ]
+  });
+  assert.equal(partialArchive.ok, true, "One failed image must not discard successful images");
+  assert.equal(partialArchive.total, 3);
+  assert.equal(partialArchive.archived, 1);
+  assert.equal(partialArchive.failed, 2);
+  assert.equal(partialArchive.errors.length, 2);
+  assert.match(partialArchive.errors[0].error, /HTTP 403 Forbidden/);
+  assert.match(partialArchive.errors[1].error, /64 MiB/);
+  assert.equal(downloadRequests.length, downloadsBeforePartial + 1);
+  assert.equal(downloadRequests[downloadRequests.length - 1].filename, "Archive tests/partial/partial.zip");
+  assert.equal(downloadRequests[downloadRequests.length - 1].saveAs, false);
+  assert.equal(zipCalls.length, 2);
+  assert.deepEqual(
+    Array.from(zipCalls[1].entries, (entry) => entry.name),
+    ["kept.jpg", "anydownload-errors.txt"]
+  );
+  const errorReport = Buffer.from(zipCalls[1].entries[1].data).toString("utf8");
+  assert.match(errorReport, /Image 2 \(denied\.jpg\): Image request failed with HTTP 403 Forbidden\./);
+  assert.match(errorReport, /Image 3 \(large\.jpg\): Image is larger than the 64 MiB per-file archive limit\./);
+
+  const failedNetworkUrl = "https://assets.example.test/all-fail/network.jpg";
+  const failedHttpUrl = "https://assets.example.test/all-fail/missing.jpg";
+  const failedHtmlUrl = "https://assets.example.test/all-fail/login.jpg";
+  fetchFixtures.set(failedNetworkUrl, new Error("Network connection failed."));
+  fetchFixtures.set(failedHttpUrl, httpFixture([], {
+    ok: false,
+    status: 404,
+    statusText: "Not Found"
+  }));
+  fetchFixtures.set(failedHtmlUrl, httpFixture([60, 104, 116, 109, 108, 62], {
+    contentType: "text/html; charset=utf-8"
+  }));
+  const downloadsBeforeFailure = downloadRequests.length;
+  const zipsBeforeFailure = zipCalls.length;
+  const failedArchive = await runtimeMessage({
+    type: "DOWNLOAD_ARCHIVE",
+    folder: "Archive tests/failed",
+    items: [{ url: failedNetworkUrl }, { url: failedHttpUrl }, { url: failedHtmlUrl }]
+  });
+  assert.equal(failedArchive.ok, false);
+  assert.equal(failedArchive.total, 3);
+  assert.equal(failedArchive.archived, 0);
+  assert.equal(failedArchive.failed, 3);
+  assert.equal(failedArchive.errors.length, 3);
+  assert.match(failedArchive.error, /Network connection failed/);
+  assert.match(failedArchive.errors[2].error, /text\/html instead of an image/);
+  assert.equal(downloadRequests.length, downloadsBeforeFailure, "A fully failed archive must not start a download");
+  assert.equal(zipCalls.length, zipsBeforeFailure, "A fully failed archive must not build an empty ZIP");
+
+  const timeoutUrl = "https://assets.example.test/timeout/stalled.jpg";
+  fetchFixtures.set(timeoutUrl, (options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener("abort", () => reject(new Error("Synthetic aborted fetch.")));
+  }));
+  const downloadsBeforeTimeout = downloadRequests.length;
+  const timeoutArchivePromise = runtimeMessage({
+    type: "DOWNLOAD_ARCHIVE",
+    folder: "Archive tests/timeout",
+    items: [{ url: timeoutUrl }]
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  const archiveTimeout = Array.from(timers.values()).find((timer) => timer.delay === 120000);
+  assert.ok(archiveTimeout, "Archive fetching must install a two-minute timeout");
+  archiveTimeout.callback();
+  const timeoutArchive = await timeoutArchivePromise;
+  assert.equal(timeoutArchive.ok, false);
+  assert.match(timeoutArchive.error, /timed out after 2 minutes/);
+  assert.equal(downloadRequests.length, downloadsBeforeTimeout);
+
+  const concurrentUrl = "https://assets.example.test/concurrent/photo.jpg";
+  fetchFixtures.set(concurrentUrl, httpFixture([4, 5, 6]));
+  const firstConcurrentArchive = runtimeMessage({
+    type: "DOWNLOAD_ARCHIVE",
+    folder: "Archive tests/concurrent-first",
+    items: [{ url: concurrentUrl }]
+  });
+  const rejectedConcurrentArchive = await runtimeMessage({
+    type: "DOWNLOAD_ARCHIVE",
+    folder: "Archive tests/concurrent-second",
+    items: [{ url: concurrentUrl }]
+  });
+  assert.equal(rejectedConcurrentArchive.ok, false);
+  assert.match(rejectedConcurrentArchive.error, /Another ZIP archive is already being built/);
+  assert.equal((await firstConcurrentArchive).ok, true);
+
+  const fetchesBeforeOversizedBatch = fetchRequests.length;
+  const oversizedArchive = await runtimeMessage({
+    type: "DOWNLOAD_ARCHIVE",
+    folder: "Archive tests/too-many",
+    items: Array.from({ length: 501 }, () => ({ url: partialGoodUrl }))
+  });
+  assert.equal(oversizedArchive.ok, false);
+  assert.equal(oversizedArchive.total, 501);
+  assert.equal(oversizedArchive.failed, 501);
+  assert.equal(oversizedArchive.folder, "Archive tests/too-many");
+  assert.equal(oversizedArchive.filename, "too-many.zip");
+  assert.match(oversizedArchive.error, /at most 500 images/);
+  assert.equal(fetchRequests.length, fetchesBeforeOversizedBatch);
+
+  const interruptedUrl = "https://assets.example.test/interrupted/photo.jpg";
+  fetchFixtures.set(interruptedUrl, httpFixture([7, 8, 9]));
+  nextDownloadState = "interrupted";
+  nextDownloadError = "USER_CANCELED";
+  const interruptedArchive = await runtimeMessage({
+    type: "DOWNLOAD_ARCHIVE",
+    folder: "Archive tests/interrupted",
+    items: [{ url: interruptedUrl }]
+  });
+  assert.equal(interruptedArchive.ok, false);
+  assert.match(interruptedArchive.error, /ZIP download was interrupted \(USER_CANCELED\)/);
+
+  const polledCompletionUrl = "https://assets.example.test/polled/photo.jpg";
+  fetchFixtures.set(polledCompletionUrl, httpFixture([10, 11, 12]));
+  nextDownloadState = "in_progress";
+  const polledCompletionPromise = runtimeMessage({
+    type: "DOWNLOAD_ARCHIVE",
+    folder: "Archive tests/polled-completion",
+    items: [{ url: polledCompletionUrl }]
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const retentionPoll = Array.from(timers.values()).find((timer) => timer.delay === 1000);
+  assert.ok(
+    retentionPoll,
+    "A non-terminal initial downloads.search result must schedule a completion poll"
+  );
+  await retentionPoll.callback();
+  const polledCompletion = await polledCompletionPromise;
+  assert.equal(polledCompletion.ok, true);
+  assert.ok(
+    revokedObjectUrls.includes(downloadRequests[downloadRequests.length - 1].url),
+    "Polling must release the ZIP object URL even when downloads.onChanged is missed"
+  );
 
   let androidInstalled = null;
   const browserWithoutMenus = {

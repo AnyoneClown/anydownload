@@ -3,7 +3,15 @@
 
   const Core = globalThis.ImageDownloaderCore;
   const collectImagesFromPage = globalThis.ImageDownloaderCollector;
+  const Archive = globalThis.ImageDownloaderArchive;
   const MAX_CONCURRENCY = 5;
+  const MAX_ARCHIVE_ITEMS = 500;
+  const MAX_ARCHIVE_ENTRY_BYTES = 64 * 1024 * 1024;
+  const MAX_ARCHIVE_TOTAL_BYTES = 256 * 1024 * 1024;
+  const MAX_ARCHIVE_FETCH_CONCURRENCY = 2;
+  const MAX_ARCHIVE_FETCH_TIMEOUT_MS = 120000;
+  const DOWNLOAD_RETENTION_POLL_MS = 1000;
+  const DOWNLOAD_RETENTION_MAX_MS = 24 * 60 * 60 * 1000;
   const MAX_IGNORED_PER_SITE = 500;
   const MAX_IGNORED_RULES = 5000;
   const IGNORE_STORAGE_PREFIX = "ignoredImage:";
@@ -21,6 +29,7 @@
   const retainedObjectUrls = new Map();
   const badgeTimers = new Map();
   const managerWindowQueues = new Map();
+  let archiveInProgress = false;
 
   function acknowledgeMenuCreation() {
     // Reading lastError prevents duplicate-ID errors from becoming uncaught when
@@ -83,10 +92,11 @@
     return `${MANAGER_WINDOW_STORAGE_PREFIX}${incognito ? "private" : "normal"}`;
   }
 
-  function managerWindowUrl(sourceTabId) {
+  function managerWindowUrl(sourceTabId, options = {}) {
     const launch = encodeURIComponent(createPreviewId());
+    const live = options.liveCapture === true ? "&live=1" : "";
     return browser.runtime.getURL(
-      `popup/popup.html?sourceTabId=${encodeURIComponent(String(sourceTabId))}&launch=${launch}`
+      `popup/popup.html?sourceTabId=${encodeURIComponent(String(sourceTabId))}&launch=${launch}${live}`
     );
   }
 
@@ -101,7 +111,7 @@
     return browser.tabs.create(createProperties);
   }
 
-  function openResizableImageWindow(tab) {
+  function openResizableImageWindow(tab, options = {}) {
     if (!tab || !Number.isInteger(tab.id)) {
       return Promise.reject(new Error("Firefox did not identify the source tab."));
     }
@@ -110,7 +120,7 @@
     const storageKey = managerWindowStorageKey(incognito);
     const previous = managerWindowQueues.get(storageKey) || Promise.resolve();
     const queued = previous.catch(() => undefined).then(async () => {
-      const url = managerWindowUrl(tab.id);
+      const url = managerWindowUrl(tab.id, options);
       let stored = null;
       try {
         const values = await browser.storage.session.get(storageKey);
@@ -401,14 +411,20 @@
     showActionFeedback(tab && tab.id, true);
   }
 
-  function finishRetainedDownload(downloadId) {
+  function finishRetainedDownload(downloadId, state, error) {
     const retained = retainedObjectUrls.get(downloadId);
     if (!retained) {
       return;
     }
     retainedObjectUrls.delete(downloadId);
+    if (retained.pollTimer !== null) {
+      clearTimeout(retained.pollTimer);
+    }
     URL.revokeObjectURL(retained.objectUrl);
-    retained.resolve();
+    retained.resolve({
+      state: state || "complete",
+      error: error || ""
+    });
   }
 
   browser.downloads.onChanged.addListener((change) => {
@@ -417,11 +433,15 @@
       change.state &&
       ["complete", "interrupted"].includes(change.state.current)
     ) {
-      finishRetainedDownload(change.id);
+      finishRetainedDownload(
+        change.id,
+        change.state.current,
+        change.error && change.error.current
+      );
     }
   });
 
-  function dataUrlToObjectUrl(dataUrl) {
+  function decodeDataImageUrl(dataUrl) {
     const commaIndex = dataUrl.indexOf(",");
     if (commaIndex < 0) {
       throw new Error("Malformed embedded image URL.");
@@ -441,20 +461,50 @@
       bytes = new TextEncoder().encode(decodeURIComponent(payload));
     }
 
-    return URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+    return { bytes, mimeType };
+  }
+
+  function dataUrlToObjectUrl(dataUrl) {
+    const decoded = decodeDataImageUrl(dataUrl);
+    return URL.createObjectURL(new Blob([decoded.bytes], { type: decoded.mimeType }));
   }
 
   function retainObjectUrlUntilFinished(downloadId, objectUrl) {
     return new Promise((resolve) => {
-      retainedObjectUrls.set(downloadId, { objectUrl, resolve });
-      browser.downloads.search({ id: downloadId }).then((matches) => {
-        const item = matches[0];
-        if (item && ["complete", "interrupted"].includes(item.state)) {
-          finishRetainedDownload(downloadId);
+      const retained = {
+        objectUrl,
+        resolve,
+        startedAt: Date.now(),
+        pollTimer: null
+      };
+      retainedObjectUrls.set(downloadId, retained);
+
+      async function poll() {
+        if (retainedObjectUrls.get(downloadId) !== retained) {
+          return;
         }
-      }).catch(() => {
-        // The onChanged listener remains the authoritative cleanup path.
-      });
+        try {
+          const matches = await browser.downloads.search({ id: downloadId });
+          const item = matches[0];
+          if (item && ["complete", "interrupted"].includes(item.state)) {
+            finishRetainedDownload(downloadId, item.state, item.error);
+            return;
+          }
+        } catch (_error) {
+          // A later poll or downloads.onChanged can still observe completion.
+        }
+        if (Date.now() - retained.startedAt >= DOWNLOAD_RETENTION_MAX_MS) {
+          finishRetainedDownload(
+            downloadId,
+            "interrupted",
+            "AnyDownload stopped waiting for Firefox after 24 hours"
+          );
+          return;
+        }
+        retained.pollTimer = setTimeout(poll, DOWNLOAD_RETENTION_POLL_MS);
+      }
+
+      poll();
     });
   }
 
@@ -504,6 +554,331 @@
       incognito: Boolean(message.incognito),
       total: message.items.length,
       validationErrors
+    };
+  }
+
+  function validateArchive(message) {
+    if (!message || message.type !== "DOWNLOAD_ARCHIVE") {
+      throw new Error("Unsupported message.");
+    }
+
+    const folderResult = Core.validateFolderPath(message.folder);
+    if (!folderResult.ok) {
+      throw new Error(folderResult.error);
+    }
+
+    if (!Array.isArray(message.items) || message.items.length === 0) {
+      throw new Error("Choose at least one image.");
+    }
+
+    if (message.items.length > MAX_ARCHIVE_ITEMS) {
+      throw new Error(`An archive can contain at most ${MAX_ARCHIVE_ITEMS} images.`);
+    }
+
+    const items = [];
+    const validationErrors = [];
+    let totalUrlLength = 0;
+    message.items.forEach((item, index) => {
+      const urlResult = Core.validateDownloadUrl(item && item.url);
+      if (!urlResult.ok) {
+        validationErrors.push({ index, error: `Image ${index + 1}: ${urlResult.error}` });
+        return;
+      }
+      if (totalUrlLength + urlResult.value.length > Core.MAX_BATCH_TOTAL_URL_LENGTH) {
+        validationErrors.push({ index, error: `Image ${index + 1}: the archive URL payload is too large.` });
+        return;
+      }
+      totalUrlLength += urlResult.value.length;
+      items.push({ url: urlResult.value, originalIndex: index });
+    });
+
+    if (!items.length) {
+      throw new Error(validationErrors[0] ? validationErrors[0].error : "No valid image URLs were supplied.");
+    }
+
+    return {
+      folder: folderResult.value,
+      items,
+      incognito: Boolean(message.incognito),
+      total: message.items.length,
+      validationErrors
+    };
+  }
+
+  function contentLengthForResponse(response) {
+    if (!response || !response.headers || typeof response.headers.get !== "function") {
+      return 0;
+    }
+    const value = Number(response.headers.get("content-length"));
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }
+
+  async function readResponseBytes(response, declaredLength) {
+    if (response.body && typeof response.body.getReader === "function") {
+      const reader = response.body.getReader();
+      let bytes = declaredLength ? new Uint8Array(declaredLength) : null;
+      let chunks = bytes ? null : [];
+      let size = 0;
+      while (true) {
+        const result = await reader.read();
+        if (result.done) {
+          break;
+        }
+        const chunk = result.value instanceof Uint8Array
+          ? result.value
+          : new Uint8Array(result.value);
+        const nextSize = size + chunk.byteLength;
+        if (nextSize > MAX_ARCHIVE_ENTRY_BYTES) {
+          await reader.cancel().catch(() => undefined);
+          throw new Error("Image is larger than the 64 MiB per-file archive limit.");
+        }
+        if (bytes && nextSize <= bytes.byteLength) {
+          bytes.set(chunk, size);
+        } else {
+          if (bytes) {
+            chunks = [bytes.subarray(0, size)];
+            bytes = null;
+          }
+          chunks.push(chunk);
+        }
+        size = nextSize;
+      }
+      if (bytes) {
+        return size === bytes.byteLength ? bytes : bytes.slice(0, size);
+      }
+      bytes = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return bytes;
+    }
+
+    const buffer = await response.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    if (bytes.byteLength > MAX_ARCHIVE_ENTRY_BYTES) {
+      throw new Error("Image is larger than the 64 MiB per-file archive limit.");
+    }
+    return bytes;
+  }
+
+  function contentTypeForResponse(response) {
+    if (!response || !response.headers || typeof response.headers.get !== "function") {
+      return "";
+    }
+    return String(response.headers.get("content-type") || "")
+      .split(";", 1)[0]
+      .trim()
+      .toLowerCase();
+  }
+
+  async function fetchArchiveBytes(url) {
+    if (url.startsWith("data:")) {
+      return decodeDataImageUrl(url).bytes;
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), MAX_ARCHIVE_FETCH_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, {
+        credentials: "include",
+        cache: "no-store",
+        signal: controller.signal
+      });
+      if (!response || !response.ok) {
+        const status = response && Number(response.status) || 0;
+        const statusText = response && String(response.statusText || "").trim();
+        throw new Error(status
+          ? `Image request failed with HTTP ${status}${statusText ? ` ${statusText}` : ""}.`
+          : "Image request failed.");
+      }
+
+      const contentType = contentTypeForResponse(response);
+      if (contentType && !contentType.startsWith("image/") && ![
+        "application/octet-stream",
+        "binary/octet-stream"
+      ].includes(contentType)) {
+        throw new Error(`Image request returned ${contentType} instead of an image.`);
+      }
+      const declaredLength = contentLengthForResponse(response);
+      if (declaredLength > MAX_ARCHIVE_ENTRY_BYTES) {
+        throw new Error("Image is larger than the 64 MiB per-file archive limit.");
+      }
+      return await readResponseBytes(response, declaredLength);
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error("Image request timed out after 2 minutes.");
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  function archiveFilenameForFolder(folder) {
+    const lastSegment = folder.split("/").filter(Boolean).pop() || "images";
+    const basename = Core.sanitizePathSegment(lastSegment.replace(/\.zip$/i, ""), "images");
+    return Core.sanitizeFilename(`${basename}.zip`, "images.zip");
+  }
+
+  function archiveErrorReport(failures) {
+    const lines = [
+      "AnyDownload could not archive the following images:",
+      ""
+    ];
+    failures.forEach((failure) => {
+      const number = Number(failure.index) + 1;
+      const name = failure.filename ? ` (${failure.filename})` : "";
+      lines.push(`Image ${number}${name}: ${failure.error}`);
+    });
+    return new TextEncoder().encode(`${lines.join("\n")}\n`);
+  }
+
+  async function buildArchive(batch) {
+    if (!Archive || typeof Archive.createStoredZip !== "function") {
+      throw new Error("The archive builder is unavailable.");
+    }
+
+    const usedNames = new Set();
+    const candidates = batch.items.map((item) => {
+      const baseName = Core.filenameForImage(item.url, item.originalIndex);
+      return {
+        ...item,
+        filename: Core.uniquifyFilename(baseName, usedNames)
+      };
+    });
+    const failures = batch.validationErrors.slice();
+    const successfulEntries = new Array(candidates.length);
+    let totalBytes = 0;
+    let cursor = 0;
+
+    async function worker() {
+      while (cursor < candidates.length) {
+        const candidateIndex = cursor;
+        const candidate = candidates[candidateIndex];
+        cursor += 1;
+        try {
+          const bytes = await fetchArchiveBytes(candidate.url);
+          if (totalBytes + bytes.byteLength > MAX_ARCHIVE_TOTAL_BYTES) {
+            throw new Error("Adding this image would exceed the 256 MiB archive limit.");
+          }
+          totalBytes += bytes.byteLength;
+          successfulEntries[candidateIndex] = { name: candidate.filename, data: bytes };
+        } catch (error) {
+          failures.push({
+            index: candidate.originalIndex,
+            filename: candidate.filename,
+            error: error && error.message ? error.message : String(error)
+          });
+        }
+      }
+    }
+
+    const workers = Array.from(
+      { length: Math.min(MAX_ARCHIVE_FETCH_CONCURRENCY, candidates.length) },
+      () => worker()
+    );
+    await Promise.all(workers);
+    failures.sort((left, right) => (Number(left.index) || 0) - (Number(right.index) || 0));
+
+    const archiveImageEntries = successfulEntries.filter(Boolean);
+    if (!archiveImageEntries.length) {
+      const firstError = failures[0] && failures[0].error;
+      return {
+        ok: false,
+        total: batch.total,
+        archived: 0,
+        failed: batch.total,
+        folder: batch.folder,
+        filename: archiveFilenameForFolder(batch.folder),
+        error: firstError || "None of the selected images could be archived.",
+        errors: failures
+      };
+    }
+
+    const zipEntries = archiveImageEntries.slice();
+    if (failures.length) {
+      zipEntries.push({
+        name: "anydownload-errors.txt",
+        data: archiveErrorReport(failures)
+      });
+    }
+    const zip = Archive.createStoredZip(zipEntries, { date: new Date() });
+    if (!zip || !Array.isArray(zip.parts) || !Number.isFinite(zip.size) || zip.entryCount !== zipEntries.length) {
+      throw new Error("The archive builder returned an invalid ZIP file.");
+    }
+
+    const filename = archiveFilenameForFolder(batch.folder);
+    const targetPath = Core.buildDownloadPath(batch.folder, filename);
+    const archivedCount = archiveImageEntries.length;
+    const archiveBlob = new Blob(zip.parts, { type: "application/zip" });
+    successfulEntries.fill(null);
+    archiveImageEntries.length = 0;
+    zipEntries.length = 0;
+    zip.parts.length = 0;
+    let objectUrl = URL.createObjectURL(archiveBlob);
+    try {
+      const downloadId = await browser.downloads.download({
+        url: objectUrl,
+        filename: targetPath,
+        conflictAction: "uniquify",
+        saveAs: false,
+        incognito: batch.incognito
+      });
+      if (typeof downloadId !== "number") {
+        throw new Error("Firefox did not start the archive download.");
+      }
+      const retainedUrl = objectUrl;
+      objectUrl = "";
+      const terminal = await retainObjectUrlUntilFinished(downloadId, retainedUrl);
+      if (terminal && terminal.state === "interrupted") {
+        throw new Error(
+          `The ZIP download was interrupted${terminal.error ? ` (${terminal.error})` : ""}.`
+        );
+      }
+    } finally {
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    }
+
+    return {
+      ok: true,
+      total: batch.total,
+      archived: archivedCount,
+      failed: batch.total - archivedCount,
+      folder: batch.folder,
+      filename,
+      errors: failures
+    };
+  }
+
+  async function startArchive(batch) {
+    if (archiveInProgress) {
+      throw new Error("Another ZIP archive is already being built. Wait for it to finish and try again.");
+    }
+    archiveInProgress = true;
+    try {
+      return await buildArchive(batch);
+    } finally {
+      archiveInProgress = false;
+    }
+  }
+
+  function archiveFailureResponse(message, error) {
+    const total = Array.isArray(message && message.items) ? message.items.length : 0;
+    const folderResult = Core.validateFolderPath(message && message.folder);
+    const folder = folderResult.ok ? folderResult.value : "";
+    return {
+      ok: false,
+      total,
+      archived: 0,
+      failed: total,
+      folder,
+      filename: folder ? archiveFilenameForFolder(folder) : "",
+      error: error && error.message ? error.message : String(error),
+      errors: error && Array.isArray(error.errors) ? error.errors : []
     };
   }
 
@@ -617,12 +992,24 @@
         });
       }
       return browser.tabs.get(message.sourceTabId)
-        .then((tab) => openResizableImageWindow(tab))
+        .then((tab) => openResizableImageWindow(tab, {
+          liveCapture: Boolean(message.liveCapture)
+        }))
         .then((result) => ({ ok: true, ...result }))
         .catch((error) => ({
           ok: false,
           error: error && error.message ? error.message : String(error)
         }));
+    }
+
+    if (message.type === "DOWNLOAD_ARCHIVE") {
+      try {
+        return startArchive(validateArchive(message)).catch((error) =>
+          archiveFailureResponse(message, error)
+        );
+      } catch (error) {
+        return Promise.resolve(archiveFailureResponse(message, error));
+      }
     }
 
     if (message.type !== "DOWNLOAD_BATCH") {

@@ -200,8 +200,178 @@
     }
   }
 
+  function launchOptionsFromUrl(urlValue) {
+    try {
+      const params = new URL(String(urlValue || "")).searchParams;
+      return {
+        sidebar: params.get("sidebar") === "1",
+        liveCapture: params.get("live") === "1"
+      };
+    } catch (_error) {
+      return { sidebar: false, liveCapture: false };
+    }
+  }
+
+  function collectLiveGalleryFingerprint(options) {
+    "use strict";
+
+    const maxElements = Math.max(100, Math.min(5000, Number(options && options.maxElements) || 2500));
+    const selector = [
+      "img",
+      "picture source",
+      "svg image",
+      "video[poster]",
+      "input[type='image']",
+      "a[data-full]",
+      "a[data-original]",
+      "a[data-image]",
+      "a[href$='.jpg' i]",
+      "a[href$='.jpeg' i]",
+      "a[href$='.png' i]",
+      "a[href$='.webp' i]",
+      "a[href$='.avif' i]",
+      "[data-src]",
+      "[data-srcset]",
+      "[data-original]",
+      "[data-full]",
+      "[style*='url']"
+    ].join(",");
+    const attributes = [
+      "src", "currentSrc", "srcset", "href", "poster", "data-src", "data-srcset",
+      "data-lazy-src", "data-original", "data-original-src", "data-full", "data-full-src", "data-large",
+      "data-zoom-image", "style", "class", "width", "height"
+    ];
+    let hash = 2166136261;
+    let count = 0;
+
+    function add(value) {
+      const text = String(value == null ? "" : value).slice(0, 4096);
+      for (let index = 0; index < text.length; index += 1) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 16777619) >>> 0;
+      }
+      hash ^= 31;
+      hash = Math.imul(hash, 16777619) >>> 0;
+    }
+
+    add(document.URL);
+    add(document.images ? document.images.length : 0);
+    add(document.documentElement ? document.documentElement.scrollHeight : 0);
+    add(document.documentElement ? document.documentElement.scrollWidth : 0);
+
+    let nodes = [];
+    try {
+      nodes = document.querySelectorAll(selector);
+    } catch (_error) {
+      nodes = [];
+    }
+    const limit = Math.min(nodes.length, maxElements);
+    for (let index = 0; index < limit; index += 1) {
+      const node = nodes[index];
+      add(node.localName || "");
+      for (const attribute of attributes) {
+        let value = "";
+        try {
+          value = attribute === "currentSrc"
+            ? node.currentSrc
+            : node.getAttribute && node.getAttribute(attribute);
+        } catch (_error) {
+          value = "";
+        }
+        if (value) {
+          add(attribute);
+          add(value);
+        }
+      }
+      try {
+        const linkedOriginal = node.closest && node.closest("a[href]");
+        if (linkedOriginal) {
+          add("linked-original");
+          add(linkedOriginal.getAttribute("href"));
+        }
+      } catch (_error) {
+        // The direct image attributes still provide a stable fingerprint.
+      }
+      count += 1;
+    }
+
+    return {
+      fingerprint: `${nodes.length}:${count}:${hash.toString(16).padStart(8, "0")}`,
+      pageUrl: String(document.URL || "").slice(0, 16384)
+    };
+  }
+
+  function accumulateLiveImages(previousImages, scannedImages, options) {
+    const settings = Object.assign({ maxImages: 1500, maxPayloadLength: 2000000 }, options || {});
+    const byUrl = new Map();
+    for (const image of [...(previousImages || []), ...(scannedImages || [])]) {
+      if (image && typeof image.url === "string" && image.url) {
+        byUrl.set(image.url, image);
+      }
+    }
+
+    const images = [];
+    let payloadLength = 0;
+    for (const image of byUrl.values()) {
+      const imageLength = image.url.length + String(image.previewUrl || "").length;
+      if (
+        images.length >= settings.maxImages ||
+        payloadLength + imageLength > settings.maxPayloadLength
+      ) {
+        continue;
+      }
+      images.push(image);
+      payloadLength += imageLength;
+    }
+    return { images, trimmed: images.length < byUrl.size };
+  }
+
+  function reconcileScanSelection(nextImages, previousImages, previousSelected, preserve, isEligible) {
+    const previousUrls = new Set((previousImages || []).map((image) => image && image.url));
+    const selectedBefore = previousSelected instanceof Set
+      ? previousSelected
+      : new Set(previousSelected || []);
+    const eligible = typeof isEligible === "function" ? isEligible : () => true;
+    const selected = new Set();
+    for (const image of nextImages || []) {
+      if (!image || typeof image.url !== "string" || !eligible(image)) {
+        continue;
+      }
+      if (!preserve || !previousUrls.has(image.url) || selectedBefore.has(image.url)) {
+        selected.add(image.url);
+      }
+    }
+    return selected;
+  }
+
+  function hostPermissionPatternsForImages(images) {
+    const patterns = new Set();
+    for (const image of images || []) {
+      const value = typeof image === "string" ? image : image && image.url;
+      try {
+        const url = new URL(String(value || ""));
+        if (url.protocol === "http:" || url.protocol === "https:") {
+          // Firefox match patterns do not include ports. A host grant covers
+          // that hostname on every port for the requested scheme.
+          patterns.add(`${url.protocol}//${url.hostname}/*`);
+        }
+      } catch (_error) {
+        // Invalid and embedded URLs do not create host-permission requests.
+      }
+    }
+    return Array.from(patterns).sort();
+  }
+
   if (typeof module === "object" && module && module.exports) {
-    module.exports = { createDimensionProbeScheduler, sourceTabIdFromUrl };
+    module.exports = {
+      accumulateLiveImages,
+      collectLiveGalleryFingerprint,
+      createDimensionProbeScheduler,
+      hostPermissionPatternsForImages,
+      launchOptionsFromUrl,
+      reconcileScanSelection,
+      sourceTabIdFromUrl
+    };
     return;
   }
 
@@ -210,6 +380,7 @@
 
   const Core = globalThis.ImageDownloaderCore;
   const collectImagesFromPage = globalThis.ImageDownloaderCollector;
+  const Filters = globalThis.ImageDownloaderFilters;
   const MAX_DISCOVERED_IMAGES = Core.MAX_BATCH_SIZE;
   const MAX_SCANNED_ELEMENTS = 10000;
   const MAX_RENDERED_ROWS = 350;
@@ -218,11 +389,25 @@
   const MAX_IGNORED_PER_SITE = 500;
   const MAX_IGNORED_RULES = 5000;
   const IGNORE_STORAGE_PREFIX = "ignoredImage:";
-  const launchSourceTabId = sourceTabIdFromUrl(globalScope.location && globalScope.location.href);
+  const LIVE_CAPTURE_INTERVAL_MS = 1600;
+  const LIVE_FORCE_SCAN_MS = 12000;
+  const SIDEBAR_SCAN_DEBOUNCE_MS = 140;
+  const SIDEBAR_ALL_URLS_PERMISSION = Object.freeze({ origins: ["<all_urls>"] });
+  const launchUrl = globalScope.location && globalScope.location.href;
+  const launchSourceTabId = sourceTabIdFromUrl(launchUrl);
+  const launchOptions = launchOptionsFromUrl(launchUrl);
   const managerWindowMode = Number.isInteger(launchSourceTabId);
+  const sidebarMode = launchOptions.sidebar;
+  const responsiveSurface = managerWindowMode || sidebarMode;
 
   if (managerWindowMode) {
     document.documentElement.classList.add("manager-window");
+  }
+  if (sidebarMode) {
+    document.documentElement.classList.add("sidebar-panel");
+  }
+  if (responsiveSurface) {
+    document.documentElement.classList.add("responsive-surface");
   }
 
   const state = {
@@ -233,9 +418,14 @@
     hasStoredFolder: false,
     incognito: false,
     ignoredKeys: new Set(),
+    liveCapture: false,
     showIgnored: false,
     siteKey: "",
-    windowId: null,
+    sidebarHasBroadAccess: false,
+    sidebarPermissionNeeded: false,
+    sidebarWindowId: null,
+    smartFilters: Filters.normalizeFilters(),
+    sourceWindowId: null,
     sourceTabId: launchSourceTabId
   };
 
@@ -245,7 +435,16 @@
   let thumbnailObserver = null;
   let dimensionObserver = null;
   let ignoreWriteQueue = Promise.resolve();
+  let liveCaptureTimer = null;
+  let liveCaptureGeneration = 0;
+  let liveFingerprint = "";
+  let liveLastFullScanAt = 0;
   let renderGeneration = 0;
+  let sidebarFollowGeneration = 0;
+  let sidebarFollowTimer = null;
+  let sidebarFollowRequest = null;
+  let sidebarFollowRunning = false;
+  let smartFilterRefreshTimer = null;
 
   const dimensionProbeScheduler = createDimensionProbeScheduler({
     maxConcurrency: MAX_DIMENSION_PROBE_CONCURRENCY,
@@ -269,22 +468,37 @@
   function cacheElements() {
     const ids = [
       "action-detail",
+      "archive-download-button",
+      "archive-footer-button",
       "ask-single-input",
       "backgrounds-input",
+      "bulk-download-button",
       "clear-ignored-button",
       "download-button",
       "filter-input",
+      "format-filter-select",
       "folder-help",
       "folder-input",
       "ignored-button",
       "image-list",
+      "include-unknown-input",
+      "live-capture-button",
+      "min-height-input",
+      "min-width-input",
       "notice",
       "open-window-button",
+      "orientation-filter-select",
       "page-label",
+      "photos-only-input",
       "rescan-button",
+      "reset-filters-button",
       "select-all-button",
       "select-none-button",
       "selected-label",
+      "sidebar-button",
+      "sidebar-follow-button",
+      "smart-filter-panel",
+      "smart-filters-button",
       "summary-label"
     ];
     for (const id of ids) {
@@ -306,11 +520,95 @@
     }
   }
 
-  async function sourceTabForScan() {
-    if (Number.isInteger(state.sourceTabId)) {
+  function isNormalSidebarTab(tab) {
+    const value = String(tab && tab.url || "").trim();
+    if (!value) {
+      // Without host access Firefox may omit tab.url. Treat that as unknown so
+      // a failed scan reveals the permission CTA instead of hiding it as if
+      // this were a known protected page.
+      return true;
+    }
+    try {
+      const protocol = new URL(value).protocol;
+      return protocol === "http:" || protocol === "https:" || protocol === "file:";
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function updateSidebarFollowButton() {
+    const button = elements["sidebar-follow-button"];
+    if (!button) {
+      return;
+    }
+    button.hidden = !sidebarMode || state.sidebarHasBroadAccess || !state.sidebarPermissionNeeded;
+    button.disabled = false;
+  }
+
+  function revealSidebarFollowPermission() {
+    if (!sidebarMode || state.sidebarHasBroadAccess) {
+      return;
+    }
+    state.sidebarPermissionNeeded = true;
+    updateSidebarFollowButton();
+  }
+
+  function resetSidebarPageState(label, notice, noticeType) {
+    state.images = [];
+    state.selected.clear();
+    state.scanWarnings = [];
+    state.showIgnored = false;
+    state.siteKey = "";
+    state.ignoredKeys.clear();
+    elements["image-list"].replaceChildren();
+    elements["page-label"].textContent = label;
+    setNotice(notice, noticeType);
+    renderImages();
+  }
+
+  function showSidebarLoading(tab) {
+    state.sidebarPermissionNeeded = !state.sidebarHasBroadAccess;
+    updateSidebarFollowButton();
+    resetSidebarPageState(
+      tab && tab.title ? tab.title : "Loading the active page…",
+      "Waiting for the active page to finish loading…"
+    );
+  }
+
+  function showProtectedSidebarPage(tab) {
+    state.sidebarPermissionNeeded = false;
+    updateSidebarFollowButton();
+    resetSidebarPageState(
+      tab && tab.title ? tab.title : "This page cannot be scanned",
+      "Firefox does not allow extensions to inspect this page. Switch to a normal website and the sidebar will update automatically."
+    );
+  }
+
+  function sidebarScanStillCurrent(settings) {
+    return !settings.sidebarFollow || (
+      sidebarMode &&
+      settings.sidebarGeneration === sidebarFollowGeneration &&
+      (!Number.isInteger(settings.tabId) || settings.tabId === state.sourceTabId)
+    );
+  }
+
+  async function sourceTabForScan(options) {
+    const pinnedSource = Boolean(options && options.pinnedSource);
+    const requestedTabId = options && options.tabId;
+    if (Number.isSafeInteger(requestedTabId)) {
+      return browser.tabs.get(requestedTabId);
+    }
+    if ((managerWindowMode || pinnedSource) && Number.isInteger(state.sourceTabId)) {
       return browser.tabs.get(state.sourceTabId);
     }
-    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+
+    const query = { active: true };
+    if (sidebarMode && Number.isInteger(state.sidebarWindowId)) {
+      query.windowId = state.sidebarWindowId;
+    } else {
+      query.currentWindow = true;
+    }
+    const tabs = await browser.tabs.query(query);
     return tabs[0] || null;
   }
 
@@ -323,7 +621,7 @@
     button.disabled = managerWindowMode || state.busy || !Number.isInteger(state.sourceTabId);
   }
 
-  async function openManagerWindow() {
+  async function openManagerWindow(options) {
     if (managerWindowMode || !Number.isInteger(state.sourceTabId)) {
       setNotice("Wait for the current page scan before opening the large window.", "error");
       return;
@@ -334,15 +632,42 @@
     try {
       const result = await browser.runtime.sendMessage({
         type: "OPEN_MANAGER_WINDOW",
-        sourceTabId: state.sourceTabId
+        sourceTabId: state.sourceTabId,
+        liveCapture: Boolean(options && options.liveCapture)
       });
       if (!result || !result.ok) {
         throw new Error((result && result.error) || "Firefox could not open the large window.");
       }
-      globalScope.close();
+      if (sidebarMode) {
+        if (state.liveCapture) {
+          stopLiveCapture();
+        }
+        setNotice("Opened the resizable image window.", "success");
+      } else {
+        globalScope.close();
+      }
     } catch (error) {
       setNotice(error && error.message ? error.message : String(error), "error");
       button.disabled = false;
+    }
+  }
+
+  function openFirefoxSidebar() {
+    const button = elements["sidebar-button"];
+    if (!browser.sidebarAction || typeof browser.sidebarAction.open !== "function") {
+      button.hidden = true;
+      return;
+    }
+
+    try {
+      const opening = browser.sidebarAction.open();
+      Promise.resolve(opening).then(() => {
+        globalScope.close();
+      }).catch((error) => {
+        setNotice(`Firefox could not open the sidebar: ${error.message || error}`, "error");
+      });
+    } catch (error) {
+      setNotice(`Firefox could not open the sidebar: ${error.message || error}`, "error");
     }
   }
 
@@ -618,8 +943,8 @@
 
     const previewUrl = browser.runtime.getURL(`preview/preview.html?id=${encodeURIComponent(id)}`);
     const createProperties = { url: previewUrl, active: true };
-    if (Number.isInteger(state.windowId)) {
-      createProperties.windowId = state.windowId;
+    if (Number.isInteger(state.sourceWindowId)) {
+      createProperties.windowId = state.sourceWindowId;
     }
     try {
       await browser.tabs.create(createProperties);
@@ -746,9 +1071,85 @@
     return result;
   }
 
+  function smartFiltersFromControls() {
+    return Filters.normalizeFilters({
+      photosOnly: elements["photos-only-input"].checked,
+      minWidth: elements["min-width-input"].value,
+      minHeight: elements["min-height-input"].value,
+      format: elements["format-filter-select"].value,
+      orientation: elements["orientation-filter-select"].value,
+      includeUnknown: elements["include-unknown-input"].checked
+    });
+  }
+
+  function applySmartFiltersToControls(filters) {
+    const normalized = Filters.normalizeFilters(filters);
+    state.smartFilters = normalized;
+    elements["photos-only-input"].checked = normalized.photosOnly;
+    elements["min-width-input"].value = String(normalized.minWidth);
+    elements["min-height-input"].value = String(normalized.minHeight);
+    elements["format-filter-select"].value = normalized.format;
+    elements["orientation-filter-select"].value = normalized.orientation;
+    elements["include-unknown-input"].checked = normalized.includeUnknown;
+  }
+
+  function smartFilterCount(filters) {
+    const normalized = Filters.normalizeFilters(filters);
+    return Number(normalized.photosOnly) +
+      Number(normalized.minWidth > 0) +
+      Number(normalized.minHeight > 0) +
+      Number(normalized.format !== "any") +
+      Number(normalized.orientation !== "any") +
+      Number(!normalized.includeUnknown);
+  }
+
+  function updateSmartFilterButton() {
+    const count = smartFilterCount(state.smartFilters);
+    const button = elements["smart-filters-button"];
+    button.textContent = count ? `Filters (${count})` : "Filters";
+    button.classList.toggle("active", count > 0 || !elements["smart-filter-panel"].hidden);
+  }
+
+  function imageMatchesSmartFilters(image) {
+    return state.showIgnored || Filters.matchesSmartFilters(image, state.smartFilters);
+  }
+
+  function persistSmartFilters() {
+    browser.storage.local.set({ smartFilters: state.smartFilters }).catch(() => undefined);
+  }
+
+  function handleSmartFilterChange() {
+    state.smartFilters = smartFiltersFromControls();
+    for (const image of state.images) {
+      if (isImageIgnored(image) || !Filters.matchesSmartFilters(image, state.smartFilters)) {
+        state.selected.delete(image.url);
+      }
+    }
+    updateSmartFilterButton();
+    persistSmartFilters();
+    renderImages();
+  }
+
+  function scheduleSmartFilterRefresh() {
+    if (!Filters.hasActiveSmartFilters(state.smartFilters) || smartFilterRefreshTimer !== null) {
+      return;
+    }
+    smartFilterRefreshTimer = setTimeout(() => {
+      smartFilterRefreshTimer = null;
+      for (const image of state.images) {
+        if (!Filters.matchesSmartFilters(image, state.smartFilters)) {
+          state.selected.delete(image.url);
+        }
+      }
+      renderImages();
+    }, 50);
+  }
+
   function filteredImages() {
     const query = elements["filter-input"].value.trim().toLocaleLowerCase();
-    const inCurrentView = state.images.filter((image) => isImageIgnored(image) === state.showIgnored);
+    const inCurrentView = state.images.filter((image) =>
+      isImageIgnored(image) === state.showIgnored && imageMatchesSmartFilters(image)
+    );
     if (!query) {
       return inCurrentView;
     }
@@ -756,6 +1157,14 @@
       const haystack = `${image.url} ${image.alt || ""} ${(image.kinds || []).join(" ")}`.toLocaleLowerCase();
       return haystack.includes(query);
     });
+  }
+
+  function selectedDownloadableImages() {
+    return state.images.filter((image) =>
+      state.selected.has(image.url) &&
+      !isImageIgnored(image) &&
+      Filters.matchesSmartFilters(image, state.smartFilters)
+    );
   }
 
   function friendlyFilename(image) {
@@ -831,8 +1240,12 @@
     if (!image) {
       return false;
     }
+    const matchedBefore = Filters.matchesSmartFilters(image, state.smartFilters);
     const applied = applyMeasuredDimensions(image, result.width, result.height);
     updateImageMetas(url);
+    if (matchedBefore !== Filters.matchesSmartFilters(image, state.smartFilters)) {
+      scheduleSmartFilterRefresh();
+    }
     return applied;
   }
 
@@ -883,7 +1296,11 @@
         thumbnail.addEventListener("load", () => {
           const current = currentImageForUrl(image.url);
           if (current && (!current.width || !current.height)) {
+            const matchedBefore = Filters.matchesSmartFilters(current, state.smartFilters);
             applyMeasuredDimensions(current, thumbnail.naturalWidth, thumbnail.naturalHeight);
+            if (matchedBefore !== Filters.matchesSmartFilters(current, state.smartFilters)) {
+              scheduleSmartFilterRefresh();
+            }
           }
           updateImageMetas(image.url);
         }, { once: true });
@@ -905,9 +1322,10 @@
     const ignoredCount = state.images.filter(isImageIgnored).length;
     const storedIgnoredCount = state.ignoredKeys.size;
     const availableCount = total - ignoredCount;
-    const selected = state.selected.size;
+    const selected = selectedDownloadableImages().length;
     const visible = filteredImages();
-    const hasFilter = Boolean(elements["filter-input"].value.trim());
+    const hasFilter = Boolean(elements["filter-input"].value.trim()) ||
+      (!state.showIgnored && Filters.hasActiveSmartFilters(state.smartFilters));
     const folder = folderStatus();
     const viewTotal = state.showIgnored ? ignoredCount : availableCount;
     elements["summary-label"].textContent = hasFilter
@@ -928,6 +1346,23 @@
     elements["select-all-button"].textContent = hasFilter ? "Select matches only" : "Select all";
     elements["select-none-button"].textContent = hasFilter ? "Clear matches" : "Clear";
     elements["download-button"].hidden = state.showIgnored;
+    elements["archive-footer-button"].hidden = state.showIgnored;
+    elements["bulk-download-button"].hidden = state.showIgnored || selected === 0;
+    elements["bulk-download-button"].textContent = selected === 1
+      ? "Download 1"
+      : `Download ${selected.toLocaleString()}`;
+    elements["bulk-download-button"].disabled = state.busy || selected === 0 || !folder.ok;
+    elements["bulk-download-button"].title = folder.ok
+      ? "Download all selected images"
+      : folder.error || "Enter a valid destination folder";
+    elements["archive-download-button"].hidden = state.showIgnored || selected === 0;
+    elements["archive-download-button"].textContent = selected === 1
+      ? "ZIP 1"
+      : `ZIP ${selected.toLocaleString()}`;
+    elements["archive-download-button"].disabled = state.busy || selected === 0 || !folder.ok;
+    elements["archive-download-button"].title = folder.ok
+      ? "Download all selected images as one ZIP archive"
+      : folder.error || "Enter a valid destination folder";
     elements["selected-label"].textContent = state.showIgnored
       ? `${ignoredCount.toLocaleString()} ignored here`
       : `${selected.toLocaleString()} selected`;
@@ -940,7 +1375,9 @@
         : "Choose images to download";
     elements["download-button"].textContent = selected === 1 ? "Download image" : "Download selected";
     elements["download-button"].disabled = state.busy || selected === 0 || !folder.ok;
+    elements["archive-footer-button"].disabled = state.busy || selected === 0 || !folder.ok;
     elements["rescan-button"].disabled = state.busy;
+    elements["live-capture-button"].disabled = state.busy && !state.liveCapture;
     elements["image-list"].setAttribute(
       "aria-label",
       state.showIgnored ? "Ignored images found on this page" : "Images found on this page"
@@ -1172,27 +1609,55 @@
     updateSummary();
   }
 
-  async function scanPage() {
+  async function scanPage(options) {
+    const settings = Object.assign({
+      preserveSelection: false,
+      quiet: false,
+      pinnedSource: false,
+      live: false,
+      tabId: null,
+      sidebarFollow: false,
+      sidebarGeneration: null
+    }, options || {});
+    if (state.busy) {
+      return false;
+    }
+
+    const previousImages = state.images;
+    const previousByUrl = new Map(previousImages.map((image) => [image.url, image]));
+    const previousSelected = new Set(state.selected);
+    const previousSiteKey = state.siteKey;
+    const previousIgnoredKeys = new Set(state.ignoredKeys);
+    let scanTab = null;
+    let succeeded = false;
     state.busy = true;
     updateOpenWindowButton();
-    state.images = [];
-    state.selected.clear();
-    state.showIgnored = false;
-    state.siteKey = "";
-    state.ignoredKeys.clear();
-    elements["image-list"].replaceChildren();
-    elements["page-label"].textContent = "Scanning the current page…";
-    setNotice("");
+    if (!settings.preserveSelection) {
+      state.images = [];
+      state.selected.clear();
+      state.showIgnored = false;
+      state.siteKey = "";
+      state.ignoredKeys.clear();
+      elements["image-list"].replaceChildren();
+      elements["page-label"].textContent = "Scanning the current page…";
+    }
+    if (!settings.quiet) {
+      setNotice("");
+    }
     updateSummary();
 
     try {
-      const tab = await sourceTabForScan();
+      const tab = await sourceTabForScan(settings);
       if (!tab || typeof tab.id !== "number") {
         throw new Error("No active page was found.");
       }
+      scanTab = tab;
+      if (!sidebarScanStillCurrent(settings)) {
+        return false;
+      }
       state.sourceTabId = tab.id;
       state.incognito = Boolean(tab.incognito);
-      state.windowId = Number.isInteger(tab.windowId) ? tab.windowId : null;
+      state.sourceWindowId = Number.isInteger(tab.windowId) ? tab.windowId : null;
 
       const args = [{
         includeBackgrounds: elements["backgrounds-input"].checked,
@@ -1217,6 +1682,11 @@
           args
         });
       }
+      if (!sidebarScanStillCurrent(settings)) {
+        state.siteKey = "";
+        state.ignoredKeys.clear();
+        return false;
+      }
 
       const merged = mergeScanResults(injectionResults);
       if (!merged.page) {
@@ -1226,16 +1696,56 @@
         merged.warnings.push("Some embedded frames could not be inspected; the main page was scanned.");
       }
 
-      state.siteKey = Core.siteKeyForUrl(merged.page.pageUrl);
+      const nextSiteKey = Core.siteKeyForUrl(merged.page.pageUrl);
+      const preserveThisPage = settings.preserveSelection && nextSiteKey === previousSiteKey;
+      state.siteKey = nextSiteKey;
       try {
         await loadIgnoredKeys();
       } catch (error) {
-        state.ignoredKeys.clear();
+        state.ignoredKeys = preserveThisPage ? previousIgnoredKeys : new Set();
         merged.warnings.push(`Firefox could not load ignored-image rules: ${error.message || error}`);
       }
+      if (!sidebarScanStillCurrent(settings)) {
+        state.siteKey = "";
+        state.ignoredKeys.clear();
+        return false;
+      }
+
+      if (preserveThisPage) {
+        for (const image of merged.images) {
+          const previous = previousByUrl.get(image.url);
+          if (!previous) {
+            continue;
+          }
+          image.width = image.width || previous.width || 0;
+          image.height = image.height || previous.height || 0;
+          image.previewUrl = image.previewUrl || previous.previewUrl || "";
+          if ((!image.width || !image.height) && previous.dimensionStatus) {
+            image.dimensionStatus = previous.dimensionStatus;
+          } else if (image.width && image.height) {
+            image.dimensionStatus = "known";
+          }
+        }
+      }
+
+      if (settings.live && preserveThisPage) {
+        const accumulated = accumulateLiveImages(previousImages, merged.images, {
+          maxImages: MAX_DISCOVERED_IMAGES,
+          maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH
+        });
+        if (accumulated.trimmed) {
+          merged.warnings.push("Live capture reached the 1,500-image or 2 MB safety limit.");
+        }
+        merged.images = accumulated.images;
+      }
+
       state.images = merged.images;
-      state.selected = new Set(
-        merged.images.filter((image) => !isImageIgnored(image)).map((image) => image.url)
+      state.selected = reconcileScanSelection(
+        merged.images,
+        previousImages,
+        previousSelected,
+        preserveThisPage,
+        (image) => !isImageIgnored(image) && Filters.matchesSmartFilters(image, state.smartFilters)
       );
       state.scanWarnings = merged.warnings;
       const hostname = hostFromUrl(merged.page.pageUrl);
@@ -1246,32 +1756,61 @@
         elements["folder-input"].value = `${Core.DEFAULT_FOLDER}/${safeHost}`;
       }
 
-      if (merged.warnings.length) {
+      const addedCount = preserveThisPage
+        ? merged.images.filter((image) => !previousByUrl.has(image.url)).length
+        : 0;
+      if (settings.live && addedCount) {
+        setNotice(
+          `Live capture added ${addedCount.toLocaleString()} new image${addedCount === 1 ? "" : "s"}. Keep scrolling to load more.`,
+          "success"
+        );
+      } else if (merged.warnings.length) {
         setNotice(merged.warnings.join(" "));
       } else if (!merged.images.length) {
         setNotice("Try scrolling to load lazy images, then scan again.");
       }
+      succeeded = true;
     } catch (error) {
-      state.images = [];
-      state.selected.clear();
-      state.siteKey = "";
-      state.ignoredKeys.clear();
-      state.windowId = null;
-      elements["page-label"].textContent = "This page cannot be scanned";
+      if (!sidebarScanStillCurrent(settings)) {
+        return false;
+      }
+      if (!settings.preserveSelection) {
+        state.images = [];
+        state.selected.clear();
+        state.siteKey = "";
+        state.ignoredKeys.clear();
+        state.sourceWindowId = null;
+        elements["page-label"].textContent = "This page cannot be scanned";
+      }
       const message = error && error.message ? error.message : String(error);
-      const guidance = Number.isInteger(state.sourceTabId)
-        ? "The source tab is unavailable, navigated, or no longer grants temporary access. Return to the page and click AnyDownload again."
-        : "Firefox blocks scanning on internal pages, its PDF viewer, and protected Mozilla pages. Open a normal website and try again.";
-      setNotice(`${guidance} (${message})`, "error");
+      if (sidebarMode && scanTab && !isNormalSidebarTab(scanTab)) {
+        showProtectedSidebarPage(scanTab);
+      } else if (sidebarMode && !state.sidebarHasBroadAccess) {
+        revealSidebarFollowPermission();
+        setNotice(
+          `AnyDownload needs site access to follow this tab automatically. Click Enable auto-follow, or reopen AnyDownload on this page for one-time access. (${message})`,
+          "error"
+        );
+      } else {
+        const guidance = Number.isInteger(state.sourceTabId)
+          ? sidebarMode
+            ? "Firefox could not inspect the active page. Wait for it to finish loading or try Rescan."
+            : "The source tab is unavailable, navigated, or no longer grants temporary access. Return to the page and click AnyDownload again."
+          : "Firefox blocks scanning on internal pages, its PDF viewer, and protected Mozilla pages. Open a normal website and try again.";
+        setNotice(`${guidance} (${message})`, "error");
+      }
     } finally {
       state.busy = false;
       updateOpenWindowButton();
       renderImages();
     }
+    return succeeded;
   }
 
   async function requestDownloads(images) {
-    images = images.filter((image) => !isImageIgnored(image));
+    images = images.filter((image) =>
+      !isImageIgnored(image) && Filters.matchesSmartFilters(image, state.smartFilters)
+    );
     if (state.busy || !images.length) {
       if (!state.busy) {
         setNotice("No non-ignored images are selected.", "error");
@@ -1304,7 +1843,9 @@
           state.selected.delete(image.url);
         }
       }
-      images = images.filter((image) => !isImageIgnored(image));
+      images = images.filter((image) =>
+        !isImageIgnored(image) && Filters.matchesSmartFilters(image, state.smartFilters)
+      );
       if (!images.length) {
         setNotice("No non-ignored images are selected.", "error");
         return;
@@ -1336,9 +1877,613 @@
     }
   }
 
+  function downloadSelectedImages() {
+    return requestDownloads(selectedDownloadableImages());
+  }
+
+  async function finishArchiveDownload(images, folder, permissionPromise) {
+    try {
+      const granted = await permissionPromise;
+      if (!granted) {
+        throw new Error("Site access was not granted, so no archive was created.");
+      }
+
+      setNotice(
+        `Preparing Archive Progress for ${images.length.toLocaleString()} original image${images.length === 1 ? "" : "s"}…`
+      );
+      const storedSettings = {
+        askForSingle: elements["ask-single-input"].checked,
+        includeBackgrounds: elements["backgrounds-input"].checked
+      };
+      if (!state.incognito) {
+        storedSettings.destinationFolder = folder.value;
+      }
+      await browser.storage.local.set(storedSettings);
+      await loadIgnoredKeys();
+      for (const image of state.images) {
+        if (isImageIgnored(image)) {
+          state.selected.delete(image.url);
+        }
+      }
+      images = images.filter((image) =>
+        !isImageIgnored(image) && Filters.matchesSmartFilters(image, state.smartFilters)
+      );
+      if (!images.length) {
+        throw new Error("No non-ignored images are selected.");
+      }
+
+      state.hasStoredFolder = true;
+      const jobId = createPreviewId();
+      const storageKey = `archiveJobRequest:${jobId}`;
+      await browser.storage.session.set({
+        [storageKey]: {
+          createdAt: Date.now(),
+          folder: folder.value,
+          incognito: state.incognito,
+          items: images.map((image) => ({ url: image.url }))
+        }
+      });
+
+      const archiveUrl = browser.runtime.getURL(
+        `archive/archive.html?job=${encodeURIComponent(jobId)}`
+      );
+      const createProperties = { url: archiveUrl, active: true };
+      if (Number.isInteger(state.sourceWindowId)) {
+        createProperties.windowId = state.sourceWindowId;
+      }
+      try {
+        await browser.tabs.create(createProperties);
+      } catch (error) {
+        await browser.storage.session.remove(storageKey).catch(() => undefined);
+        throw error;
+      }
+      setNotice(
+        `Opened Archive Progress for ${images.length.toLocaleString()} selected image${images.length === 1 ? "" : "s"}.`,
+        "success"
+      );
+    } catch (error) {
+      setNotice(error && error.message ? error.message : String(error), "error");
+    } finally {
+      state.busy = false;
+      renderImages();
+    }
+  }
+
+  function downloadSelectedArchive() {
+    const images = selectedDownloadableImages();
+    if (state.busy || !images.length) {
+      if (!state.busy) {
+        setNotice("No non-ignored images are selected.", "error");
+      }
+      return undefined;
+    }
+    if (images.length > 500) {
+      setNotice("Choose at most 500 images for one ZIP archive.", "error");
+      return undefined;
+    }
+
+    const folder = folderStatus();
+    if (!folder.ok) {
+      elements["folder-input"].focus();
+      updateSummary();
+      return undefined;
+    }
+
+    const origins = hostPermissionPatternsForImages(images);
+    let permissionPromise = Promise.resolve(true);
+    if (origins.length) {
+      if (!browser.permissions || typeof browser.permissions.request !== "function") {
+        setNotice("This Firefox build cannot grant the site access needed to create an archive.", "error");
+        return undefined;
+      }
+      try {
+        // Keep this request in the direct click stack: Firefox permits optional
+        // host access only while handling an explicit user action.
+        permissionPromise = browser.permissions.request({ origins });
+      } catch (error) {
+        setNotice(`Firefox could not request access to the selected image sites. (${error.message || error})`, "error");
+        return undefined;
+      }
+    }
+
+    state.busy = true;
+    setNotice(
+      origins.length
+        ? "Allow access to the selected image sites to build the ZIP locally."
+        : "Building the ZIP locally…"
+    );
+    renderImages();
+    return finishArchiveDownload(images, folder, permissionPromise);
+  }
+
+  function updateLiveCaptureButton() {
+    const button = elements["live-capture-button"];
+    if (!button) {
+      return;
+    }
+    button.classList.toggle("active", state.liveCapture);
+    button.setAttribute("aria-pressed", String(state.liveCapture));
+    button.textContent = state.liveCapture ? "Stop live" : "Live capture";
+    button.title = state.liveCapture
+      ? "Stop watching this gallery"
+      : responsiveSurface
+        ? "Watch this gallery for images loaded while you scroll"
+        : "Watch this gallery while the toolbar popup remains open";
+  }
+
+  function stopLiveCapture(message, type) {
+    state.liveCapture = false;
+    liveCaptureGeneration += 1;
+    liveFingerprint = "";
+    liveLastFullScanAt = 0;
+    if (liveCaptureTimer !== null) {
+      clearTimeout(liveCaptureTimer);
+      liveCaptureTimer = null;
+    }
+    updateLiveCaptureButton();
+    updateSummary();
+    if (message) {
+      setNotice(message, type);
+    }
+  }
+
+  async function liveFingerprintForSource() {
+    if (!Number.isInteger(state.sourceTabId)) {
+      throw new Error("No source tab is available for live capture.");
+    }
+    const results = await browser.scripting.executeScript({
+      target: { tabId: state.sourceTabId },
+      func: collectLiveGalleryFingerprint,
+      args: [{ maxElements: 2500 }]
+    });
+    const value = results && results[0] && results[0].result;
+    if (!value || typeof value.fingerprint !== "string") {
+      throw new Error("The page did not return a live-gallery fingerprint.");
+    }
+    return value;
+  }
+
+  function scheduleLiveCapturePoll(generation, delay) {
+    if (!state.liveCapture || generation !== liveCaptureGeneration) {
+      return;
+    }
+    if (liveCaptureTimer !== null) {
+      clearTimeout(liveCaptureTimer);
+    }
+    liveCaptureTimer = setTimeout(() => {
+      liveCaptureTimer = null;
+      pollLiveCapture(generation);
+    }, delay == null ? LIVE_CAPTURE_INTERVAL_MS : delay);
+  }
+
+  async function pollLiveCapture(generation) {
+    if (!state.liveCapture || generation !== liveCaptureGeneration) {
+      return;
+    }
+    if (state.busy) {
+      scheduleLiveCapturePoll(generation);
+      return;
+    }
+
+    try {
+      const fingerprint = await liveFingerprintForSource();
+      if (!state.liveCapture || generation !== liveCaptureGeneration) {
+        return;
+      }
+      const now = Date.now();
+      const changed = Boolean(liveFingerprint && fingerprint.fingerprint !== liveFingerprint);
+      const forceScan = now - liveLastFullScanAt >= LIVE_FORCE_SCAN_MS;
+      liveFingerprint = fingerprint.fingerprint;
+      if (changed || forceScan) {
+        const scanned = await scanPage({
+          preserveSelection: true,
+          quiet: true,
+          pinnedSource: true,
+          live: true
+        });
+        if (!scanned) {
+          stopLiveCapture();
+          return;
+        }
+        liveLastFullScanAt = Date.now();
+      }
+      scheduleLiveCapturePoll(generation);
+    } catch (error) {
+      stopLiveCapture(
+        `Live capture stopped because Firefox can no longer inspect the source tab. Reopen AnyDownload from that page to continue. (${error.message || error})`,
+        "error"
+      );
+    }
+  }
+
+  async function startLiveCapture(options) {
+    if (state.liveCapture) {
+      stopLiveCapture("Live gallery capture stopped.");
+      return;
+    }
+    if (!Number.isInteger(state.sourceTabId)) {
+      setNotice("Scan a normal website before starting live capture.", "error");
+      return;
+    }
+
+    state.liveCapture = true;
+    liveCaptureGeneration += 1;
+    const generation = liveCaptureGeneration;
+    updateLiveCaptureButton();
+    setNotice(
+      responsiveSurface
+        ? "Live capture is on. Keep scrolling the gallery; new images will be added automatically."
+        : "Live capture is on while this toolbar popup stays open. Use Open window or the Sidebar only if you need to interact with the page while capturing.",
+      "success"
+    );
+
+    try {
+      if (!options || !options.skipInitialScan) {
+        const scanned = await scanPage({
+          preserveSelection: true,
+          quiet: true,
+          pinnedSource: true,
+          live: true
+        });
+        if (!scanned) {
+          stopLiveCapture();
+          return;
+        }
+      }
+      if (!state.liveCapture || generation !== liveCaptureGeneration) {
+        return;
+      }
+      const fingerprint = await liveFingerprintForSource();
+      if (!state.liveCapture || generation !== liveCaptureGeneration) {
+        return;
+      }
+      liveFingerprint = fingerprint.fingerprint;
+      liveLastFullScanAt = Date.now();
+      scheduleLiveCapturePoll(generation);
+    } catch (error) {
+      stopLiveCapture(`Live capture could not start. (${error.message || error})`, "error");
+    }
+  }
+
+  async function rescanFromButton() {
+    if (state.liveCapture) {
+      stopLiveCapture();
+    }
+    if (sidebarMode) {
+      cancelScheduledSidebarFollow();
+      await scanPage({
+        sidebarFollow: true,
+        sidebarGeneration: sidebarFollowGeneration
+      });
+      return;
+    }
+    await scanPage();
+  }
+
+  function cancelScheduledSidebarFollow() {
+    sidebarFollowGeneration += 1;
+    sidebarFollowRequest = null;
+    if (sidebarFollowTimer !== null) {
+      clearTimeout(sidebarFollowTimer);
+      sidebarFollowTimer = null;
+    }
+  }
+
+  function beginSidebarTransition(tabId, tab) {
+    cancelScheduledSidebarFollow();
+    if (state.liveCapture) {
+      stopLiveCapture();
+    }
+    state.sourceTabId = Number.isInteger(tabId) ? tabId : null;
+    state.sourceWindowId = tab && Number.isInteger(tab.windowId) ? tab.windowId : null;
+    if (tab && !isNormalSidebarTab(tab)) {
+      showProtectedSidebarPage(tab);
+    } else {
+      showSidebarLoading(tab);
+    }
+    return sidebarFollowGeneration;
+  }
+
+  function scheduleSidebarFollowScan(tabId, delay) {
+    if (!sidebarMode || !Number.isInteger(tabId)) {
+      return;
+    }
+    cancelScheduledSidebarFollow();
+    if (state.liveCapture) {
+      stopLiveCapture();
+    }
+    state.sourceTabId = tabId;
+    const request = {
+      generation: sidebarFollowGeneration,
+      tabId
+    };
+    sidebarFollowRequest = request;
+    sidebarFollowTimer = setTimeout(() => {
+      sidebarFollowTimer = null;
+      runSidebarFollowScan(request);
+    }, delay == null ? SIDEBAR_SCAN_DEBOUNCE_MS : delay);
+  }
+
+  function retrySidebarFollowScan(request) {
+    if (
+      request !== sidebarFollowRequest ||
+      request.generation !== sidebarFollowGeneration ||
+      sidebarFollowTimer !== null
+    ) {
+      return;
+    }
+    sidebarFollowTimer = setTimeout(() => {
+      sidebarFollowTimer = null;
+      runSidebarFollowScan(request);
+    }, SIDEBAR_SCAN_DEBOUNCE_MS);
+  }
+
+  async function runSidebarFollowScan(request) {
+    if (
+      request !== sidebarFollowRequest ||
+      request.generation !== sidebarFollowGeneration
+    ) {
+      return;
+    }
+    if (sidebarFollowRunning || state.busy) {
+      retrySidebarFollowScan(request);
+      return;
+    }
+
+    sidebarFollowRunning = true;
+    try {
+      const tab = await browser.tabs.get(request.tabId);
+      if (
+        request !== sidebarFollowRequest ||
+        request.generation !== sidebarFollowGeneration
+      ) {
+        return;
+      }
+      if (
+        !tab.active ||
+        !Number.isInteger(state.sidebarWindowId) ||
+        tab.windowId !== state.sidebarWindowId
+      ) {
+        return;
+      }
+      state.sourceTabId = tab.id;
+      state.sourceWindowId = tab.windowId;
+      if (!isNormalSidebarTab(tab)) {
+        showProtectedSidebarPage(tab);
+        return;
+      }
+      if (tab.status === "loading") {
+        showSidebarLoading(tab);
+        return;
+      }
+      await scanPage({
+        tabId: tab.id,
+        sidebarFollow: true,
+        sidebarGeneration: request.generation
+      });
+    } catch (error) {
+      if (
+        request === sidebarFollowRequest &&
+        request.generation === sidebarFollowGeneration
+      ) {
+        resetSidebarPageState(
+          "The active tab is unavailable",
+          `Firefox could not read the active tab. The sidebar will retry when its page changes. (${error.message || error})`,
+          "error"
+        );
+      }
+    } finally {
+      sidebarFollowRunning = false;
+      if (request === sidebarFollowRequest) {
+        sidebarFollowRequest = null;
+      }
+    }
+  }
+
+  async function handleSidebarTabActivated(activeInfo) {
+    if (
+      !sidebarMode ||
+      !Number.isInteger(state.sidebarWindowId) ||
+      activeInfo.windowId !== state.sidebarWindowId
+    ) {
+      return;
+    }
+
+    const generation = beginSidebarTransition(activeInfo.tabId, null);
+    try {
+      const tab = await browser.tabs.get(activeInfo.tabId);
+      if (
+        generation !== sidebarFollowGeneration ||
+        tab.id !== state.sourceTabId ||
+        tab.windowId !== state.sidebarWindowId ||
+        !tab.active
+      ) {
+        return;
+      }
+      state.sourceWindowId = tab.windowId;
+      if (!isNormalSidebarTab(tab)) {
+        showProtectedSidebarPage(tab);
+      } else if (tab.status === "loading") {
+        showSidebarLoading(tab);
+      } else {
+        scheduleSidebarFollowScan(tab.id);
+      }
+    } catch (error) {
+      if (generation === sidebarFollowGeneration) {
+        resetSidebarPageState(
+          "The active tab is unavailable",
+          `Firefox could not read the active tab. (${error.message || error})`,
+          "error"
+        );
+      }
+    }
+  }
+
+  async function scanCurrentSidebarTab() {
+    const query = { active: true };
+    if (Number.isInteger(state.sidebarWindowId)) {
+      query.windowId = state.sidebarWindowId;
+    } else {
+      query.currentWindow = true;
+    }
+    const tabs = await browser.tabs.query(query);
+    const tab = tabs[0];
+    if (!tab) {
+      resetSidebarPageState("No active page", "No active page was found in this Firefox window.", "error");
+      return;
+    }
+    if (!Number.isInteger(state.sidebarWindowId) && Number.isInteger(tab.windowId)) {
+      state.sidebarWindowId = tab.windowId;
+    }
+    if (!isNormalSidebarTab(tab)) {
+      beginSidebarTransition(tab.id, tab);
+      return;
+    }
+    if (tab.status === "loading") {
+      beginSidebarTransition(tab.id, tab);
+      return;
+    }
+    scheduleSidebarFollowScan(tab.id, 0);
+  }
+
+  async function requestSidebarFollowPermission() {
+    const button = elements["sidebar-follow-button"];
+    if (!sidebarMode || !button) {
+      return;
+    }
+    button.disabled = true;
+    try {
+      const granted = await browser.permissions.request(SIDEBAR_ALL_URLS_PERMISSION);
+      state.sidebarHasBroadAccess = Boolean(granted);
+      state.sidebarPermissionNeeded = !granted;
+      updateSidebarFollowButton();
+      if (!granted) {
+        setNotice(
+          "Site access was not granted. The sidebar can still scan pages opened through AnyDownload, but it cannot follow every tab automatically.",
+          "error"
+        );
+        return;
+      }
+      setNotice("Automatic sidebar updates are enabled for normal websites.", "success");
+      await scanCurrentSidebarTab();
+    } catch (error) {
+      state.sidebarPermissionNeeded = true;
+      updateSidebarFollowButton();
+      setNotice(`Firefox could not request site access. (${error.message || error})`, "error");
+    } finally {
+      if (!button.hidden) {
+        button.disabled = false;
+      }
+    }
+  }
+
+  function wireSourceTabLifecycle() {
+    if (browser.tabs && browser.tabs.onRemoved) {
+      browser.tabs.onRemoved.addListener((tabId) => {
+        if (tabId !== state.sourceTabId) {
+          return;
+        }
+        if (sidebarMode) {
+          cancelScheduledSidebarFollow();
+          if (state.liveCapture) {
+            stopLiveCapture();
+          }
+          state.sourceTabId = null;
+          state.sourceWindowId = null;
+        } else if (state.liveCapture) {
+          stopLiveCapture("Live capture stopped because its source tab was closed.", "error");
+        }
+      });
+    }
+    if (browser.tabs && browser.tabs.onUpdated) {
+      browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+        if (
+          sidebarMode &&
+          Number.isInteger(state.sidebarWindowId) &&
+          tab &&
+          tab.windowId === state.sidebarWindowId &&
+          (tab.active || tabId === state.sourceTabId)
+        ) {
+          if (changeInfo.status === "loading") {
+            beginSidebarTransition(tabId, tab);
+          } else if (changeInfo.url) {
+            beginSidebarTransition(tabId, tab);
+            if (tab.active && tab.status !== "loading" && isNormalSidebarTab(tab)) {
+              scheduleSidebarFollowScan(tabId);
+            }
+          } else if (changeInfo.status === "complete" && tab.active) {
+            if (!isNormalSidebarTab(tab)) {
+              beginSidebarTransition(tabId, tab);
+            } else {
+              scheduleSidebarFollowScan(tabId);
+            }
+          }
+          return;
+        }
+        if (
+          tabId === state.sourceTabId &&
+          state.liveCapture &&
+          (changeInfo.url || changeInfo.status === "loading")
+        ) {
+          stopLiveCapture(
+            "Live capture paused because the source tab navigated. Open AnyDownload on the loaded page to restart it.",
+            "error"
+          );
+        }
+      });
+    }
+    if (sidebarMode && browser.tabs && browser.tabs.onActivated) {
+      browser.tabs.onActivated.addListener((activeInfo) => {
+        handleSidebarTabActivated(activeInfo).catch((error) => {
+          setNotice(`The sidebar could not follow the active tab. (${error.message || error})`, "error");
+        });
+      });
+    }
+  }
+
+  function wireSidebarPermissionLifecycle() {
+    if (!sidebarMode || !browser.permissions || typeof browser.permissions.contains !== "function") {
+      return;
+    }
+
+    async function refreshPermissionState(showRemovalNotice) {
+      const previouslyGranted = state.sidebarHasBroadAccess;
+      try {
+        state.sidebarHasBroadAccess = await browser.permissions.contains(SIDEBAR_ALL_URLS_PERMISSION);
+      } catch (_error) {
+        state.sidebarHasBroadAccess = false;
+      }
+      state.sidebarPermissionNeeded = !state.sidebarHasBroadAccess;
+      updateSidebarFollowButton();
+      if (showRemovalNotice && previouslyGranted && !state.sidebarHasBroadAccess) {
+        setNotice(
+          "Automatic sidebar updates are off because site access was removed. Enable auto-follow to turn them back on.",
+          "error"
+        );
+      }
+    }
+
+    if (browser.permissions.onAdded) {
+      browser.permissions.onAdded.addListener(() => {
+        refreshPermissionState(false);
+      });
+    }
+    if (browser.permissions.onRemoved) {
+      browser.permissions.onRemoved.addListener(() => {
+        refreshPermissionState(true);
+      });
+    }
+  }
+
   function wireEvents() {
-    elements["open-window-button"].addEventListener("click", openManagerWindow);
-    elements["rescan-button"].addEventListener("click", scanPage);
+    elements["open-window-button"].addEventListener("click", () => openManagerWindow({
+      liveCapture: state.liveCapture
+    }));
+    elements["sidebar-button"].addEventListener("click", openFirefoxSidebar);
+    if (elements["sidebar-follow-button"]) {
+      elements["sidebar-follow-button"].addEventListener("click", requestSidebarFollowPermission);
+    }
+    elements["rescan-button"].addEventListener("click", rescanFromButton);
     elements["filter-input"].addEventListener("input", renderImages);
     elements["folder-input"].addEventListener("input", updateSummary);
     elements["folder-input"].addEventListener("change", async () => {
@@ -1358,6 +2503,27 @@
     elements["backgrounds-input"].addEventListener("change", () => {
       browser.storage.local.set({ includeBackgrounds: elements["backgrounds-input"].checked });
     });
+    elements["photos-only-input"].addEventListener("change", handleSmartFilterChange);
+    for (const id of [
+      "min-width-input",
+      "min-height-input",
+      "format-filter-select",
+      "orientation-filter-select",
+      "include-unknown-input"
+    ]) {
+      elements[id].addEventListener("change", handleSmartFilterChange);
+    }
+    elements["smart-filters-button"].addEventListener("click", () => {
+      const panel = elements["smart-filter-panel"];
+      panel.hidden = !panel.hidden;
+      elements["smart-filters-button"].setAttribute("aria-expanded", String(!panel.hidden));
+      updateSmartFilterButton();
+    });
+    elements["reset-filters-button"].addEventListener("click", () => {
+      applySmartFiltersToControls(Filters.DEFAULT_FILTERS);
+      handleSmartFilterChange();
+    });
+    elements["live-capture-button"].addEventListener("click", () => startLiveCapture());
     elements["ignored-button"].addEventListener("click", () => {
       state.showIgnored = !state.showIgnored;
       renderImages();
@@ -1368,7 +2534,10 @@
       renderImages();
     });
     elements["select-none-button"].addEventListener("click", () => {
-      if (elements["filter-input"].value.trim()) {
+      if (
+        elements["filter-input"].value.trim() ||
+        Filters.hasActiveSmartFilters(state.smartFilters)
+      ) {
         for (const image of filteredImages()) {
           state.selected.delete(image.url);
         }
@@ -1377,24 +2546,65 @@
       }
       renderImages();
     });
-    elements["download-button"].addEventListener("click", () => {
-      const images = state.images.filter(
-        (image) => state.selected.has(image.url) && !isImageIgnored(image)
-      );
-      requestDownloads(images);
-    });
+    elements["bulk-download-button"].addEventListener("click", downloadSelectedImages);
+    elements["archive-download-button"].addEventListener("click", downloadSelectedArchive);
+    elements["archive-footer-button"].addEventListener("click", downloadSelectedArchive);
+    elements["download-button"].addEventListener("click", downloadSelectedImages);
+  }
+
+  async function initializeSidebarContext() {
+    if (!sidebarMode) {
+      updateSidebarFollowButton();
+      return;
+    }
+    try {
+      const owningWindow = await browser.windows.getCurrent();
+      if (owningWindow && Number.isInteger(owningWindow.id)) {
+        state.sidebarWindowId = owningWindow.id;
+      }
+    } catch (_error) {
+      // The active-tab fallback below can still identify the owning browser window.
+    }
+    if (!Number.isInteger(state.sidebarWindowId)) {
+      try {
+        const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+        if (tabs[0] && Number.isInteger(tabs[0].windowId)) {
+          state.sidebarWindowId = tabs[0].windowId;
+        }
+      } catch (_error) {
+        // The regular scan will surface a friendly error if no window can be found.
+      }
+    }
+    try {
+      state.sidebarHasBroadAccess = await browser.permissions.contains(SIDEBAR_ALL_URLS_PERMISSION);
+    } catch (_error) {
+      state.sidebarHasBroadAccess = false;
+    }
+    state.sidebarPermissionNeeded = !state.sidebarHasBroadAccess;
+    updateSidebarFollowButton();
   }
 
   async function initialize() {
     cacheElements();
+    applySmartFiltersToControls(Filters.DEFAULT_FILTERS);
+    elements["sidebar-button"].hidden = responsiveSurface ||
+      !browser.sidebarAction ||
+      typeof browser.sidebarAction.open !== "function";
+    updateSidebarFollowButton();
     updateOpenWindowButton();
+    updateSmartFilterButton();
+    updateLiveCaptureButton();
+    await initializeSidebarContext();
     wireEvents();
+    wireSourceTabLifecycle();
+    wireSidebarPermissionLifecycle();
     browser.storage.onChanged.addListener(handleIgnoredStorageChanges);
     try {
       const stored = await browser.storage.local.get([
         "destinationFolder",
         "askForSingle",
-        "includeBackgrounds"
+        "includeBackgrounds",
+        "smartFilters"
       ]);
       if (stored.destinationFolder) {
         elements["folder-input"].value = stored.destinationFolder;
@@ -1402,12 +2612,15 @@
       }
       elements["ask-single-input"].checked = Boolean(stored.askForSingle);
       elements["backgrounds-input"].checked = stored.includeBackgrounds !== false;
+      applySmartFiltersToControls(stored.smartFilters);
+      updateSmartFilterButton();
     } catch (_error) {
       // Defaults are sufficient if storage is unavailable.
     }
     try {
       const platform = await browser.runtime.getPlatformInfo();
       if (platform.os === "android") {
+        elements["sidebar-button"].hidden = true;
         elements["ask-single-input"].checked = false;
         elements["ask-single-input"].disabled = true;
         elements["ask-single-input"].closest("label").title = "Firefox for Android does not support the Save As option.";
@@ -1415,7 +2628,14 @@
     } catch (_error) {
       // Platform detection only changes the optional Save As control.
     }
-    await scanPage();
+    if (sidebarMode) {
+      await scanCurrentSidebarTab();
+      return;
+    }
+    const scanned = await scanPage();
+    if (scanned && launchOptions.liveCapture && managerWindowMode) {
+      await startLiveCapture({ skipInitialScan: true });
+    }
   }
 
   function handleInitializationError(error) {
