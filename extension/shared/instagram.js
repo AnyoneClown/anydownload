@@ -12,29 +12,60 @@
     }
   }
 
-  function canCollectRelated(value) {
+  function routeKeyForUrl(value) {
     if (!isInstagramUrl(value)) {
-      return false;
+      return "";
     }
     try {
-      const segments = new URL(String(value || "")).pathname.split("/").filter(Boolean);
-      const first = String(segments[0] || "").toLowerCase();
-      if (["p", "reel", "reels", "tv"].includes(first) && segments[1]) {
-        return true;
+      const parsed = new URL(String(value || ""));
+      let segments;
+      try {
+        segments = parsed.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+      } catch (_error) {
+        segments = parsed.pathname.split("/").filter(Boolean);
       }
-      if (first === "stories" && segments[1]) {
-        return true;
+      const first = String(segments[0] || "").toLowerCase();
+      const directKind = ["p", "reel", "reels", "tv"].includes(first) ? first : "";
+      if (directKind && /^[a-z0-9_-]{3,80}$/i.test(segments[1] || "")) {
+        const kind = directKind === "reel" || directKind === "reels" ? "reel" : "post";
+        return `instagram:${kind}:${segments[1]}`;
       }
       const reserved = new Set([
         "", "about", "accounts", "api", "challenge", "developer", "direct", "directory",
         "emails", "explore", "legal", "p", "press", "privacy", "reel", "reels",
         "static", "stories", "terms", "tv", "web"
       ]);
-      return segments.length === 1 && /^[a-z0-9._]{1,80}$/i.test(segments[0]) &&
-        !reserved.has(first);
+      const prefixedKind = ["p", "reel", "reels", "tv"].includes(
+        String(segments[1] || "").toLowerCase()
+      ) ? String(segments[1]).toLowerCase() : "";
+      if (/^[a-z0-9._]{1,80}$/i.test(segments[0] || "") && !reserved.has(first) && prefixedKind &&
+        /^[a-z0-9_-]{3,80}$/i.test(segments[2] || "")) {
+        const kind = prefixedKind === "reel" || prefixedKind === "reels" ? "reel" : "post";
+        return `instagram:${kind}:${segments[2]}`;
+      }
+      if (first === "stories" && String(segments[1] || "").toLowerCase() === "highlights" &&
+        /^[a-z0-9:_-]{2,100}$/i.test(segments[2] || "")) {
+        const id = String(segments[2]).replace(/^highlight:/i, "");
+        return id ? `instagram:highlight:${id}` : "";
+      }
+      if (first === "stories" && /^[a-z0-9._]{1,80}$/i.test(segments[1] || "")) {
+        const username = String(segments[1]).toLowerCase();
+        const id = String(segments[2] || "")
+          .replace(/^highlight:/i, "");
+        return `instagram:story:${username}${id ? `:${id}` : ""}`;
+      }
+      if (segments.length === 1 && /^[a-z0-9._]{1,80}$/i.test(segments[0] || "") &&
+        !reserved.has(first)) {
+        return `instagram:profile:${first}`;
+      }
     } catch (_error) {
-      return false;
+      // Unsupported routes do not receive a live-collection scope key.
     }
+    return "";
+  }
+
+  function canCollectRelated(value) {
+    return routeKeyForUrl(value).startsWith("instagram:profile:");
   }
 
   // This function is passed directly to browser.scripting.executeScript(). Keep
@@ -54,7 +85,9 @@
     }
 
     const settings = {
-      includeRelated: options.includeRelated === true,
+      includeProfilePosts: options.includeProfilePosts !== false,
+      includeStories: options.includeStories === true || options.includeRelated === true,
+      includeHighlights: options.includeHighlights === true || options.includeRelated === true,
       maxItems: boundedInteger(options.maxItems, 500, 1, 1500),
       maxDocuments: boundedInteger(options.maxDocuments, 16, 1, 32),
       maxDocumentBytes: boundedInteger(options.maxDocumentBytes, 4000000, 16384, 4000000),
@@ -72,10 +105,13 @@
     const MAX_SCRIPTS_PER_DOCUMENT = 256;
     const MAX_RELATED_LINKS = 128;
     const FETCH_TIMEOUT_MS = 12000;
+    const INSTAGRAM_WEB_APP_ID = "936619743392459";
+    const MAX_COLLECTION_MEMBERSHIPS = 16;
     const warnings = new Set();
     const found = new Map();
-    const foundByStableId = new Map();
     const owners = new Set();
+    const profilePks = new Set();
+    const highlightDescriptors = new Map();
     const visitedDocuments = new Set();
     const queuedDocuments = [];
     const queuedDocumentUrls = new Set();
@@ -212,6 +248,23 @@
           pageUrl: page
         };
       }
+      const reserved = new Set([
+        "", "about", "accounts", "api", "challenge", "developer", "direct", "directory",
+        "emails", "explore", "legal", "p", "press", "privacy", "reel", "reels",
+        "static", "stories", "terms", "tv", "web"
+      ]);
+      const prefixedKind = safeText(segments[1], 80).toLowerCase();
+      if (/^[a-z0-9._]{1,80}$/i.test(segments[0] || "") &&
+        !reserved.has(first) &&
+        ["p", "reel", "reels", "tv"].includes(prefixedKind) &&
+        /^[a-z0-9_-]{3,80}$/i.test(segments[2] || "")) {
+        return {
+          kind: prefixedKind === "p" || prefixedKind === "tv" ? "post" : "reel",
+          shortcode: segments[2],
+          username: segments[0].toLowerCase(),
+          pageUrl: page
+        };
+      }
       if (first === "stories" && safeText(segments[1], 80).toLowerCase() === "highlights" &&
         /^[a-z0-9:_-]{2,100}$/i.test(segments[2] || "")) {
         return {
@@ -228,10 +281,6 @@
           pageUrl: page
         };
       }
-      const reserved = new Set([
-        "", "about", "accounts", "api", "challenge", "developer", "direct", "directory",
-        "emails", "explore", "legal", "press", "privacy", "static", "terms", "web"
-      ]);
       if (segments.length === 1 && /^[a-z0-9._]{1,80}$/i.test(segments[0] || "") &&
         !reserved.has(first)) {
         return { kind: "profile", username: segments[0].toLowerCase(), pageUrl: page };
@@ -272,7 +321,7 @@
     } catch (_error) {
       return emptyResult(false);
     }
-    if (route.kind === "unsupported" || (route.kind === "profile" && !settings.includeRelated)) {
+    if (route.kind === "unsupported") {
       return emptyResult(false);
     }
 
@@ -299,6 +348,90 @@
         }
       }
       return "";
+    }
+
+    function matchesExpectedOwner(object, expectedOwner) {
+      const expected = safeText(expectedOwner, 80).trim().toLowerCase();
+      const actual = ownerFromObject(object);
+      return !expected || !actual || actual === expected;
+    }
+
+    function normalizedProfilePk(value) {
+      const pk = safeText(value, 80).trim();
+      return /^\d{1,40}$/.test(pk) ? pk : "";
+    }
+
+    function profilePkFromObject(object) {
+      return normalizedProfilePk(
+        safeProperty(object, "pk") || safeProperty(object, "user_id") ||
+          safeProperty(object, "userId") || safeProperty(object, "id")
+      );
+    }
+
+    function registerMatchingProfile(object, expectedUsername) {
+      const username = usernameFrom(object);
+      if (!username || username !== safeText(expectedUsername, 80).toLowerCase()) {
+        return "";
+      }
+      const pk = profilePkFromObject(object);
+      if (pk) {
+        profilePks.add(pk);
+        owners.add(username);
+      }
+      return pk;
+    }
+
+    function registerHighlight(rawId, rawTitle, rawOwner) {
+      const id = normalizedIdentifier(rawId);
+      if (!id || !/^[a-z0-9:_-]{1,100}$/i.test(id)) {
+        return;
+      }
+      const title = safeText(rawTitle, 100).trim();
+      const owner = safeText(rawOwner, 80).trim().toLowerCase();
+      const existing = highlightDescriptors.get(id);
+      if (!existing) {
+        if (highlightDescriptors.size >= MAX_RELATED_LINKS) {
+          documentLimitReached = true;
+          return;
+        }
+        highlightDescriptors.set(id, {
+          id,
+          title,
+          owner: /^[a-z0-9._]{1,80}$/i.test(owner) ? owner : ""
+        });
+        return;
+      }
+      existing.title = existing.title || title;
+      if (!existing.owner && /^[a-z0-9._]{1,80}$/i.test(owner)) {
+        existing.owner = owner;
+      }
+    }
+
+    function registerHighlightObject(object, parentKey, expectedOwner) {
+      const directId = safeText(
+        safeProperty(object, "reel_id") || safeProperty(object, "reelId") ||
+          safeProperty(object, "id"),
+        200
+      );
+      const parentId = safeText(parentKey, 200);
+      const rawId = /^highlight:/i.test(directId)
+        ? directId
+        : /^highlight:/i.test(parentId)
+          ? parentId
+          : "";
+      if (!rawId) {
+        return;
+      }
+      const actualOwner = ownerFromObject(object);
+      const normalizedExpectedOwner = safeText(expectedOwner, 80).trim().toLowerCase();
+      if (actualOwner && normalizedExpectedOwner && actualOwner !== normalizedExpectedOwner) {
+        return;
+      }
+      registerHighlight(
+        rawId,
+        safeProperty(object, "title") || safeProperty(object, "name"),
+        actualOwner || normalizedExpectedOwner
+      );
     }
 
     function dimensionsFrom(object) {
@@ -523,12 +656,74 @@
         typename.includes("video") || variants.length > 0;
     }
 
+    function safeCollectionMembership(value) {
+      const type = safeText(safeProperty(value, "type"), 20).toLowerCase();
+      if (!["post", "story", "highlight"].includes(type)) {
+        return null;
+      }
+      const id = safeText(safeProperty(value, "id"), 200).trim();
+      const title = safeText(safeProperty(value, "title"), 100).trim();
+      const rawOwner = safeText(safeProperty(value, "owner"), 80).trim().toLowerCase();
+      const owner = /^[a-z0-9._]{1,80}$/i.test(rawOwner) ? rawOwner : "";
+      if (!id && !owner) {
+        return null;
+      }
+      return { type, id, title, owner };
+    }
+
+    function addCollectionMembership(target, value) {
+      const membership = safeCollectionMembership(value);
+      if (!membership) {
+        return;
+      }
+      const key = `${membership.type}\n${membership.id}\n${membership.owner}`;
+      const existing = target.find((candidate) =>
+        `${candidate.type}\n${candidate.id}\n${candidate.owner}` === key
+      );
+      if (existing) {
+        existing.title = existing.title || membership.title;
+        return;
+      }
+      if (target.length >= MAX_COLLECTION_MEMBERSHIPS) {
+        return;
+      }
+      target.push(membership);
+    }
+
+    function collectionMembershipFor(object, sourceRoute, collectionKind, collectionTitle) {
+      const type = collectionKind === "story"
+        ? "story"
+        : collectionKind === "highlight"
+          ? "highlight"
+          : "post";
+      const owner = ownerFromObject(object) || safeText(sourceRoute && sourceRoute.username, 80)
+        .toLowerCase();
+      let id = "";
+      let title = "";
+      if (type === "post") {
+        id = objectIdentifier(object) || safeText(sourceRoute && sourceRoute.shortcode, 100) ||
+          objectId(object);
+      } else if (type === "story") {
+        id = safeText(sourceRoute && sourceRoute.storyId, 200) || owner || objectId(object);
+      } else {
+        id = safeText(sourceRoute && sourceRoute.highlightId, 200) || objectId(object);
+        const descriptor = highlightDescriptors.get(normalizedIdentifier(id));
+        title = safeText(
+          collectionTitle || sourceRoute && sourceRoute.collectionTitle ||
+            descriptor && descriptor.title || safeProperty(object, "title") ||
+            safeProperty(object, "name"),
+          100
+        ).trim();
+      }
+      const collectionId = type === "post" ? safeText(id, 200).trim() : normalizedIdentifier(id);
+      return safeCollectionMembership({ type, id: collectionId, title, owner });
+    }
+
     function addRecord(url, details) {
       if (!url) {
         return;
       }
-      const stableId = safeText(details.stableId, 240);
-      const existing = (stableId && foundByStableId.get(stableId)) || found.get(url);
+      const existing = found.get(url);
       if (existing) {
         if (details.mediaType === "video") {
           existing.mediaType = "video";
@@ -549,6 +744,9 @@
           if (existing.kinds.length < 8 && !existing.kinds.includes(kind)) {
             existing.kinds.push(kind);
           }
+        }
+        for (const membership of details.instagramCollections || []) {
+          addCollectionMembership(existing.instagramCollections, membership);
         }
         return;
       }
@@ -576,8 +774,12 @@
         width: Math.max(0, Number(details.width) || 0),
         height: Math.max(0, Number(details.height) || 0),
         kinds: (details.kinds || ["Instagram media"]).map((kind) => safeText(kind, 50)).slice(0, 8),
+        instagramCollections: [],
         mediaType: details.mediaType === "video" ? "video" : "image"
       };
+      for (const membership of details.instagramCollections || []) {
+        addCollectionMembership(record.instagramCollections, membership);
+      }
       if (record.mediaType === "video") {
         record.mimeType = "video/mp4";
         const duration = positiveNumber(details.duration);
@@ -586,12 +788,17 @@
         }
       }
       found.set(url, record);
-      if (stableId) {
-        foundByStableId.set(stableId, record);
-      }
     }
 
-    function addMediaObject(object, baseUrl, collectionKind, position, total, collectionTitle) {
+    function addMediaObject(
+      object,
+      baseUrl,
+      collectionKind,
+      position,
+      total,
+      collectionTitle,
+      membership
+    ) {
       if (!object || typeof object !== "object") {
         return;
       }
@@ -607,7 +814,6 @@
       const numberedKind = total > 1 ? `${collectionKind} ${position}/${total}` : collectionKind;
       const title = collectionKind === "highlight" ? safeText(collectionTitle, 20).trim() : "";
       const recordKind = `Instagram ${numberedKind}${title ? ` (${title})` : ""}`;
-      const stableId = objectId(object);
       if (mediaType === "video") {
         if (!video) {
           if (safeProperty(object, "is_video") === true || Number(safeProperty(object, "media_type")) === 2) {
@@ -624,7 +830,7 @@
           height: video.height || objectDimensions.height,
           duration: safeProperty(object, "video_duration") || safeProperty(object, "duration"),
           kinds: [`${recordKind} video`],
-          stableId: stableId ? `video:${stableId}` : "",
+          instagramCollections: membership ? [membership] : [],
           mediaType: "video"
         });
         return;
@@ -640,7 +846,7 @@
         width: image.width || objectDimensions.width,
         height: image.height || objectDimensions.height,
         kinds: [`${recordKind} image`],
-        stableId: stableId ? `image:${stableId}` : "",
+        instagramCollections: membership ? [membership] : [],
         mediaType: "image"
       });
     }
@@ -672,28 +878,73 @@
       return childEdges;
     }
 
-    function addMediaContainer(object, baseUrl, collectionKind, forceItems) {
+    function addMediaContainer(
+      object,
+      baseUrl,
+      collectionKind,
+      forceItems,
+      sourceRoute,
+      explicitMembership
+    ) {
       const children = childMedia(object);
+      const containerTitle = safeText(
+        safeProperty(object, "title") || safeProperty(object, "name"),
+        100
+      ).trim();
+      const membership = safeCollectionMembership(explicitMembership) ||
+        collectionMembershipFor(object, sourceRoute, collectionKind, containerTitle);
       if (children.length) {
         const label = (collectionKind === "post" || collectionKind === "reel")
           ? "carousel"
           : collectionKind;
         for (let index = 0; index < children.length; index += 1) {
-          addMediaObject(children[index], baseUrl, label, index + 1, children.length, "");
+          addMediaObject(
+            children[index],
+            baseUrl,
+            label,
+            index + 1,
+            children.length,
+            containerTitle,
+            membership
+          );
         }
         return;
       }
       if (forceItems) {
-        const items = objectList(safeProperty(object, "items"));
+        const expectedOwner = sourceRoute && sourceRoute.username;
+        const items = objectList(safeProperty(object, "items")).filter((item) =>
+          !["story", "highlight"].includes(collectionKind) ||
+          matchesExpectedOwner(item, expectedOwner)
+        );
         if (items.length) {
           const title = safeProperty(object, "title") || safeProperty(object, "name");
+          const itemMembership = safeCollectionMembership({
+            ...(membership || {}),
+            title: membership && membership.title || safeText(title, 100)
+          });
           for (let index = 0; index < items.length; index += 1) {
-            addMediaObject(items[index], baseUrl, collectionKind, index + 1, items.length, title);
+            addMediaObject(
+              items[index],
+              baseUrl,
+              collectionKind,
+              index + 1,
+              items.length,
+              title,
+              itemMembership
+            );
           }
           return;
         }
       }
-      addMediaObject(object, baseUrl, collectionKind, 1, 1, safeProperty(object, "title"));
+      addMediaObject(
+        object,
+        baseUrl,
+        collectionKind,
+        1,
+        1,
+        safeProperty(object, "title"),
+        membership
+      );
     }
 
     function objectIdentifier(object) {
@@ -772,6 +1023,9 @@
       if (!Array.isArray(safeProperty(object, "items"))) {
         return false;
       }
+      if (!matchesExpectedOwner(object, sourceRoute.username)) {
+        return false;
+      }
       if (reelOwnerMatches(object, sourceRoute)) {
         return true;
       }
@@ -787,9 +1041,62 @@
       if (!Array.isArray(safeProperty(object, "items"))) {
         return false;
       }
+      if (!matchesExpectedOwner(object, sourceRoute.username)) {
+        return false;
+      }
       const id = objectId(object);
       const parentId = normalizedIdentifier(parentKey);
       return id === sourceRoute.highlightId || parentId === sourceRoute.highlightId;
+    }
+
+    function timelineItems(value) {
+      const direct = objectList(safeProperty(value, "items"));
+      if (direct.length) {
+        return direct;
+      }
+      return objectList(safeProperty(value, "edges"))
+        .map((edge) => safeProperty(edge, "node"))
+        .filter((item) => item && typeof item === "object");
+    }
+
+    function addProfilePost(object, baseUrl, expectedUsername) {
+      if (!settings.includeProfilePosts || !object || typeof object !== "object") {
+        return;
+      }
+      const owner = ownerFromObject(object);
+      if (!owner || owner !== expectedUsername) {
+        return;
+      }
+      const id = objectIdentifier(object) || objectId(object);
+      addMediaContainer(object, baseUrl, "post", false, {
+        kind: "profile",
+        username: expectedUsername,
+        shortcode: objectIdentifier(object),
+        pageUrl: baseUrl
+      }, {
+        type: "post",
+        id,
+        title: "",
+        owner
+      });
+    }
+
+    function processMatchingProfileObject(object, baseUrl, expectedUsername) {
+      if (usernameFrom(object) !== expectedUsername) {
+        return;
+      }
+      registerMatchingProfile(object, expectedUsername);
+      if (!settings.includeProfilePosts) {
+        return;
+      }
+      for (const key of [
+        "edge_owner_to_timeline_media", "edgeOwnerToTimelineMedia",
+        "timeline_media", "timelineMedia"
+      ]) {
+        for (const item of timelineItems(safeProperty(object, key))) {
+          addProfilePost(item, baseUrl, expectedUsername);
+        }
+      }
     }
 
     function processJson(rootValue, sourceRoute, baseUrl, trustedLdRoot) {
@@ -798,6 +1105,7 @@
       const processedContainers = typeof WeakSet === "function" ? new WeakSet() : null;
 
       function processContainer(object, parentKey, depth, isRoot) {
+        registerHighlightObject(object, parentKey, sourceRoute.username || route.username);
         let matched = false;
         let kind = sourceRoute.kind;
         let forceItems = false;
@@ -809,7 +1117,8 @@
           matched = storyContainerMatches(object, parentKey, sourceRoute);
           kind = "story";
           forceItems = true;
-          if (!matched && sourceRoute.storyId && objectId(object) === sourceRoute.storyId && hasMediaShape(object)) {
+          if (!matched && sourceRoute.storyId && objectId(object) === sourceRoute.storyId &&
+            matchesExpectedOwner(object, sourceRoute.username) && hasMediaShape(object)) {
             matched = true;
             forceItems = false;
           }
@@ -817,10 +1126,13 @@
           matched = highlightContainerMatches(object, parentKey, sourceRoute);
           kind = "highlight";
           forceItems = true;
-          if (!matched && objectId(object) === sourceRoute.highlightId && hasMediaShape(object)) {
+          if (!matched && objectId(object) === sourceRoute.highlightId &&
+            matchesExpectedOwner(object, sourceRoute.username) && hasMediaShape(object)) {
             matched = true;
             forceItems = false;
           }
+        } else if (sourceRoute.kind === "profile") {
+          processMatchingProfileObject(object, baseUrl, sourceRoute.username);
         }
         if (matched && (!processedContainers || !processedContainers.has(object))) {
           if (processedContainers) {
@@ -830,7 +1142,7 @@
           if (owner) {
             owners.add(owner);
           }
-          addMediaContainer(object, baseUrl, kind, forceItems);
+          addMediaContainer(object, baseUrl, kind, forceItems, sourceRoute);
         }
         if (depth >= MAX_JSON_DEPTH) {
           return;
@@ -1047,6 +1359,7 @@
       const width = positiveNumber(meta.get("og:video:width") || meta.get("og:image:width"));
       const height = positiveNumber(meta.get("og:video:height") || meta.get("og:image:height"));
       const alt = meta.get("og:description") || meta.get("twitter:description") || "";
+      const membership = collectionMembershipFor({}, sourceRoute, collectionKind, "");
       if (video) {
         addRecord(video, {
           previewUrl: image,
@@ -1054,6 +1367,7 @@
           width,
           height,
           mediaType: "video",
+          instagramCollections: membership ? [membership] : [],
           kinds: [`Instagram ${collectionKind} video`]
         });
       } else if (videoRaw) {
@@ -1065,6 +1379,7 @@
           width,
           height,
           mediaType: "image",
+          instagramCollections: membership ? [membership] : [],
           kinds: [`Instagram ${collectionKind} image`]
         });
       }
@@ -1142,7 +1457,7 @@
       return links;
     }
 
-    function queueDocument(url, purpose) {
+    function queueDocument(url, purpose, expectedOwner) {
       const normalized = instagramHttpUrl(url, route.pageUrl);
       if (!normalized || queuedDocumentUrls.has(normalized) || visitedDocuments.has(normalized)) {
         return;
@@ -1151,8 +1466,17 @@
         documentLimitReached = true;
         return;
       }
+      const expectedRoute = parseRoute(normalized);
+      const normalizedOwner = safeText(expectedOwner, 80).trim().toLowerCase();
       queuedDocumentUrls.add(normalized);
-      queuedDocuments.push({ url: normalized, purpose: safeText(purpose, 40) });
+      queuedDocuments.push({
+        url: normalized,
+        purpose: safeText(purpose, 40),
+        expectedUsername: expectedRoute.username || normalizedOwner,
+        expectedStoryId: expectedRoute.storyId || "",
+        expectedHighlightId: expectedRoute.highlightId || "",
+        expectedOwner: normalizedOwner
+      });
     }
 
     function preferredOwner(sourceRoute) {
@@ -1163,24 +1487,21 @@
     }
 
     function discoverRelatedLinks(links, sourceRoute) {
-      if (!settings.includeRelated) {
+      if (sourceRoute.kind !== "profile" || (!settings.includeStories && !settings.includeHighlights)) {
         return;
       }
       const owner = preferredOwner(sourceRoute) || preferredOwner(route);
       for (const link of links) {
         const linkedRoute = parseRoute(link);
-        if (linkedRoute.kind === "story" && owner && linkedRoute.username === owner) {
-          queueDocument(link, "story");
+        if (settings.includeStories && linkedRoute.kind === "story" && owner &&
+          linkedRoute.username === owner) {
+          queueDocument(link, "story", owner);
           continue;
         }
-        if (linkedRoute.kind === "highlight" && sourceRoute.kind === "profile" &&
+        if (settings.includeHighlights && linkedRoute.kind === "highlight" &&
           (!owner || sourceRoute.username === owner)) {
-          queueDocument(link, "highlight");
-          continue;
-        }
-        if (linkedRoute.kind === "profile" && owner && linkedRoute.username === owner &&
-          (sourceRoute.kind === "post" || sourceRoute.kind === "reel")) {
-          queueDocument(link, "profile");
+          registerHighlight(linkedRoute.highlightId, "", owner || sourceRoute.username);
+          queueDocument(link, "highlight", owner || sourceRoute.username);
         }
       }
     }
@@ -1220,12 +1541,6 @@
         owners.add(route.username);
       }
       discoverRelatedLinks(currentLinks(), route);
-      if (settings.includeRelated && ["post", "reel", "story", "highlight"].includes(route.kind)) {
-        const owner = preferredOwner(route);
-        if (owner) {
-          queueDocument(`/${encodeURIComponent(owner)}/`, "profile");
-        }
-      }
     }
 
     async function readResponseText(response) {
@@ -1333,9 +1648,226 @@
       }
     }
 
+    async function fetchInstagramJson(rawUrl, purpose) {
+      const url = instagramHttpUrl(rawUrl, route.pageUrl);
+      if (!url || visitedDocuments.has(url)) {
+        return null;
+      }
+      if (fetchedDocumentCount >= settings.maxDocuments) {
+        documentLimitReached = true;
+        return null;
+      }
+      if (typeof fetch !== "function") {
+        inaccessibleRelatedCount += 1;
+        return null;
+      }
+      visitedDocuments.add(url);
+      fetchedDocumentCount += 1;
+      let controller = null;
+      let timer = null;
+      try {
+        controller = typeof AbortController === "function" ? new AbortController() : null;
+        if (controller && typeof setTimeout === "function") {
+          timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+        }
+        const response = await fetch(url, {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+          redirect: "follow",
+          signal: controller ? controller.signal : undefined,
+          headers: {
+            Accept: "application/json",
+            "X-IG-App-ID": INSTAGRAM_WEB_APP_ID
+          }
+        });
+        if (!response || !response.ok) {
+          inaccessibleRelatedCount += 1;
+          return null;
+        }
+        const finalUrl = instagramHttpUrl(response.url || url, url);
+        if (!finalUrl) {
+          inaccessibleRelatedCount += 1;
+          return null;
+        }
+        const contentType = safeText(
+          response.headers && response.headers.get && response.headers.get("content-type"),
+          200
+        ).toLowerCase();
+        if (contentType && !/(?:application|text)\/[^;]*json/.test(contentType)) {
+          inaccessibleRelatedCount += 1;
+          return null;
+        }
+        const body = await readResponseText(response);
+        if (!body.ok) {
+          documentLimitReached = documentLimitReached || body.tooLarge;
+          return null;
+        }
+        totalDocumentBytes += body.bytes || byteLength(body.text);
+        try {
+          return {
+            url: finalUrl,
+            purpose: safeText(purpose, 40),
+            value: JSON.parse(body.text)
+          };
+        } catch (_error) {
+          inaccessibleRelatedCount += 1;
+          return null;
+        }
+      } catch (_error) {
+        inaccessibleRelatedCount += 1;
+        return null;
+      } finally {
+        if (timer !== null && typeof clearTimeout === "function") {
+          clearTimeout(timer);
+        }
+      }
+    }
+
+    function profilePk() {
+      return profilePks.values().next().value || "";
+    }
+
+    function feedPageFrom(value) {
+      const candidates = [
+        value,
+        safeProperty(value, "data"),
+        safeProperty(value, "feed"),
+        safeProperty(safeProperty(value, "data"), "feed")
+      ];
+      for (const candidate of candidates) {
+        if (!candidate || typeof candidate !== "object") {
+          continue;
+        }
+        const items = objectList(safeProperty(candidate, "items"));
+        if (!items.length && !Array.isArray(safeProperty(candidate, "items"))) {
+          continue;
+        }
+        return {
+          items,
+          moreAvailable: safeProperty(candidate, "more_available") === true ||
+            safeProperty(candidate, "moreAvailable") === true ||
+            Number(safeProperty(candidate, "more_available")) === 1,
+          nextMaxId: safeText(
+            safeProperty(candidate, "next_max_id") || safeProperty(candidate, "nextMaxId"),
+            1000
+          ).trim()
+        };
+      }
+      return { items: [], moreAvailable: false, nextMaxId: "" };
+    }
+
+    async function discoverProfilePk() {
+      if (profilePk()) {
+        return profilePk();
+      }
+      const endpoint = new URL("/api/v1/users/web_profile_info/", route.pageUrl);
+      endpoint.searchParams.set("username", route.username);
+      const fetched = await fetchInstagramJson(endpoint.href, "profile-info");
+      if (!fetched) {
+        return "";
+      }
+      processJson(fetched.value, route, fetched.url, false);
+      return profilePk();
+    }
+
+    async function collectProfileFeed(pk) {
+      if (!settings.includeProfilePosts || !pk) {
+        return;
+      }
+      let maxId = "";
+      const seenCursors = new Set();
+      while (!itemLimitReached && !payloadLimitReached) {
+        const endpoint = new URL(
+          `/api/v1/feed/user/${encodeURIComponent(pk)}/`,
+          route.pageUrl
+        );
+        endpoint.searchParams.set("count", "12");
+        if (maxId) {
+          endpoint.searchParams.set("max_id", maxId);
+        }
+        const fetched = await fetchInstagramJson(endpoint.href, "profile-feed");
+        if (!fetched) {
+          break;
+        }
+        const page = feedPageFrom(fetched.value);
+        for (const item of page.items) {
+          addProfilePost(item, fetched.url, route.username);
+          if (itemLimitReached || payloadLimitReached) {
+            break;
+          }
+        }
+        const next = page.nextMaxId;
+        if (!page.moreAvailable || !next || seenCursors.has(next)) {
+          break;
+        }
+        seenCursors.add(next);
+        maxId = next;
+      }
+    }
+
+    async function fetchReelCollection(reelId, sourceRoute, purpose) {
+      const endpoint = new URL("/api/v1/feed/reels_media/", route.pageUrl);
+      endpoint.searchParams.set("reel_ids", safeText(reelId, 200));
+      const fetched = await fetchInstagramJson(endpoint.href, purpose);
+      if (fetched) {
+        processJson(fetched.value, sourceRoute, fetched.url, false);
+      }
+    }
+
+    async function collectProfileStoriesAndHighlights(pk) {
+      if (settings.includeHighlights && pk) {
+        const trayEndpoint = new URL(
+          `/api/v1/highlights/${encodeURIComponent(pk)}/highlights_tray/`,
+          route.pageUrl
+        );
+        const tray = await fetchInstagramJson(trayEndpoint.href, "highlight-tray");
+        if (tray) {
+          processJson(tray.value, route, tray.url, false);
+        }
+      }
+
+      if (settings.includeStories && pk) {
+        await fetchReelCollection(pk, {
+          kind: "story",
+          username: route.username,
+          storyId: "",
+          pageUrl: route.pageUrl
+        }, "active-story");
+      }
+
+      if (settings.includeHighlights) {
+        for (const descriptor of highlightDescriptors.values()) {
+          if (descriptor.owner && descriptor.owner !== route.username) {
+            continue;
+          }
+          if (fetchedDocumentCount >= settings.maxDocuments) {
+            documentLimitReached = true;
+            break;
+          }
+          await fetchReelCollection(`highlight:${descriptor.id}`, {
+            kind: "highlight",
+            username: route.username,
+            highlightId: descriptor.id,
+            collectionTitle: descriptor.title,
+            pageUrl: route.pageUrl
+          }, "highlight");
+        }
+      }
+    }
+
     processCurrentDocument();
 
-    while (settings.includeRelated && queuedDocuments.length) {
+    if (route.kind === "profile") {
+      const pk = await discoverProfilePk();
+      await collectProfileFeed(pk);
+      if (settings.includeStories || settings.includeHighlights) {
+        await collectProfileStoriesAndHighlights(pk);
+      }
+    }
+
+    while (route.kind === "profile" &&
+      (settings.includeStories || settings.includeHighlights) && queuedDocuments.length) {
       if (fetchedDocumentCount >= settings.maxDocuments) {
         documentLimitReached = true;
         break;
@@ -1352,18 +1884,26 @@
         continue;
       }
       const fetchedRoute = parseRoute(fetched.url);
-      if (!["profile", "story", "highlight"].includes(fetchedRoute.kind)) {
+      const storyRouteMatches = entry.purpose === "story" &&
+        fetchedRoute.kind === "story" &&
+        fetchedRoute.username === entry.expectedUsername &&
+        (!entry.expectedStoryId || !fetchedRoute.storyId ||
+          fetchedRoute.storyId === entry.expectedStoryId);
+      const highlightRouteMatches = entry.purpose === "highlight" &&
+        fetchedRoute.kind === "highlight" &&
+        fetchedRoute.highlightId === entry.expectedHighlightId;
+      if (!storyRouteMatches && !highlightRouteMatches) {
         inaccessibleRelatedCount += 1;
         continue;
       }
-      const added = processScripts(scriptsFromHtml(fetched.text), fetchedRoute, fetched.url);
+      const relatedRoute = Object.assign({}, fetchedRoute, {
+        username: entry.expectedOwner || fetchedRoute.username || ""
+      });
+      const added = processScripts(scriptsFromHtml(fetched.text), relatedRoute, fetched.url);
       if (!added) {
-        addMetaFallback(metaMapFromHtml(fetched.text), fetchedRoute, fetched.url, fetchedRoute.kind);
+        addMetaFallback(metaMapFromHtml(fetched.text), relatedRoute, fetched.url, relatedRoute.kind);
       }
-      if (fetchedRoute.kind === "profile") {
-        owners.add(fetchedRoute.username);
-      }
-      discoverRelatedLinks(linksFromHtml(fetched.text, fetched.url), fetchedRoute);
+      discoverRelatedLinks(linksFromHtml(fetched.text, fetched.url), relatedRoute);
     }
 
     if (itemLimitReached) {
@@ -1389,9 +1929,20 @@
       );
     }
     if (!found.size) {
-      const label = route.kind === "profile"
-        ? "story or highlight media"
-        : `${route.kind} media`;
+      let label = `${route.kind} media`;
+      if (route.kind === "profile") {
+        const requested = [];
+        if (settings.includeProfilePosts) {
+          requested.push("profile posts");
+        }
+        if (settings.includeStories) {
+          requested.push("active story media");
+        }
+        if (settings.includeHighlights) {
+          requested.push("highlight media");
+        }
+        label = requested.length ? requested.join(", ") : "profile media";
+      }
       warnings.add(
         `Instagram did not expose downloadable ${label} to the current browser session; it may be private, restricted, expired, or stream-only.`
       );
@@ -1407,7 +1958,12 @@
     };
   }
 
-  const api = Object.freeze({ isInstagramUrl, canCollectRelated, collectFromPage });
+  const api = Object.freeze({
+    isInstagramUrl,
+    canCollectRelated,
+    routeKeyForUrl,
+    collectFromPage
+  });
   root.ImageDownloaderInstagram = api;
   if (typeof module === "object" && module && module.exports) {
     module.exports = api;

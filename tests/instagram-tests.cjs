@@ -9,6 +9,7 @@ const Instagram = require("../extension/shared/instagram.js");
 assert.equal(typeof Instagram, "object");
 assert.equal(typeof Instagram.isInstagramUrl, "function");
 assert.equal(typeof Instagram.canCollectRelated, "function");
+assert.equal(typeof Instagram.routeKeyForUrl, "function");
 assert.equal(typeof Instagram.collectFromPage, "function");
 
 assert.equal(Instagram.isInstagramUrl("https://www.instagram.com/p/ABC123/"), true);
@@ -19,9 +20,31 @@ assert.equal(Instagram.isInstagramUrl("https://instagram.com.evil.test/p/ABC123/
 assert.equal(Instagram.isInstagramUrl("https://cdninstagram.com/file.mp4"), false);
 assert.equal(Instagram.isInstagramUrl("javascript:alert(1)"), false);
 assert.equal(Instagram.canCollectRelated("https://www.instagram.com/alice/"), true);
-assert.equal(Instagram.canCollectRelated("https://www.instagram.com/p/ABC123/"), true);
+assert.equal(Instagram.canCollectRelated("https://www.instagram.com/p/ABC123/"), false);
 assert.equal(Instagram.canCollectRelated("https://www.instagram.com/explore/"), false);
 assert.equal(Instagram.canCollectRelated("https://www.instagram.com/accounts/login/"), false);
+assert.equal(
+  Instagram.routeKeyForUrl("https://www.instagram.com/alice/"),
+  "instagram:profile:alice"
+);
+assert.equal(
+  Instagram.routeKeyForUrl("https://www.instagram.com/p/ABC123/?img_index=2"),
+  "instagram:post:ABC123"
+);
+assert.equal(
+  Instagram.routeKeyForUrl("https://www.instagram.com/alice/reel/REEL123/"),
+  "instagram:reel:REEL123"
+);
+assert.equal(
+  Instagram.routeKeyForUrl("https://www.instagram.com/stories/alice/456/"),
+  "instagram:story:alice:456"
+);
+assert.equal(
+  Instagram.routeKeyForUrl("https://www.instagram.com/stories/highlights/987/"),
+  "instagram:highlight:987"
+);
+assert.equal(Instagram.routeKeyForUrl("https://www.instagram.com/explore/"), "");
+assert.equal(Instagram.routeKeyForUrl("https://www.instagram.com/explore/p/ABC123/"), "");
 
 // Firefox serializes executeScript.func without its module closure. All
 // behavior tests use the same standalone form that Firefox executes.
@@ -95,6 +118,16 @@ function response(url, html, options = {}) {
       return html;
     }
   };
+}
+
+function jsonResponse(url, value, options = {}) {
+  return response(url, JSON.stringify(value), {
+    ...options,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      ...(options.headers || {})
+    }
+  });
 }
 
 function htmlDocument({ scripts = [], anchors = [], metas = [] } = {}) {
@@ -188,17 +221,131 @@ function videoNode(id, url, poster, width = 1080, height = 1920) {
 }
 
 async function run() {
-  // Unsupported Instagram pages deliberately fall back to the generic DOM
-  // collector, as do profiles unless the related-collections action is used.
+  // Unsupported Instagram pages fall back to the generic DOM collector, while
+  // profile routes are owned by the Instagram adapter even when the feed is empty.
   {
     const unsupported = await scan("https://www.instagram.com/explore/", {});
     assert.equal(unsupported.handled, false);
-    const profile = await scan("https://www.instagram.com/alice/", {});
-    assert.equal(profile.handled, false);
+    const reservedPrefixed = await scan("https://www.instagram.com/explore/p/ABC123/", {});
+    assert.equal(reservedPrefixed.handled, false);
+    const requests = [];
+    const profile = await scan("https://www.instagram.com/alice/", {
+      scripts: [script({ data: { user: { pk: "42", username: "alice" } } })]
+    }, {}, async (url, init) => {
+      requests.push({ url, init });
+      return jsonResponse(url, { items: [], more_available: false });
+    });
+    assert.equal(profile.handled, true);
+    assert.equal(profile.images.length, 0);
+    assert.ok(profile.warnings.some((warning) => /profile posts/i.test(warning)));
+    assert.equal(requests.length, 1);
+    assert.match(requests[0].url, /\/api\/v1\/feed\/user\/42\/?\?count=12$/);
+  }
+
+  // Profile feeds are paged with the signed-in session. Every carousel child
+  // is kept in source order and media owned by another account is rejected.
+  {
+    const requests = [];
+    const firstCarousel = {
+      code: "FEED2",
+      user: { username: "alice" },
+      carousel_media: [
+        imageNode("feed-2-a", "https://scontent.cdninstagram.com/feed-2-a.jpg"),
+        imageNode("feed-2-b", "https://scontent.cdninstagram.com/feed-2-b.jpg")
+      ]
+    };
+    const result = await scan("https://www.instagram.com/alice/", {
+      scripts: [script({ data: { user: { pk: "42", username: "alice" } } })]
+    }, {}, async (url, init) => {
+      requests.push({ url, init });
+      const parsed = new URL(url);
+      assert.equal(parsed.pathname, "/api/v1/feed/user/42/");
+      assert.equal(parsed.searchParams.get("count"), "12");
+      if (!parsed.searchParams.has("max_id")) {
+        return jsonResponse(url, {
+          items: [
+            {
+              code: "FEED1",
+              user: { username: "alice" },
+              ...imageNode("feed-1", "https://scontent.cdninstagram.com/feed-1.jpg")
+            },
+            firstCarousel,
+            {
+              code: "OTHER1",
+              user: { username: "bob" },
+              ...imageNode("other-1", "https://scontent.cdninstagram.com/not-alice.jpg")
+            }
+          ],
+          more_available: true,
+          next_max_id: "CURSOR-2"
+        });
+      }
+      assert.equal(parsed.searchParams.get("max_id"), "CURSOR-2");
+      return jsonResponse(url, {
+        items: [{
+          code: "FEED3",
+          user: { username: "alice" },
+          ...imageNode("feed-3", "https://scontent.cdninstagram.com/feed-3.jpg")
+        }],
+        more_available: false
+      });
+    });
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://scontent.cdninstagram.com/feed-1.jpg",
+      "https://scontent.cdninstagram.com/feed-2-a.jpg",
+      "https://scontent.cdninstagram.com/feed-2-b.jpg",
+      "https://scontent.cdninstagram.com/feed-3.jpg"
+    ]);
+    assert.deepEqual(result.images.map((item) => item.instagramCollections[0].id), [
+      "FEED1", "FEED2", "FEED2", "FEED3"
+    ]);
+    assert.ok(result.images.every((item) =>
+      item.instagramCollections[0].type === "post" &&
+      item.instagramCollections[0].owner === "alice"
+    ));
+    assert.equal(requests.length, 2, "Pagination must stop after more_available becomes false");
+    assert.ok(requests.every((item) => item.init.credentials === "include"));
+    assert.ok(requests.every((item) =>
+      item.init.headers["X-IG-App-ID"] === "936619743392459"
+    ));
+  }
+
+  // If hydration omits the user pk, web_profile_info supplies both the pk and
+  // any initial timeline data before normal feed traversal begins.
+  {
+    const requests = [];
+    const result = await scan("https://www.instagram.com/alice/", {}, {}, async (url, init) => {
+      requests.push({ url, init });
+      const parsed = new URL(url);
+      if (parsed.pathname === "/api/v1/users/web_profile_info/") {
+        assert.equal(parsed.searchParams.get("username"), "alice");
+        return jsonResponse(url, { data: { user: {
+          id: "55",
+          username: "alice",
+          edge_owner_to_timeline_media: { edges: [{ node: {
+            shortcode: "INITIAL1",
+            owner: { username: "alice" },
+            ...imageNode("initial-1", "https://scontent.cdninstagram.com/initial-1.jpg")
+          } }] }
+        } } });
+      }
+      assert.equal(parsed.pathname, "/api/v1/feed/user/55/");
+      return jsonResponse(url, { items: [], more_available: false });
+    });
+    assert.deepEqual(requests.map((item) => new URL(item.url).pathname), [
+      "/api/v1/users/web_profile_info/",
+      "/api/v1/feed/user/55/"
+    ]);
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://scontent.cdninstagram.com/initial-1.jpg"
+    ]);
+    assert.equal(result.images[0].instagramCollections[0].id, "INITIAL1");
+    assert.ok(requests.every((item) => item.init.credentials === "include"));
   }
 
   // Route matching keeps the active post and rejects unrelated recommendations.
   {
+    let fetchCount = 0;
     const active = {
       shortcode: "POST123",
       owner: { username: "alice" },
@@ -212,6 +359,13 @@ async function run() {
     };
     const result = await scan("https://www.instagram.com/p/POST123/", {
       scripts: [script({ data: { xdt_shortcode_media: active }, suggested: unrelated })]
+    }, {
+      includeRelated: true,
+      includeStories: true,
+      includeHighlights: true
+    }, async () => {
+      fetchCount += 1;
+      throw new Error("Exact post routes must never fetch related collections.");
     });
     assert.equal(result.handled, true);
     assert.equal(result.images.length, 1);
@@ -221,6 +375,13 @@ async function run() {
     assert.equal(result.images[0].height, 1800);
     assert.equal(result.images[0].alt, "Alice's post");
     assert.equal(result.images[0].mediaType, "image");
+    assert.equal(fetchCount, 0);
+    assert.deepEqual(result.images[0].instagramCollections, [{
+      type: "post",
+      id: "POST123",
+      title: "",
+      owner: "alice"
+    }]);
   }
 
   // Every sidecar child is emitted once and in source order regardless of the
@@ -324,6 +485,18 @@ async function run() {
       "https://scontent.cdninstagram.com/story-1.jpg",
       "https://scontent.cdninstagram.com/story-2.mp4"
     ]);
+
+    const foreignDirectItem = await scan("https://www.instagram.com/stories/alice/102/", {
+      scripts: [script({
+        ...imageNode("102", "https://scontent.cdninstagram.com/wrong-direct-story.jpg"),
+        user: { username: "bob" }
+      })]
+    });
+    assert.equal(
+      foreignDirectItem.images.length,
+      0,
+      "A direct story-item fallback must not bypass the requested owner scope"
+    );
   }
 
   // Highlight dictionaries commonly key reels as "highlight:<id>". The
@@ -406,86 +579,164 @@ async function run() {
     assert.equal(result.images[0].width, 1200);
   }
 
-  // The explicit profile action follows only exposed story/highlight links,
-  // reuses the page session, and keeps related document order.
+  // Explicit profile collections use session-authenticated first-party APIs,
+  // keep story/highlight metadata, and can omit profile posts for popup merging.
   {
     const requests = [];
-    const storyUrl = "https://www.instagram.com/stories/alice/501/";
-    const highlightUrl = "https://www.instagram.com/stories/highlights/777/";
-    const documents = new Map([
-      [storyUrl, htmlDocument({ scripts: [{ value: { reels_media: [{
-        user: { username: "alice" },
-        items: [imageNode("501", "https://scontent.cdninstagram.com/related-story.jpg")]
-      }] } }] })],
-      [highlightUrl, htmlDocument({ scripts: [{ value: { reels: {
-        "highlight:777": {
-          id: "highlight:777",
-          items: [videoNode(
-            "601",
-            "https://scontent.cdninstagram.com/related-highlight.mp4",
-            "https://scontent.cdninstagram.com/related-highlight.jpg"
-          )]
-        }
-      } } }] })]
-    ]);
     const fetchImpl = async (url, init) => {
       requests.push({ url, init });
-      return response(url, documents.get(url) || "", { ok: documents.has(url) });
+      const parsed = new URL(url);
+      if (parsed.pathname === "/api/v1/highlights/42/highlights_tray/") {
+        return jsonResponse(url, { tray: [
+          {
+            id: "highlight:777",
+            title: "Trips",
+            user: { username: "alice" }
+          },
+          {
+            id: "highlight:888",
+            title: "Other account",
+            user: { username: "bob" }
+          }
+        ] });
+      }
+      if (parsed.pathname === "/api/v1/feed/reels_media/" &&
+        parsed.searchParams.get("reel_ids") === "42") {
+        return jsonResponse(url, { reels: { "42": {
+          id: "42",
+          user: { username: "alice" },
+          items: [
+            imageNode("501", "https://scontent.cdninstagram.com/related-story.jpg"),
+            {
+              ...imageNode("502", "https://scontent.cdninstagram.com/wrong-owner-story.jpg"),
+              user: { username: "bob" }
+            }
+          ]
+        } } });
+      }
+      if (parsed.pathname === "/api/v1/feed/reels_media/" &&
+        parsed.searchParams.get("reel_ids") === "highlight:777") {
+        return jsonResponse(url, { reels: { "highlight:777": {
+          id: "highlight:777",
+          title: "Trips",
+          user: { username: "alice" },
+          items: [
+            imageNode("shared-highlight", "https://scontent.cdninstagram.com/related-story.jpg"),
+            videoNode(
+              "601",
+              "https://scontent.cdninstagram.com/related-highlight.mp4",
+              "https://scontent.cdninstagram.com/related-highlight.jpg"
+            )
+          ]
+        } } });
+      }
+      return jsonResponse(url, {}, { ok: false });
     };
     const result = await scan("https://www.instagram.com/alice/", {
-      anchors: [anchor(storyUrl), anchor(highlightUrl), anchor("https://www.instagram.com/stories/bob/999/")]
-    }, { includeRelated: true }, fetchImpl);
+      scripts: [script({ data: { user: { pk: "42", username: "alice" } } })]
+    }, { includeRelated: true, includeProfilePosts: false }, fetchImpl);
     assert.deepEqual(result.images.map((item) => item.url), [
       "https://scontent.cdninstagram.com/related-story.jpg",
       "https://scontent.cdninstagram.com/related-highlight.mp4"
     ]);
-    assert.deepEqual(requests.map((item) => item.url), [storyUrl, highlightUrl]);
+    assert.deepEqual(result.images[0].instagramCollections, [
+      {
+        type: "story",
+        id: "alice",
+        title: "",
+        owner: "alice"
+      },
+      {
+        type: "highlight",
+        id: "777",
+        title: "Trips",
+        owner: "alice"
+      }
+    ]);
+    assert.deepEqual(result.images[1].instagramCollections, [{
+      type: "highlight",
+      id: "777",
+      title: "Trips",
+      owner: "alice"
+    }]);
+    assert.deepEqual(requests.map((item) => new URL(item.url).pathname), [
+      "/api/v1/highlights/42/highlights_tray/",
+      "/api/v1/feed/reels_media/",
+      "/api/v1/feed/reels_media/"
+    ]);
     assert.ok(requests.every((item) => item.init.credentials === "include"));
     assert.ok(requests.every((item) => item.init.method === "GET"));
+    assert.ok(requests.every((item) =>
+      item.init.headers["X-IG-App-ID"] === "936619743392459"
+    ));
   }
 
-  // From a post, the related action resolves the exact structured-data owner
-  // profile even if its link is virtualized, then follows only story/highlight
-  // links exposed by that profile.
+  // HTML anchor fallbacks keep the originating profile owner and collection
+  // ID across redirects instead of accepting another account's media.
   {
-    const profileUrl = "https://www.instagram.com/alice/";
-    const storyUrl = "https://www.instagram.com/stories/alice/700/";
-    const highlightUrl = "https://www.instagram.com/stories/highlights/800/";
-    const fetched = [];
-    const documents = new Map([
-      [profileUrl, htmlDocument({ anchors: [storyUrl, highlightUrl, "https://www.instagram.com/stories/bob/900/"] })],
-      [storyUrl, htmlDocument({ scripts: [{ value: { reels_media: [{
-        user: { username: "alice" },
-        items: [imageNode("700", "https://scontent.cdninstagram.com/staged-story.jpg")]
-      }] } }] })],
-      [highlightUrl, htmlDocument({ scripts: [{ value: { reels: {
-        "highlight:800": {
-          id: "highlight:800",
-          items: [imageNode("800", "https://scontent.cdninstagram.com/staged-highlight.jpg")]
-        }
-      } } }] })]
-    ]);
-    const result = await scan("https://www.instagram.com/p/OWNERPOST/", {
+    const fetchImpl = async (url) => {
+      const parsed = new URL(url);
+      if (parsed.pathname === "/api/v1/users/web_profile_info/") {
+        return jsonResponse(url, {}, { ok: false });
+      }
+      if (parsed.pathname === "/stories/alice/123/") {
+        return response(
+          "https://www.instagram.com/stories/bob/999/",
+          htmlDocument({ scripts: [{ value: { reels_media: [{
+            id: "bob-reel",
+            user: { username: "bob" },
+            items: [imageNode("901", "https://scontent.cdninstagram.com/wrong-redirect-story.jpg")]
+          }] } }] })
+        );
+      }
+      if (parsed.pathname === "/stories/highlights/777/") {
+        return response(
+          "https://www.instagram.com/stories/highlights/888/",
+          htmlDocument({ scripts: [{ value: { reels: {
+            "highlight:888": {
+              id: "highlight:888",
+              user: { username: "bob" },
+              items: [imageNode("902", "https://scontent.cdninstagram.com/wrong-redirect-highlight.jpg")]
+            }
+          } } }] })
+        );
+      }
+      return response(url, "", { ok: false });
+    };
+    const result = await scan("https://www.instagram.com/alice/", {
+      anchors: [
+        anchor("/stories/alice/123/"),
+        anchor("/stories/highlights/777/")
+      ]
+    }, {
+      includeProfilePosts: false,
+      includeStories: true,
+      includeHighlights: true
+    }, fetchImpl);
+    assert.equal(result.images.length, 0);
+    assert.ok(result.warnings.some((warning) => /unavailable/i.test(warning)));
+  }
+
+  // Username-prefixed post links are still exact post scopes and never fetch.
+  {
+    let fetchCount = 0;
+    const result = await scan("https://www.instagram.com/alice/p/OWNERPOST/", {
       scripts: [script({ shortcode_media: {
         shortcode: "OWNERPOST",
         owner: { username: "alice" },
         ...imageNode("701", "https://scontent.cdninstagram.com/current-post.jpg")
-      } })],
-      anchors: [anchor("https://www.instagram.com/mallory/")]
+      } })]
     }, { includeRelated: true }, async (url) => {
-      fetched.push(url);
-      return response(url, documents.get(url) || "", { ok: documents.has(url) });
+      fetchCount += 1;
+      return jsonResponse(url, {}, { ok: false });
     });
-    assert.deepEqual(fetched, [profileUrl, storyUrl, highlightUrl]);
+    assert.equal(fetchCount, 0);
     assert.deepEqual(result.images.map((item) => item.url), [
-      "https://scontent.cdninstagram.com/current-post.jpg",
-      "https://scontent.cdninstagram.com/staged-story.jpg",
-      "https://scontent.cdninstagram.com/staged-highlight.jpg"
+      "https://scontent.cdninstagram.com/current-post.jpg"
     ]);
   }
 
-  // Stable item IDs collapse the same story media exposed again by a
-  // highlight even when Instagram refreshes its signed CDN URL.
+  // Stable-ID normalization must not collapse distinct carousel/story frames.
   {
     const result = await scan("https://www.instagram.com/stories/highlights/4242/", {
       scripts: [script({ reels: {
@@ -498,29 +749,32 @@ async function run() {
         }
       } })]
     });
-    assert.equal(result.images.length, 1);
-    assert.equal(
-      result.images[0].url,
-      "https://scontent.cdninstagram.com/shared.jpg?signature=old"
-    );
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://scontent.cdninstagram.com/shared.jpg?signature=old",
+      "https://scontent.cdninstagram.com/shared.jpg?signature=new"
+    ]);
   }
 
   // Fetch/document bounds stop related traversal deterministically.
   {
-    const storyOne = "https://www.instagram.com/stories/alice/901/";
-    const storyTwo = "https://www.instagram.com/stories/alice/902/";
     let requests = 0;
     const result = await scan("https://www.instagram.com/alice/", {
-      anchors: [anchor(storyOne), anchor(storyTwo)]
-    }, { includeRelated: true, maxDocuments: 1 }, async (url) => {
+      scripts: [script({ data: { user: { pk: "91", username: "alice" } } })]
+    }, { maxDocuments: 1 }, async (url) => {
       requests += 1;
-      return response(url, htmlDocument({ scripts: [{ value: { reels_media: [{
-        user: { username: "alice" },
-        items: [imageNode("901", `https://scontent.cdninstagram.com/bounded-${requests}.jpg`)]
-      }] } }] }));
+      return jsonResponse(url, {
+        items: [{
+          code: "BOUNDED1",
+          user: { username: "alice" },
+          ...imageNode("901", `https://scontent.cdninstagram.com/bounded-${requests}.jpg`)
+        }],
+        more_available: true,
+        next_max_id: "BLOCKED-BY-LIMIT"
+      });
     });
     assert.equal(requests, 1);
     assert.equal(result.images.length, 1);
+    assert.equal(result.images[0].instagramCollections[0].type, "post");
     assert.ok(result.warnings.some((warning) => /bounded document/i.test(warning)));
   }
 

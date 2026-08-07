@@ -58,6 +58,13 @@ button {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "header"
+    "folder"
+    "controls"
+    "notice"
+    "media"
+    "actions";
   width: 100%;
   height: 600px;
   min-height: 0;
@@ -73,6 +80,7 @@ html.responsive-surface .app-shell {
 }
 
 .app-header {
+  grid-area: header;
   display: grid;
   grid-template-columns: 38px minmax(0, 1fr) auto;
   gap: 11px;
@@ -208,6 +216,7 @@ html.responsive-surface .sidebar-button {
 }
 
 .folder-panel {
+  grid-area: folder;
   padding: 7px 12px 8px;
   border-bottom: 1px solid var(--border);
   background: var(--surface-raised);
@@ -374,6 +383,7 @@ html.responsive-surface .sidebar-button {
 }
 
 .controls {
+  grid-area: controls;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
 }
@@ -473,46 +483,9 @@ html:not(.responsive-surface) .selection-actions {
 }
 
 .filter-toggle-button,
-.live-capture-button,
 .instagram-collections-button {
   min-height: 25px;
   border: 1px solid transparent;
-}
-
-.duplicate-panel {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  gap: 6px 10px;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 7px;
-  padding: 7px 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--muted);
-  background: var(--surface-raised);
-  font-size: 11px;
-}
-
-.duplicate-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-}
-
-#duplicate-summary {
-  min-width: 0;
-  flex: 1 1 180px;
-  overflow-wrap: anywhere;
-}
-
-.duplicate-panel .text-button {
-  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
-  color: var(--accent);
-  background: var(--surface);
-  font-weight: 700;
 }
 
 .sidebar-follow-button {
@@ -529,29 +502,11 @@ html:not(.responsive-surface) .selection-actions {
   font-weight: 700;
 }
 
-.filter-toggle-button.active,
-.live-capture-button.active {
+.filter-toggle-button.active {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   color: light-dark(#5b21b6, #ddd6fe);
   background: var(--surface-muted);
   font-weight: 700;
-}
-
-.live-capture-button::before {
-  content: "";
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 5px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: .55;
-}
-
-.live-capture-button.active::before {
-  background: var(--success);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 20%, transparent);
-  opacity: 1;
 }
 
 .smart-filter-panel {
@@ -623,6 +578,7 @@ html:not(.responsive-surface) .selection-actions {
 }
 
 .notice {
+  grid-area: notice;
   margin: 8px 12px 0;
   padding: 8px 10px;
   border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
@@ -643,6 +599,7 @@ html:not(.responsive-surface) .selection-actions {
 }
 
 .image-list {
+  grid-area: media;
   min-width: 0;
   min-height: 0;
   padding: 5px 0;
@@ -678,10 +635,6 @@ html:not(.responsive-surface) .selection-actions {
 
 .image-row:hover {
   background: var(--surface-raised);
-}
-
-.image-row.duplicate-copy {
-  background: color-mix(in srgb, var(--surface-muted) 55%, transparent);
 }
 
 .image-row > input {
@@ -771,18 +724,6 @@ html:not(.responsive-surface) .selection-actions {
   font-weight: 600;
 }
 
-.duplicate-badge {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 1px 5px;
-  border-radius: 99px;
-  color: light-dark(#5b21b6, #ddd6fe);
-  background: var(--surface-muted);
-  font-size: 9px;
-  font-weight: 750;
-  vertical-align: 1px;
-}
-
 .media-type-badge {
   display: inline-block;
   margin-left: 6px;
@@ -843,6 +784,7 @@ html:not(.responsive-surface) .selection-actions {
 }
 
 .action-bar {
+  grid-area: actions;
   display: flex;
   min-width: 0;
   flex-wrap: wrap;

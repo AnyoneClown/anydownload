@@ -7,9 +7,11 @@ const {
   collectLiveGalleryFingerprint,
   createDimensionProbeScheduler,
   downloadBatchNotice,
-  eligibleDuplicateCandidates,
   hostPermissionPatternsForImages,
   launchOptionsFromUrl,
+  canRetainSameInstagramRoute,
+  matchesInstagramCollectionFilter,
+  mergeInstagramCollections,
   reconcileScanSelection,
   renderFilenameBatch,
   sourceTabIdFromUrl
@@ -64,21 +66,6 @@ assert.equal(
   "Measured dimensions must flow through the shared batch renderer"
 );
 
-const eligibleRecords = [
-  { url: "https://images.test/eligible.jpg", format: "jpeg" },
-  { url: "https://images.test/filtered.webp", format: "webp" },
-  { url: "https://images.test/ignored.jpg", format: "jpeg", ignored: true }
-];
-assert.deepEqual(
-  eligibleDuplicateCandidates(
-    eligibleRecords,
-    (image) => image.ignored,
-    (image) => image.format === "jpeg"
-  ),
-  [eligibleRecords[0]],
-  "Duplicate cleanup must never replace an eligible image with a filtered or ignored variant"
-);
-
 assert.equal(
   sourceTabIdFromUrl("moz-extension://fixture/popup/popup.html?sourceTabId=73&launch=abc"),
   73
@@ -87,14 +74,69 @@ assert.equal(sourceTabIdFromUrl("moz-extension://fixture/popup/popup.html?source
 assert.equal(sourceTabIdFromUrl("moz-extension://fixture/popup/popup.html?sourceTabId=1.5"), null);
 assert.equal(sourceTabIdFromUrl("not a URL"), null);
 assert.deepEqual(
-  launchOptionsFromUrl("moz-extension://fixture/popup/popup.html?sourceTabId=73&live=1"),
-  { sidebar: false, liveCapture: true }
+  launchOptionsFromUrl("moz-extension://fixture/popup/popup.html?sourceTabId=73"),
+  { sidebar: false }
 );
 assert.deepEqual(
   launchOptionsFromUrl("moz-extension://fixture/popup/popup.html?sidebar=1"),
-  { sidebar: true, liveCapture: false }
+  { sidebar: true }
 );
-assert.deepEqual(launchOptionsFromUrl("not a URL"), { sidebar: false, liveCapture: false });
+assert.deepEqual(launchOptionsFromUrl("not a URL"), { sidebar: false });
+
+assert.equal(typeof matchesInstagramCollectionFilter, "function");
+assert.equal(typeof mergeInstagramCollections, "function");
+const postCollection = { type: "post", id: "POST1", title: "Post one", owner: "Alice" };
+const storyCollection = { type: "story", id: "STORY1", title: "Current story", owner: "ALICE" };
+const highlightCollection = { type: "highlight", id: "HIGHLIGHT1", title: "Travel", owner: "alice" };
+assert.deepEqual(
+  mergeInstagramCollections(
+    [postCollection, highlightCollection],
+    [
+      { ...highlightCollection, title: "Duplicate title" },
+      storyCollection,
+      { type: "unknown", id: "ignored" }
+    ]
+  ),
+  [
+    { ...postCollection, owner: "alice" },
+    highlightCollection,
+    { ...storyCollection, owner: "alice" }
+  ],
+  "Instagram collection metadata must merge by type/id in stable order"
+);
+const instagramImage = {
+  instagramCollections: [postCollection, storyCollection, highlightCollection]
+};
+assert.equal(matchesInstagramCollectionFilter(instagramImage, "all"), true);
+assert.equal(matchesInstagramCollectionFilter(instagramImage, "posts"), true);
+assert.equal(matchesInstagramCollectionFilter(instagramImage, "story"), true);
+assert.equal(matchesInstagramCollectionFilter(instagramImage, "highlights"), true);
+assert.equal(matchesInstagramCollectionFilter(instagramImage, "highlight:HIGHLIGHT1"), true);
+assert.equal(matchesInstagramCollectionFilter(instagramImage, "highlight:OTHER"), false);
+assert.equal(matchesInstagramCollectionFilter(instagramImage, "unknown"), false);
+assert.equal(matchesInstagramCollectionFilter(instagramImage, "highlight:<script>"), false);
+assert.equal(matchesInstagramCollectionFilter({ instagramCollections: [postCollection] }, "story"), false);
+
+assert.equal(
+  canRetainSameInstagramRoute("instagram:post:POST1", "instagram:post:POST1", false),
+  true,
+  "Changing img_index within one exact post must keep automatic updates running"
+);
+assert.equal(
+  canRetainSameInstagramRoute("instagram:profile:alice", "instagram:post:POST1", false),
+  false,
+  "Profile-to-post navigation must clear the old collection scope"
+);
+assert.equal(
+  canRetainSameInstagramRoute("instagram:post:POST1", "instagram:post:POST1", true),
+  false,
+  "A full page load must not retain stale exact-route results"
+);
+assert.equal(
+  canRetainSameInstagramRoute("https://example.test", "https://example.test", false),
+  false,
+  "Generic same-origin navigation must not reuse stale page results"
+);
 
 assert.deepEqual(
   hostPermissionPatternsForImages([
@@ -171,7 +213,7 @@ assert.deepEqual(hostPermissionPatternsForImages([]), []);
   assert.deepEqual(
     [...selected],
     [first.url, added.url],
-    "Live capture must preserve known checked/unchecked state and select only eligible new images"
+    "Automatic updates must preserve known checked/unchecked state and select only eligible new images"
   );
   const freshSelection = reconcileScanSelection(
     accumulated.images,

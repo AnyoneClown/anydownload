@@ -105,11 +105,10 @@
     return `${MANAGER_WINDOW_STORAGE_PREFIX}${incognito ? "private" : "normal"}`;
   }
 
-  function managerWindowUrl(sourceTabId, options = {}) {
+  function managerWindowUrl(sourceTabId) {
     const launch = encodeURIComponent(createPreviewId());
-    const live = options.liveCapture === true ? "&live=1" : "";
     return browser.runtime.getURL(
-      `popup/popup.html?sourceTabId=${encodeURIComponent(String(sourceTabId))}&launch=${launch}${live}`
+      `popup/popup.html?sourceTabId=${encodeURIComponent(String(sourceTabId))}&launch=${launch}`
     );
   }
 
@@ -124,7 +123,7 @@
     return browser.tabs.create(createProperties);
   }
 
-  function openResizableImageWindow(tab, options = {}) {
+  function openResizableImageWindow(tab) {
     if (!tab || !Number.isInteger(tab.id)) {
       return Promise.reject(new Error("Firefox did not identify the source tab."));
     }
@@ -133,7 +132,7 @@
     const storageKey = managerWindowStorageKey(incognito);
     const previous = managerWindowQueues.get(storageKey) || Promise.resolve();
     const queued = previous.catch(() => undefined).then(async () => {
-      const url = managerWindowUrl(tab.id, options);
+      const url = managerWindowUrl(tab.id);
       let stored = null;
       try {
         const values = await browser.storage.session.get(storageKey);
@@ -2138,9 +2137,7 @@
         });
       }
       return browser.tabs.get(message.sourceTabId)
-        .then((tab) => openResizableImageWindow(tab, {
-          liveCapture: Boolean(message.liveCapture)
-        }))
+        .then((tab) => openResizableImageWindow(tab))
         .then((result) => ({ ok: true, ...result }))
         .catch((error) => ({
           ok: false,

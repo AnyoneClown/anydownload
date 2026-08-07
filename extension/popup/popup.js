@@ -203,12 +203,9 @@
   function launchOptionsFromUrl(urlValue) {
     try {
       const params = new URL(String(urlValue || "")).searchParams;
-      return {
-        sidebar: params.get("sidebar") === "1",
-        liveCapture: params.get("live") === "1"
-      };
+      return { sidebar: params.get("sidebar") === "1" };
     } catch (_error) {
-      return { sidebar: false, liveCapture: false };
+      return { sidebar: false };
     }
   }
 
@@ -320,12 +317,116 @@
     };
   }
 
+  function normalizedInstagramCollections(value) {
+    const collections = [];
+    const seen = new Set();
+    for (const raw of Array.isArray(value) ? value : []) {
+      if (!raw || typeof raw !== "object") {
+        continue;
+      }
+      const type = ["post", "story", "highlight"].includes(String(raw.type || ""))
+        ? String(raw.type)
+        : "";
+      const id = String(raw.id || "").slice(0, 120);
+      if (!type || !id) {
+        continue;
+      }
+      const title = String(raw.title || "").slice(0, 120);
+      const owner = String(raw.owner || "").slice(0, 80).toLowerCase();
+      const key = `${type}:${id}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      collections.push({ type, id, title, owner });
+      if (collections.length >= 32) {
+        break;
+      }
+    }
+    return collections;
+  }
+
+  function mergeInstagramCollections(left, right) {
+    return normalizedInstagramCollections([
+      ...normalizedInstagramCollections(left),
+      ...normalizedInstagramCollections(right)
+    ]);
+  }
+
+  function matchesInstagramCollectionFilter(image, filterValue) {
+    const filter = String(filterValue || "all");
+    if (filter === "all") {
+      return true;
+    }
+    const collections = normalizedInstagramCollections(image && image.instagramCollections);
+    if (filter === "posts") {
+      return collections.some((collection) => collection.type === "post");
+    }
+    if (filter === "story") {
+      return collections.some((collection) => collection.type === "story");
+    }
+    if (filter === "highlights") {
+      return collections.some((collection) => collection.type === "highlight");
+    }
+    if (filter.startsWith("highlight:")) {
+      const highlightId = filter.slice("highlight:".length);
+      return Boolean(highlightId) && collections.some((collection) =>
+        collection.type === "highlight" && collection.id === highlightId
+      );
+    }
+    return false;
+  }
+
+  function canRetainSameInstagramRoute(currentScopeKey, nextScopeKey, isLoading) {
+    const current = String(currentScopeKey || "");
+    const next = String(nextScopeKey || "");
+    return !isLoading && Boolean(current) && current === next &&
+      current.startsWith("instagram:");
+  }
+
+  function mergeMediaRecord(existing, incoming) {
+    if (!existing) {
+      return incoming;
+    }
+    if (!incoming) {
+      return existing;
+    }
+    return Object.assign({}, existing, incoming, {
+      previewUrl: incoming.previewUrl || existing.previewUrl || "",
+      alt: incoming.alt || existing.alt || "",
+      width: Math.max(Number(existing.width) || 0, Number(incoming.width) || 0),
+      height: Math.max(Number(existing.height) || 0, Number(incoming.height) || 0),
+      duration: Math.max(Number(existing.duration) || 0, Number(incoming.duration) || 0),
+      instagramCollections: mergeInstagramCollections(
+        existing.instagramCollections,
+        incoming.instagramCollections
+      )
+    });
+  }
+
+  function withoutInstagramCollectionTypes(images, excludedTypes) {
+    const excluded = new Set(excludedTypes || []);
+    const kept = [];
+    for (const image of images || []) {
+      const original = normalizedInstagramCollections(image && image.instagramCollections);
+      if (!original.length) {
+        kept.push(image);
+        continue;
+      }
+      const remaining = original.filter((collection) => !excluded.has(collection.type));
+      if (remaining.length) {
+        kept.push(Object.assign({}, image, { instagramCollections: remaining }));
+      }
+    }
+    return kept;
+  }
+
   function accumulateLiveImages(previousImages, scannedImages, options) {
     const settings = Object.assign({ maxImages: 1500, maxPayloadLength: 2000000 }, options || {});
     const byUrl = new Map();
     for (const image of [...(previousImages || []), ...(scannedImages || [])]) {
       if (image && typeof image.url === "string" && image.url) {
-        byUrl.set(image.url, image);
+        byUrl.set(image.url, mergeMediaRecord(byUrl.get(image.url), image));
       }
     }
 
@@ -381,21 +482,6 @@
     return Array.from(patterns).sort();
   }
 
-  function eligibleDuplicateCandidates(images, isIgnored, isEligible) {
-    const ignored = typeof isIgnored === "function" ? isIgnored : () => false;
-    const eligible = typeof isEligible === "function" ? isEligible : () => true;
-    return (Array.isArray(images) ? images : []).filter((image) => {
-      if (!image || typeof image !== "object") {
-        return false;
-      }
-      try {
-        return !ignored(image) && eligible(image);
-      } catch (_error) {
-        return false;
-      }
-    });
-  }
-
   function downloadBatchNotice(result) {
     const queuedValue = Number(result && result.queued);
     if (!Number.isFinite(queuedValue)) {
@@ -439,9 +525,11 @@
       collectLiveGalleryFingerprint,
       createDimensionProbeScheduler,
       downloadBatchNotice,
-      eligibleDuplicateCandidates,
       hostPermissionPatternsForImages,
       launchOptionsFromUrl,
+      canRetainSameInstagramRoute,
+      matchesInstagramCollectionFilter,
+      mergeInstagramCollections,
       reconcileScanSelection,
       renderFilenameBatch,
       sourceTabIdFromUrl
@@ -461,7 +549,6 @@
     YouTube && YouTube.collectYouTubeMediaFromPage;
   const Filters = globalThis.ImageDownloaderFilters;
   const Templates = globalThis.ImageDownloaderTemplates;
-  const Duplicates = globalThis.ImageDownloaderDuplicates;
   const MAX_DISCOVERED_IMAGES = Core.MAX_BATCH_SIZE;
   const MAX_SCANNED_ELEMENTS = 10000;
   const MAX_RENDERED_ROWS = 350;
@@ -471,6 +558,7 @@
   const MAX_IGNORED_RULES = 5000;
   const IGNORE_STORAGE_PREFIX = "ignoredImage:";
   const LIVE_CAPTURE_INTERVAL_MS = 1600;
+  const LIVE_RETRY_INTERVAL_MS = 4000;
   const LIVE_FORCE_SCAN_MS = 12000;
   const SIDEBAR_SCAN_DEBOUNCE_MS = 140;
   const SIDEBAR_ALL_URLS_PERMISSION = Object.freeze({ origins: ["<all_urls>"] });
@@ -501,12 +589,10 @@
     ignoredKeys: new Set(),
     filenameTemplate: Templates.DEFAULT_TEMPLATE,
     filenamePreviewByUrl: new Map(),
-    duplicateAnalysis: { groups: [], duplicateRecordCount: 0 },
-    duplicateByUrl: new Map(),
-    duplicateExtraUrls: new Set(),
-    hideDuplicates: false,
     instagramCollectionMode: false,
+    instagramCollectionFilter: "all",
     liveCapture: false,
+    pageScopeKey: "",
     pageTitle: "",
     pageUrl: "",
     showIgnored: false,
@@ -530,11 +616,13 @@
   let liveCaptureGeneration = 0;
   let liveFingerprint = "";
   let liveLastFullScanAt = 0;
+  let liveRetryNoticeText = "";
   let queueBadgeGeneration = 0;
   let queueBadgePollingStopped = false;
   let queueBadgeTimer = null;
   let renderGeneration = 0;
   let sidebarFollowGeneration = 0;
+  let sourcePageGeneration = 0;
   let sidebarFollowTimer = null;
   let sidebarFollowRequest = null;
   let sidebarFollowRunning = false;
@@ -569,10 +657,6 @@
       "bulk-download-button",
       "clear-ignored-button",
       "download-button",
-      "deduplicate-button",
-      "duplicate-panel",
-      "duplicate-summary",
-      "duplicates-button",
       "filter-input",
       "filename-template-button",
       "filename-template-help",
@@ -583,12 +667,12 @@
       "folder-help",
       "folder-input",
       "history-button",
-      "hide-duplicates-input",
       "ignored-button",
       "image-list",
       "include-unknown-input",
+      "instagram-collection-filter-field",
+      "instagram-collection-filter-select",
       "instagram-collections-button",
-      "live-capture-button",
       "media-type-filter-select",
       "min-height-input",
       "min-width-input",
@@ -598,7 +682,6 @@
       "page-label",
       "photos-only-input",
       "queue-badge",
-      "rescan-button",
       "reset-filters-button",
       "select-all-button",
       "select-none-button",
@@ -858,96 +941,26 @@
     refreshQueueBadge();
   }
 
-  function clearDuplicateAnalysis() {
-    state.duplicateAnalysis = { groups: [], duplicateRecordCount: 0 };
-    state.duplicateByUrl.clear();
-    state.duplicateExtraUrls.clear();
-    updateDuplicateUi();
-  }
-
-  function refreshDuplicateAnalysis() {
-    const candidates = eligibleDuplicateCandidates(
-      state.images,
-      isImageIgnored,
-      (image) => mediaTypeFor(image) === "image" &&
-        Filters.matchesSmartFilters(image, state.smartFilters)
-    );
-    const analysis = Duplicates.analyzeDuplicates(candidates);
-    const duplicateByUrl = new Map();
-    const duplicateExtraUrls = new Set();
-    for (const group of analysis.groups) {
-      for (const record of group.records) {
-        duplicateByUrl.set(record.url, {
-          group,
-          best: record === group.bestRecord
-        });
-      }
-      for (const record of group.recommendedRecordsToDeselect) {
-        duplicateExtraUrls.add(record.url);
-      }
-    }
-    state.duplicateAnalysis = analysis;
-    state.duplicateByUrl = duplicateByUrl;
-    state.duplicateExtraUrls = duplicateExtraUrls;
-    updateDuplicateUi();
-    return analysis;
-  }
-
-  function duplicateAnalysisSignature(analysis) {
-    return (analysis && Array.isArray(analysis.groups) ? analysis.groups : [])
-      .map((group) => `${group.bestIndex}:${(group.indexes || []).join(",")}`)
-      .join("|");
-  }
-
-  function updateDuplicateUi() {
-    const analysis = state.duplicateAnalysis || { groups: [], duplicateRecordCount: 0 };
-    const groups = analysis.groups.length;
-    const exactGroups = analysis.groups.filter((group) => group.kind === "exact").length;
-    const likelyGroups = groups - exactGroups;
-    const extras = analysis.duplicateRecordCount;
-    elements["duplicates-button"].textContent = extras
-      ? `Duplicates (${extras.toLocaleString()})`
-      : "Duplicates";
-    elements["duplicates-button"].classList.toggle("active", !elements["duplicate-panel"].hidden);
-    elements["duplicates-button"].setAttribute("aria-expanded", String(!elements["duplicate-panel"].hidden));
-    elements["duplicate-summary"].textContent = extras
-      ? `${groups.toLocaleString()} duplicate group${groups === 1 ? "" : "s"} · ${exactGroups.toLocaleString()} exact · ${likelyGroups.toLocaleString()} likely · ${extras.toLocaleString()} extra cop${extras === 1 ? "y" : "ies"}`
-      : "No likely duplicates found. Query IDs and signed URLs are kept distinct.";
-    elements["deduplicate-button"].disabled = state.busy || extras === 0;
-    elements["hide-duplicates-input"].disabled = extras === 0;
-    elements["hide-duplicates-input"].checked = state.hideDuplicates;
-  }
-
-  function keepBestDuplicatesSelected() {
-    const analysis = refreshDuplicateAnalysis();
-    let removed = 0;
-    for (const group of analysis.groups) {
-      const selectedInGroup = group.records.some((record) => state.selected.has(record.url));
-      if (!selectedInGroup) {
-        continue;
-      }
-      state.selected.add(group.bestRecord.url);
-      for (const record of group.recommendedRecordsToDeselect) {
-        if (state.selected.delete(record.url)) {
-          removed += 1;
-        }
-      }
-    }
-    setNotice(
-      removed
-        ? `Removed ${removed.toLocaleString()} duplicate cop${removed === 1 ? "y" : "ies"} from the selection and kept the best available version in each group.`
-        : "The current selection already keeps only the best available version from each duplicate group.",
-      "success"
-    );
-    renderImages();
-  }
-
   function hostFromUrl(value) {
     try {
       return new URL(value).hostname || "this page";
     } catch (_error) {
       return "this page";
     }
+  }
+
+  function pageScopeKeyForUrl(value) {
+    try {
+      if (Instagram && typeof Instagram.routeKeyForUrl === "function") {
+        const instagramKey = Instagram.routeKeyForUrl(value);
+        if (instagramKey) {
+          return instagramKey;
+        }
+      }
+    } catch (_error) {
+      // Non-Instagram pages use the ordinary site scope below.
+    }
+    return Core.siteKeyForUrl(value);
   }
 
   function isNormalSidebarTab(tab) {
@@ -989,7 +1002,9 @@
     state.scanWarnings = [];
     state.pageTitle = "";
     state.pageUrl = "";
-    clearDuplicateAnalysis();
+    state.pageScopeKey = "";
+    state.instagramCollectionFilter = "all";
+    updateInstagramCollectionFilterUi();
     state.showIgnored = false;
     state.siteKey = "";
     state.ignoredKeys.clear();
@@ -1026,6 +1041,10 @@
     );
   }
 
+  function scanSourceStillCurrent(settings, generation) {
+    return generation === sourcePageGeneration && sidebarScanStillCurrent(settings);
+  }
+
   async function sourceTabForScan(options) {
     const pinnedSource = Boolean(options && options.pinnedSource);
     const requestedTabId = options && options.tabId;
@@ -1055,7 +1074,7 @@
     button.disabled = managerWindowMode || state.busy || !Number.isInteger(state.sourceTabId);
   }
 
-  async function openManagerWindow(options) {
+  async function openManagerWindow() {
     if (managerWindowMode || !Number.isInteger(state.sourceTabId)) {
       setNotice("Wait for the current page scan before opening the large window.", "error");
       return;
@@ -1066,16 +1085,12 @@
     try {
       const result = await browser.runtime.sendMessage({
         type: "OPEN_MANAGER_WINDOW",
-        sourceTabId: state.sourceTabId,
-        liveCapture: Boolean(options && options.liveCapture)
+        sourceTabId: state.sourceTabId
       });
       if (!result || !result.ok) {
         throw new Error((result && result.error) || "Firefox could not open the large window.");
       }
       if (sidebarMode) {
-        if (state.liveCapture) {
-          stopLiveCapture();
-        }
         setNotice("Opened the resizable media window.", "success");
       } else {
         globalScope.close();
@@ -1203,7 +1218,6 @@
     }
 
     if (changed) {
-      refreshDuplicateAnalysis();
       if (!state.busy) {
         renderImages();
       }
@@ -1292,7 +1306,6 @@
     }
     const privateNote = state.incognito ? " for this private session" : " on this website";
     setNotice(`Ignored ${friendlyFilename(image)}${privateNote}. Use the Ignored view to restore it.`);
-    refreshDuplicateAnalysis();
     renderImages();
     focusIgnoredToggle();
     try {
@@ -1314,7 +1327,6 @@
       }
     }
     setNotice(`Restored ${friendlyFilename(image)}. It remains unselected.`);
-    refreshDuplicateAnalysis();
     renderImages();
     focusIgnoredToggle();
     try {
@@ -1341,7 +1353,6 @@
     }
     state.ignoredKeys.clear();
     setNotice("Restored all ignored-media rules for this website. Restored items remain unselected.");
-    refreshDuplicateAnalysis();
     renderImages();
     focusIgnoredToggle();
     try {
@@ -1477,6 +1488,9 @@
             qualityLabel: String(image && image.qualityLabel || "").slice(0, 40),
             hasAudio: typeof (image && image.hasAudio) === "boolean" ? image.hasAudio : null,
             itag: Math.max(0, Math.round(Number(image && image.itag) || 0)),
+            instagramCollections: normalizedInstagramCollections(
+              image && image.instagramCollections
+            ),
             kinds: Array.from(image.kinds || [])
               .slice(0, 8)
               .map((kind) => String(kind).slice(0, 50))
@@ -1489,6 +1503,10 @@
             current.kinds.push(safeKind);
           }
         }
+        current.instagramCollections = mergeInstagramCollections(
+          current.instagramCollections,
+          image.instagramCollections
+        );
         current.width = Math.max(current.width || 0, image.width || 0);
         current.height = Math.max(current.height || 0, image.height || 0);
         current.duration = Math.max(current.duration || 0, Number(image.duration) || 0);
@@ -1582,7 +1600,8 @@
   }
 
   function updateSmartFilterButton() {
-    const count = smartFilterCount(state.smartFilters);
+    const count = smartFilterCount(state.smartFilters) +
+      Number(state.instagramCollectionFilter !== "all");
     const button = elements["smart-filters-button"];
     button.textContent = count ? `Filters (${count})` : "Filters";
     button.classList.toggle("active", count > 0 || !elements["smart-filter-panel"].hidden);
@@ -1592,6 +1611,66 @@
     return state.showIgnored || Filters.matchesSmartFilters(image, state.smartFilters);
   }
 
+  function imageMatchesInstagramCollectionFilter(image) {
+    return state.showIgnored || matchesInstagramCollectionFilter(
+      image,
+      state.instagramCollectionFilter
+    );
+  }
+
+  function updateInstagramCollectionFilterUi() {
+    const field = elements["instagram-collection-filter-field"];
+    const select = elements["instagram-collection-filter-select"];
+    if (!field || !select) {
+      return;
+    }
+    let profileRoute = false;
+    try {
+      profileRoute = Boolean(
+        Instagram &&
+        typeof Instagram.routeKeyForUrl === "function" &&
+        Instagram.routeKeyForUrl(state.pageUrl).startsWith("instagram:profile:")
+      );
+    } catch (_error) {
+      profileRoute = false;
+    }
+    field.hidden = !profileRoute;
+    if (!profileRoute) {
+      state.instagramCollectionFilter = "all";
+      select.value = "all";
+      updateSmartFilterButton();
+      return;
+    }
+
+    const highlights = new Map();
+    for (const image of state.images) {
+      for (const collection of normalizedInstagramCollections(image.instagramCollections)) {
+        if (collection.type === "highlight" && !highlights.has(collection.id)) {
+          highlights.set(collection.id, collection.title || `Highlight ${highlights.size + 1}`);
+        }
+      }
+    }
+    const optionDefinitions = [
+      ["all", "All profile media"],
+      ["posts", "Posts only"],
+      ["story", "Current story only"],
+      ["highlights", "All highlights"],
+      ...Array.from(highlights, ([id, title]) => [`highlight:${id}`, title])
+    ];
+    const previous = state.instagramCollectionFilter;
+    select.replaceChildren(...optionDefinitions.map(([value, label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      return option;
+    }));
+    state.instagramCollectionFilter = optionDefinitions.some(([value]) => value === previous)
+      ? previous
+      : "all";
+    select.value = state.instagramCollectionFilter;
+    updateSmartFilterButton();
+  }
+
   function persistSmartFilters() {
     browser.storage.local.set({ smartFilters: state.smartFilters }).catch(() => undefined);
   }
@@ -1599,13 +1678,16 @@
   function handleSmartFilterChange() {
     state.smartFilters = smartFiltersFromControls();
     for (const image of state.images) {
-      if (isImageIgnored(image) || !Filters.matchesSmartFilters(image, state.smartFilters)) {
+      if (
+        isImageIgnored(image) ||
+        !Filters.matchesSmartFilters(image, state.smartFilters) ||
+        !matchesInstagramCollectionFilter(image, state.instagramCollectionFilter)
+      ) {
         state.selected.delete(image.url);
       }
     }
     updateSmartFilterButton();
     persistSmartFilters();
-    refreshDuplicateAnalysis();
     renderImages();
   }
 
@@ -1616,11 +1698,13 @@
     smartFilterRefreshTimer = setTimeout(() => {
       smartFilterRefreshTimer = null;
       for (const image of state.images) {
-        if (!Filters.matchesSmartFilters(image, state.smartFilters)) {
+        if (
+          !Filters.matchesSmartFilters(image, state.smartFilters) ||
+          !matchesInstagramCollectionFilter(image, state.instagramCollectionFilter)
+        ) {
           state.selected.delete(image.url);
         }
       }
-      refreshDuplicateAnalysis();
       renderImages();
     }, 50);
   }
@@ -1630,7 +1714,7 @@
     const inCurrentView = state.images.filter((image) =>
       isImageIgnored(image) === state.showIgnored &&
       imageMatchesSmartFilters(image) &&
-      (!state.hideDuplicates || state.showIgnored || !state.duplicateExtraUrls.has(image.url))
+      imageMatchesInstagramCollectionFilter(image)
     );
     if (!query) {
       return inCurrentView;
@@ -1646,7 +1730,7 @@
       state.selected.has(image.url) &&
       !isImageIgnored(image) &&
       Filters.matchesSmartFilters(image, state.smartFilters) &&
-      (!state.hideDuplicates || !state.duplicateExtraUrls.has(image.url))
+      imageMatchesInstagramCollectionFilter(image)
     );
   }
 
@@ -1742,16 +1826,10 @@
       return false;
     }
     const matchedBefore = Filters.matchesSmartFilters(image, state.smartFilters);
-    const duplicateSignatureBefore = duplicateAnalysisSignature(state.duplicateAnalysis);
     const applied = applyMeasuredDimensions(image, result.width, result.height);
     updateImageMetas(url);
     if (applied) {
-      refreshDuplicateAnalysis();
       refreshRenderedFilenamePreviews();
-      if (duplicateAnalysisSignature(state.duplicateAnalysis) !== duplicateSignatureBefore) {
-        renderImages();
-        return true;
-      }
     }
     if (matchedBefore !== Filters.matchesSmartFilters(image, state.smartFilters)) {
       scheduleSmartFilterRefresh();
@@ -1810,15 +1888,9 @@
           const current = currentImageForUrl(image.url);
           if (current && (!current.width || !current.height)) {
             const matchedBefore = Filters.matchesSmartFilters(current, state.smartFilters);
-            const duplicateSignatureBefore = duplicateAnalysisSignature(state.duplicateAnalysis);
             const applied = applyMeasuredDimensions(current, thumbnail.naturalWidth, thumbnail.naturalHeight);
             if (applied) {
-              refreshDuplicateAnalysis();
               refreshRenderedFilenamePreviews();
-              if (duplicateAnalysisSignature(state.duplicateAnalysis) !== duplicateSignatureBefore) {
-                renderImages();
-                return;
-              }
             }
             if (matchedBefore !== Filters.matchesSmartFilters(current, state.smartFilters)) {
               scheduleSmartFilterRefresh();
@@ -1849,7 +1921,10 @@
     const selectedHasVideo = selectedItems.some((item) => mediaTypeFor(item) === "video");
     const visible = filteredImages();
     const hasFilter = Boolean(elements["filter-input"].value.trim()) ||
-      (!state.showIgnored && (Filters.hasActiveSmartFilters(state.smartFilters) || state.hideDuplicates));
+      (!state.showIgnored && (
+        Filters.hasActiveSmartFilters(state.smartFilters) ||
+        state.instagramCollectionFilter !== "all"
+      ));
     const folder = folderStatus();
     const template = filenameTemplateStatus();
     const viewTotal = state.showIgnored ? ignoredCount : availableCount;
@@ -1912,10 +1987,7 @@
     elements["archive-footer-button"].title = selectedHasVideo
       ? "ZIP archives currently support image-only selections"
       : "Download selected images as ZIP archives";
-    elements["rescan-button"].disabled = state.busy;
-    elements["live-capture-button"].disabled = state.busy && !state.liveCapture;
     updateInstagramCollectionsButton();
-    updateDuplicateUi();
     elements["image-list"].setAttribute(
       "aria-label",
       state.showIgnored ? "Ignored media found on this page" : "Media found on this page"
@@ -1926,8 +1998,7 @@
     const ignored = isImageIgnored(image);
     const video = mediaTypeFor(image) === "video";
     const row = document.createElement("article");
-    const duplicateInfo = state.duplicateByUrl.get(image.url);
-    row.className = `image-row${video ? " video" : ""}${ignored ? " ignored" : ""}${duplicateInfo && !duplicateInfo.best ? " duplicate-copy" : ""}`;
+    row.className = `image-row${video ? " video" : ""}${ignored ? " ignored" : ""}`;
     row.setAttribute("role", "listitem");
 
     const checkbox = document.createElement("input");
@@ -1995,24 +2066,6 @@
       checkbox,
       previewButton: thumbnailFrame
     });
-    if (duplicateInfo) {
-      const badge = document.createElement("span");
-      badge.className = "duplicate-badge";
-      const exact = duplicateInfo.group.kind === "exact";
-      badge.textContent = duplicateInfo.best
-        ? exact ? "Best exact copy" : "Best likely copy"
-        : exact ? "Exact copy" : "Likely duplicate";
-      const evidence = Array.from(new Set([
-        ...(duplicateInfo.group.reasons || []),
-        ...(duplicateInfo.group.corroboration || [])
-      ]))
-        .map((reason) => String(reason).replace(/-/g, " "))
-        .join(", ");
-      badge.title = duplicateInfo.best
-        ? `Best available version in this ${exact ? "exact" : "likely"} group of ${duplicateInfo.group.records.length}${evidence ? ` (${evidence})` : ""}`
-        : `${exact ? "Exact copy" : "Likely duplicate"}; keep the best version from the Duplicates panel${evidence ? ` (${evidence})` : ""}`;
-      name.append(badge);
-    }
     const url = document.createElement("div");
     url.className = "image-url";
     url.textContent = image.url;
@@ -2217,11 +2270,12 @@
     if (state.busy) {
       return false;
     }
+    const scanSourceGeneration = sourcePageGeneration;
 
     const previousImages = state.images;
     const previousByUrl = new Map(previousImages.map((image) => [image.url, image]));
     const previousSelected = new Set(state.selected);
-    const previousSiteKey = state.siteKey;
+    const previousPageScopeKey = state.pageScopeKey;
     const previousIgnoredKeys = new Set(state.ignoredKeys);
     const previousInstagramCollectionMode = state.instagramCollectionMode;
     let scanTab = null;
@@ -2236,8 +2290,10 @@
       state.ignoredKeys.clear();
       state.pageTitle = "";
       state.pageUrl = "";
+      state.pageScopeKey = "";
+      state.instagramCollectionFilter = "all";
       state.instagramCollectionMode = false;
-      clearDuplicateAnalysis();
+      updateInstagramCollectionFilterUi();
       updateFilenameTemplateUi();
       elements["image-list"].replaceChildren();
       elements["page-label"].textContent = "Scanning the current page…";
@@ -2253,7 +2309,7 @@
         throw new Error("No active page was found.");
       }
       scanTab = tab;
-      if (!sidebarScanStillCurrent(settings)) {
+      if (!scanSourceStillCurrent(settings, scanSourceGeneration)) {
         return false;
       }
       state.sourceTabId = tab.id;
@@ -2290,7 +2346,9 @@
             target: { tabId: tab.id },
             func: collectInstagramMediaFromPage,
             args: [{
-              includeRelated: Boolean(settings.instagramCollections),
+              includeProfilePosts: !settings.instagramCollections,
+              includeStories: Boolean(settings.instagramCollections),
+              includeHighlights: Boolean(settings.instagramCollections),
               maxItems: MAX_DISCOVERED_IMAGES,
               maxDocuments: 32,
               maxDocumentBytes: 4000000,
@@ -2312,8 +2370,30 @@
         } catch (error) {
           instagramWarning = settings.instagramCollections
             ? `Instagram stories and highlights could not be collected; the existing results were kept. (${error.message || error})`
-            : `Instagram-specific collection was unavailable; the visible page was scanned instead. (${error.message || error})`;
+            : `Instagram-specific collection was unavailable. (${error.message || error})`;
         }
+      }
+
+      const instagramRouteKey = instagramPage &&
+        Instagram && typeof Instagram.routeKeyForUrl === "function"
+        ? Instagram.routeKeyForUrl(tab.url)
+        : "";
+      if (instagramRouteKey && !settings.instagramCollections && !injectionResults) {
+        injectionResults = [{
+          frameId: 0,
+          result: {
+            handled: true,
+            pageUrl: tab.url,
+            pageTitle: String(tab.title || "Instagram"),
+            embeddedFrameCount: 0,
+            images: [],
+            warnings: [
+              instagramWarning ||
+              "Instagram did not expose media for this exact route to the current browser session."
+            ]
+          }
+        }];
+        instagramWarning = "";
       }
 
       const youtubePage = Boolean(
@@ -2383,7 +2463,8 @@
       }
 
       if (settings.instagramCollections && !injectionResults) {
-        const previousMatchesTab = previousSiteKey && Core.siteKeyForUrl(tab.url) === previousSiteKey;
+        const previousMatchesTab = previousPageScopeKey &&
+          pageScopeKeyForUrl(tab.url) === previousPageScopeKey;
         injectionResults = [{
           frameId: 0,
           result: {
@@ -2413,8 +2494,9 @@
           });
         }
       }
-      if (!sidebarScanStillCurrent(settings)) {
+      if (!scanSourceStillCurrent(settings, scanSourceGeneration)) {
         state.siteKey = "";
+        state.pageScopeKey = "";
         state.ignoredKeys.clear();
         return false;
       }
@@ -2434,16 +2516,23 @@
       }
 
       const nextSiteKey = Core.siteKeyForUrl(merged.page.pageUrl);
-      const preserveThisPage = settings.preserveSelection && nextSiteKey === previousSiteKey;
+      const nextPageScopeKey = pageScopeKeyForUrl(merged.page.pageUrl);
+      const preserveThisPage = settings.preserveSelection &&
+        nextPageScopeKey === previousPageScopeKey;
       state.siteKey = nextSiteKey;
+      state.pageScopeKey = nextPageScopeKey;
+      if (!preserveThisPage) {
+        state.instagramCollectionFilter = "all";
+      }
       try {
         await loadIgnoredKeys();
       } catch (error) {
         state.ignoredKeys = preserveThisPage ? previousIgnoredKeys : new Set();
         merged.warnings.push(`Firefox could not load ignored-media rules: ${error.message || error}`);
       }
-      if (!sidebarScanStillCurrent(settings)) {
+      if (!scanSourceStillCurrent(settings, scanSourceGeneration)) {
         state.siteKey = "";
+        state.pageScopeKey = "";
         state.ignoredKeys.clear();
         return false;
       }
@@ -2475,13 +2564,23 @@
         }
       }
 
-      if (settings.live && preserveThisPage) {
+      if (settings.instagramCollections && preserveThisPage) {
+        const retained = withoutInstagramCollectionTypes(previousImages, ["story", "highlight"]);
+        const accumulated = accumulateLiveImages(retained, merged.images, {
+          maxImages: MAX_DISCOVERED_IMAGES,
+          maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH
+        });
+        if (accumulated.trimmed) {
+          merged.warnings.push("Instagram collection results reached the 1,500-item or 2 MB safety limit.");
+        }
+        merged.images = accumulated.images;
+      } else if (settings.live && preserveThisPage) {
         const accumulated = accumulateLiveImages(previousImages, merged.images, {
           maxImages: MAX_DISCOVERED_IMAGES,
           maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH
         });
         if (accumulated.trimmed) {
-          merged.warnings.push("Live capture reached the 1,500-item or 2 MB safety limit.");
+          merged.warnings.push("Automatic live updates reached the 1,500-item or 2 MB safety limit.");
         }
         merged.images = accumulated.images;
       }
@@ -2492,16 +2591,19 @@
         previousImages,
         previousSelected,
         preserveThisPage,
-        (image) => !isImageIgnored(image) && Filters.matchesSmartFilters(image, state.smartFilters)
+        (image) => !isImageIgnored(image) &&
+          Filters.matchesSmartFilters(image, state.smartFilters) &&
+          matchesInstagramCollectionFilter(image, state.instagramCollectionFilter)
       );
       state.scanWarnings = merged.warnings;
       state.pageTitle = merged.page.pageTitle || "";
       state.pageUrl = merged.page.pageUrl || "";
       state.instagramCollectionMode = Boolean(
         instagramCollectionSucceeded ||
+        (settings.live && preserveThisPage && previousInstagramCollectionMode) ||
         (settings.instagramCollections && preservedInstagramFallback && previousInstagramCollectionMode)
       );
-      refreshDuplicateAnalysis();
+      updateInstagramCollectionFilterUi();
       const hostname = hostFromUrl(merged.page.pageUrl);
       elements["page-label"].textContent = merged.page.pageTitle || hostname;
       updateFilenameTemplateUi();
@@ -2516,12 +2618,12 @@
         : 0;
       if (settings.live && addedCount) {
         setNotice(
-          `Live capture added ${addedCount.toLocaleString()} new media item${addedCount === 1 ? "" : "s"}. Keep scrolling to load more.`,
+          `Automatic live updates added ${addedCount.toLocaleString()} new media item${addedCount === 1 ? "" : "s"}. Keep scrolling to load more.`,
           "success"
         );
       } else if (instagramCollectionSucceeded && merged.images.length && !merged.warnings.length) {
         setNotice(
-          `Collected ${merged.images.length.toLocaleString()} Instagram media item${merged.images.length === 1 ? "" : "s"} from the current page and available story/highlight collections.`,
+          "Collected the active story and available highlights with the current Instagram session.",
           "success"
         );
       } else if (youtubeCollectionSucceeded && !merged.warnings.length) {
@@ -2532,11 +2634,11 @@
       } else if (merged.warnings.length) {
         setNotice(merged.warnings.join(" "));
       } else if (!merged.images.length) {
-        setNotice("Try scrolling to load lazy media, then scan again.");
+        setNotice("No downloadable media is currently exposed on this page. Automatic live updates will keep watching for it.");
       }
       succeeded = true;
     } catch (error) {
-      if (!sidebarScanStillCurrent(settings)) {
+      if (!scanSourceStillCurrent(settings, scanSourceGeneration)) {
         return false;
       }
       if (!settings.preserveSelection) {
@@ -2547,8 +2649,10 @@
         state.sourceWindowId = null;
         state.pageTitle = "";
         state.pageUrl = "";
+        state.pageScopeKey = "";
+        state.instagramCollectionFilter = "all";
         state.instagramCollectionMode = false;
-        clearDuplicateAnalysis();
+        updateInstagramCollectionFilterUi();
         elements["page-label"].textContent = "This page cannot be scanned";
       }
       const message = error && error.message ? error.message : String(error);
@@ -2563,7 +2667,7 @@
       } else {
         const guidance = Number.isInteger(state.sourceTabId)
           ? sidebarMode
-            ? "Firefox could not inspect the active page. Wait for it to finish loading or try Rescan."
+            ? "Firefox could not inspect the active page. Wait for it to finish loading; automatic updates will retry after the page changes."
             : "The source tab is unavailable, navigated, or no longer grants temporary access. Return to the page and click AnyDownload again."
           : "Firefox blocks scanning on internal pages, its PDF viewer, and protected Mozilla pages. Open a normal website and try again.";
         setNotice(`${guidance} (${message})`, "error");
@@ -2578,7 +2682,9 @@
 
   async function requestDownloads(images) {
     images = images.filter((image) =>
-      !isImageIgnored(image) && Filters.matchesSmartFilters(image, state.smartFilters)
+      !isImageIgnored(image) &&
+      Filters.matchesSmartFilters(image, state.smartFilters) &&
+      matchesInstagramCollectionFilter(image, state.instagramCollectionFilter)
     );
     if (state.busy || !images.length) {
       if (!state.busy) {
@@ -2637,7 +2743,6 @@
       }
       await browser.storage.local.set(storedSettings);
       await loadIgnoredKeys();
-      refreshDuplicateAnalysis();
       for (const image of state.images) {
         if (isImageIgnored(image)) {
           state.selected.delete(image.url);
@@ -2646,7 +2751,7 @@
       images = images.filter((image) =>
         !isImageIgnored(image) &&
         Filters.matchesSmartFilters(image, state.smartFilters) &&
-        (!state.hideDuplicates || !state.duplicateExtraUrls.has(image.url))
+        imageMatchesInstagramCollectionFilter(image)
       );
       if (!images.length) {
         setNotice("No downloadable media files are selected.", "error");
@@ -2712,7 +2817,6 @@
       }
       await browser.storage.local.set(storedSettings);
       await loadIgnoredKeys();
-      refreshDuplicateAnalysis();
       for (const image of state.images) {
         if (isImageIgnored(image)) {
           state.selected.delete(image.url);
@@ -2722,7 +2826,7 @@
         mediaTypeFor(image) === "image" &&
         !isImageIgnored(image) &&
         Filters.matchesSmartFilters(image, state.smartFilters) &&
-        (!state.hideDuplicates || !state.duplicateExtraUrls.has(image.url))
+        imageMatchesInstagramCollectionFilter(image)
       );
       if (!images.length) {
         throw new Error("No non-ignored images are selected.");
@@ -2824,21 +2928,6 @@
     return finishArchiveDownload(images, folder, permissionPromise, template.value);
   }
 
-  function updateLiveCaptureButton() {
-    const button = elements["live-capture-button"];
-    if (!button) {
-      return;
-    }
-    button.classList.toggle("active", state.liveCapture);
-    button.setAttribute("aria-pressed", String(state.liveCapture));
-    button.textContent = state.liveCapture ? "Stop live" : "Live capture";
-    button.title = state.liveCapture
-      ? "Stop watching this gallery"
-      : responsiveSurface
-        ? "Watch this page for media loaded while you scroll"
-        : "Watch this page for media while the toolbar popup remains open";
-  }
-
   function updateInstagramCollectionsButton() {
     const button = elements["instagram-collections-button"];
     if (!button) {
@@ -2866,11 +2955,11 @@
     liveCaptureGeneration += 1;
     liveFingerprint = "";
     liveLastFullScanAt = 0;
+    liveRetryNoticeText = "";
     if (liveCaptureTimer !== null) {
       clearTimeout(liveCaptureTimer);
       liveCaptureTimer = null;
     }
-    updateLiveCaptureButton();
     updateSummary();
     if (message) {
       setNotice(message, type);
@@ -2879,7 +2968,7 @@
 
   async function liveFingerprintForSource() {
     if (!Number.isInteger(state.sourceTabId)) {
-      throw new Error("No source tab is available for live capture.");
+      throw new Error("No source tab is available for automatic updates.");
     }
     const results = await browser.scripting.executeScript({
       target: { tabId: state.sourceTabId },
@@ -2920,11 +3009,31 @@
       if (!state.liveCapture || generation !== liveCaptureGeneration) {
         return;
       }
+      if (liveRetryNoticeText && !state.busy) {
+        if (elements["notice"].textContent === liveRetryNoticeText) {
+          setNotice("");
+        }
+        liveRetryNoticeText = "";
+      }
+      if (state.busy) {
+        scheduleLiveCapturePoll(generation);
+        return;
+      }
       const now = Date.now();
       const changed = Boolean(liveFingerprint && fingerprint.fingerprint !== liveFingerprint);
-      const forceScan = now - liveLastFullScanAt >= LIVE_FORCE_SCAN_MS;
-      liveFingerprint = fingerprint.fingerprint;
-      if (changed || forceScan) {
+      const observedPageScopeKey = pageScopeKeyForUrl(fingerprint.pageUrl);
+      const scopeChanged = Boolean(
+        observedPageScopeKey &&
+        state.pageScopeKey &&
+        observedPageScopeKey !== state.pageScopeKey
+      );
+      const instagramPage = Boolean(
+        Instagram &&
+        typeof Instagram.isInstagramUrl === "function" &&
+        Instagram.isInstagramUrl(state.pageUrl)
+      );
+      const forceScan = !instagramPage && now - liveLastFullScanAt >= LIVE_FORCE_SCAN_MS;
+      if (changed || scopeChanged || forceScan) {
         const scanned = await scanPage({
           preserveSelection: true,
           quiet: true,
@@ -2932,40 +3041,43 @@
           live: true
         });
         if (!scanned) {
-          stopLiveCapture();
+          if (state.liveCapture && generation === liveCaptureGeneration) {
+            scheduleLiveCapturePoll(generation, LIVE_RETRY_INTERVAL_MS);
+          }
           return;
         }
         liveLastFullScanAt = Date.now();
       }
+      liveFingerprint = fingerprint.fingerprint;
       scheduleLiveCapturePoll(generation);
     } catch (error) {
-      stopLiveCapture(
-        `Live capture stopped because Firefox can no longer inspect the source tab. Reopen AnyDownload from that page to continue. (${error.message || error})`,
-        "error"
-      );
+      if (!state.liveCapture || generation !== liveCaptureGeneration) {
+        return;
+      }
+      liveRetryNoticeText =
+        `Automatic live updates are temporarily unavailable and will retry. (${error.message || error})`;
+      setNotice(liveRetryNoticeText, "error");
+      scheduleLiveCapturePoll(generation, LIVE_RETRY_INTERVAL_MS);
     }
   }
 
   async function startLiveCapture(options) {
     if (state.liveCapture) {
-      stopLiveCapture("Live gallery capture stopped.");
-      return;
+      if (liveCaptureTimer === null) {
+        scheduleLiveCapturePoll(liveCaptureGeneration);
+      }
+      return true;
     }
     if (!Number.isInteger(state.sourceTabId)) {
-      setNotice("Scan a normal website before starting live capture.", "error");
-      return;
+      return false;
     }
 
     state.liveCapture = true;
     liveCaptureGeneration += 1;
     const generation = liveCaptureGeneration;
-    updateLiveCaptureButton();
-    setNotice(
-      responsiveSurface
-        ? "Live capture is on. Keep scrolling; new images and direct videos will be added automatically."
-        : "Live capture is on while this toolbar popup stays open. Use Open window or the Sidebar if you need to interact with the page while capturing.",
-      "success"
-    );
+    if (!options || !options.quiet) {
+      setNotice("Automatic live updates are on. Newly exposed media will appear here.", "success");
+    }
 
     try {
       if (!options || !options.skipInitialScan) {
@@ -2977,7 +3089,7 @@
         });
         if (!scanned) {
           stopLiveCapture();
-          return;
+          return false;
         }
       }
       if (!state.liveCapture || generation !== liveCaptureGeneration) {
@@ -2990,24 +3102,17 @@
       liveFingerprint = fingerprint.fingerprint;
       liveLastFullScanAt = Date.now();
       scheduleLiveCapturePoll(generation);
+      return true;
     } catch (error) {
-      stopLiveCapture(`Live capture could not start. (${error.message || error})`, "error");
+      if (!state.liveCapture || generation !== liveCaptureGeneration) {
+        return false;
+      }
+      liveRetryNoticeText =
+        `Automatic live updates are temporarily unavailable and will retry. (${error.message || error})`;
+      setNotice(liveRetryNoticeText, "error");
+      scheduleLiveCapturePoll(generation, LIVE_RETRY_INTERVAL_MS);
+      return true;
     }
-  }
-
-  async function rescanFromButton() {
-    if (state.liveCapture) {
-      stopLiveCapture();
-    }
-    if (sidebarMode) {
-      cancelScheduledSidebarFollow();
-      await scanPage({
-        sidebarFollow: true,
-        sidebarGeneration: sidebarFollowGeneration
-      });
-      return;
-    }
-    await scanPage();
   }
 
   async function collectInstagramCollections() {
@@ -3015,9 +3120,6 @@
       "Collect the profile owner's active story and exposed highlights? Instagram may record story access as a view."
     )) {
       return;
-    }
-    if (state.liveCapture) {
-      stopLiveCapture();
     }
     await scanPage({ instagramCollections: true, preserveSelection: true });
   }
@@ -3033,6 +3135,7 @@
 
   function beginSidebarTransition(tabId, tab) {
     cancelScheduledSidebarFollow();
+    sourcePageGeneration += 1;
     if (state.liveCapture) {
       stopLiveCapture();
     }
@@ -3122,11 +3225,14 @@
         showSidebarLoading(tab);
         return;
       }
-      await scanPage({
+      const scanned = await scanPage({
         tabId: tab.id,
         sidebarFollow: true,
         sidebarGeneration: request.generation
       });
+      if (scanned && request.generation === sidebarFollowGeneration) {
+        await startLiveCapture({ skipInitialScan: true, quiet: true });
+      }
     } catch (error) {
       if (
         request === sidebarFollowRequest &&
@@ -3251,6 +3357,7 @@
         if (tabId !== state.sourceTabId) {
           return;
         }
+        sourcePageGeneration += 1;
         if (sidebarMode) {
           cancelScheduledSidebarFollow();
           if (state.liveCapture) {
@@ -3259,7 +3366,7 @@
           state.sourceTabId = null;
           state.sourceWindowId = null;
         } else if (state.liveCapture) {
-          stopLiveCapture("Live capture stopped because its source tab was closed.", "error");
+          stopLiveCapture("Automatic live updates stopped because the source tab was closed.", "error");
         }
       });
     }
@@ -3290,11 +3397,25 @@
         }
         if (
           tabId === state.sourceTabId &&
-          state.liveCapture &&
           (changeInfo.url || changeInfo.status === "loading")
         ) {
-          stopLiveCapture(
-            "Live capture paused because the source tab navigated. Open AnyDownload on the loaded page to restart it.",
+          const nextUrl = String(changeInfo.url || tab && tab.url || "");
+          const nextPageScopeKey = pageScopeKeyForUrl(nextUrl);
+          if (changeInfo.url && canRetainSameInstagramRoute(
+            state.pageScopeKey,
+            nextPageScopeKey,
+            changeInfo.status === "loading" || Boolean(tab && tab.status === "loading")
+          )) {
+            state.pageUrl = nextUrl;
+            return;
+          }
+          sourcePageGeneration += 1;
+          if (state.liveCapture) {
+            stopLiveCapture();
+          }
+          resetSidebarPageState(
+            tab && tab.title ? tab.title : "The source page changed",
+            "The source page changed, so its previous media was cleared. Open AnyDownload on the loaded page to continue.",
             "error"
           );
         }
@@ -3344,15 +3465,12 @@
   }
 
   function wireEvents() {
-    elements["open-window-button"].addEventListener("click", () => openManagerWindow({
-      liveCapture: state.liveCapture
-    }));
+    elements["open-window-button"].addEventListener("click", openManagerWindow);
     elements["sidebar-button"].addEventListener("click", openFirefoxSidebar);
     elements["history-button"].addEventListener("click", openDownloadHistory);
     if (elements["sidebar-follow-button"]) {
       elements["sidebar-follow-button"].addEventListener("click", requestSidebarFollowPermission);
     }
-    elements["rescan-button"].addEventListener("click", rescanFromButton);
     elements["instagram-collections-button"].addEventListener("click", collectInstagramCollections);
     elements["filter-input"].addEventListener("input", renderImages);
     elements["folder-input"].addEventListener("input", updateSummary);
@@ -3409,22 +3527,22 @@
       elements["smart-filters-button"].setAttribute("aria-expanded", String(!panel.hidden));
       updateSmartFilterButton();
     });
-    elements["duplicates-button"].addEventListener("click", () => {
-      const panel = elements["duplicate-panel"];
-      panel.hidden = !panel.hidden;
-      refreshDuplicateAnalysis();
-      updateDuplicateUi();
-    });
-    elements["deduplicate-button"].addEventListener("click", keepBestDuplicatesSelected);
-    elements["hide-duplicates-input"].addEventListener("change", () => {
-      state.hideDuplicates = elements["hide-duplicates-input"].checked;
+    elements["instagram-collection-filter-select"].addEventListener("change", () => {
+      state.instagramCollectionFilter = elements["instagram-collection-filter-select"].value;
+      for (const image of state.images) {
+        if (!matchesInstagramCollectionFilter(image, state.instagramCollectionFilter)) {
+          state.selected.delete(image.url);
+        }
+      }
+      updateSmartFilterButton();
       renderImages();
     });
     elements["reset-filters-button"].addEventListener("click", () => {
+      state.instagramCollectionFilter = "all";
+      elements["instagram-collection-filter-select"].value = "all";
       applySmartFiltersToControls(Filters.DEFAULT_FILTERS);
       handleSmartFilterChange();
     });
-    elements["live-capture-button"].addEventListener("click", () => startLiveCapture());
     elements["ignored-button"].addEventListener("click", () => {
       state.showIgnored = !state.showIgnored;
       renderImages();
@@ -3438,7 +3556,7 @@
       if (
         elements["filter-input"].value.trim() ||
         Filters.hasActiveSmartFilters(state.smartFilters) ||
-        state.hideDuplicates
+        state.instagramCollectionFilter !== "all"
       ) {
         for (const image of filteredImages()) {
           state.selected.delete(image.url);
@@ -3491,14 +3609,13 @@
     applySmartFiltersToControls(Filters.DEFAULT_FILTERS);
     elements["filename-template-input"].value = Templates.DEFAULT_TEMPLATE;
     updateFilenameTemplateUi();
-    updateDuplicateUi();
     elements["sidebar-button"].hidden = responsiveSurface ||
       !browser.sidebarAction ||
       typeof browser.sidebarAction.open !== "function";
     updateSidebarFollowButton();
     updateOpenWindowButton();
     updateSmartFilterButton();
-    updateLiveCaptureButton();
+    updateInstagramCollectionFilterUi();
     await initializeSidebarContext();
     wireEvents();
     wireSourceTabLifecycle();
@@ -3549,8 +3666,8 @@
     const scanned = await scanPage();
     refreshQueueBadge();
     startQueueBadgePolling();
-    if (scanned && launchOptions.liveCapture && managerWindowMode) {
-      await startLiveCapture({ skipInitialScan: true });
+    if (scanned) {
+      await startLiveCapture({ skipInitialScan: true, quiet: true });
     }
   }
 

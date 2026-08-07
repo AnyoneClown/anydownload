@@ -103,11 +103,11 @@ assert.deepEqual(
     "../shared/youtube.js",
     "../shared/filters.js",
     "../shared/templates.js",
-    "../shared/duplicates.js",
     "popup.js"
   ],
   "Popup scripts must load in dependency order"
 );
+assert.doesNotMatch(popupHtml, /shared\/duplicates\.js/);
 const popupResourcePaths = [
   ...popupScriptSources,
   ...Array.from(
@@ -122,6 +122,25 @@ assert.match(popupCss, /html,\s*body\s*\{[^}]*width:\s*470px;[^}]*height:\s*600p
 assert.doesNotMatch(popupCss, /html,\s*body\s*\{[^}]*max-(?:width|height):/s);
 assert.match(popupCss, /\.app-shell\s*\{[^}]*height:\s*600px;[^}]*min-height:\s*0;[^}]*overflow:\s*hidden;/s);
 assert.match(popupCss, /\.app-shell\s*\{[^}]*grid-template-rows:\s*auto auto auto auto minmax\(0,\s*1fr\) auto;/s);
+assert.match(
+  popupCss,
+  /\.app-shell\s*\{[^}]*grid-template-areas:\s*"header"\s*"folder"\s*"controls"\s*"notice"\s*"media"\s*"actions";/s,
+  "Hidden notices must not shift the footer into the flexible media row during scanning"
+);
+for (const [selector, area] of [
+  ["app-header", "header"],
+  ["folder-panel", "folder"],
+  ["controls", "controls"],
+  ["notice", "notice"],
+  ["image-list", "media"],
+  ["action-bar", "actions"]
+]) {
+  assert.match(
+    popupCss,
+    new RegExp(`\\.${selector}\\s*\\{[^}]*grid-area:\\s*${area};`, "s"),
+    `${selector} must remain pinned to the ${area} grid area`
+  );
+}
 assert.match(popupCss, /\.app-shell\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s);
 assert.match(popupCss, /\.app-shell\s*>\s*\*\s*\{[^}]*min-width:\s*0;/s);
 assert.match(popupCss, /\.app-header\s*\{[^}]*grid-template-columns:\s*38px\s+minmax\(0,\s*1fr\)\s+auto;/s);
@@ -143,10 +162,20 @@ assert.match(popupHtml, /id="queue-badge"[^>]*hidden/);
 assert.match(popupHtml, /id="filename-template-button"[^>]*aria-controls="filename-template-panel"/);
 assert.match(popupHtml, /id="filename-template-input"[^>]*value="\{filename\}"[^>]*maxlength="240"/);
 assert.match(popupHtml, /id="filename-template-help"[^>]*>[^<]*\{hostname\}[^<]*\{page-title\}[^<]*\{date\}/);
-assert.match(popupHtml, /id="duplicates-button"[^>]*aria-controls="duplicate-panel"/);
-assert.match(popupHtml, /id="duplicate-panel"[^>]*hidden/);
-assert.match(popupHtml, /id="deduplicate-button"[^>]*disabled>Keep best selected<\/button>/);
-assert.match(popupHtml, /id="hide-duplicates-input"[^>]*type="checkbox"/);
+for (const removedControlId of [
+  "deduplicate-button",
+  "duplicate-panel",
+  "duplicates-button",
+  "hide-duplicates-input",
+  "live-capture-button",
+  "rescan-button"
+]) {
+  assert.doesNotMatch(
+    popupHtml,
+    new RegExp(`id=["']${removedControlId}["']`),
+    `${removedControlId} must not remain in the popup`
+  );
+}
 assert.match(popupHtml, />Save As for one file<\/span>/);
 assert.match(popupHtml, />CSS backgrounds<\/span>/);
 assert.match(popupCss, /\.folder-panel\s*\{[^}]*padding:\s*7px 12px 8px;/s);
@@ -163,8 +192,15 @@ assert.match(popupHtml, /id="archive-footer-button"[^>]*disabled>Download ZIP<\/
 assert.match(popupHtml, /id="sidebar-follow-button"[^>]*hidden>Enable auto-follow<\/button>/);
 assert.match(popupHtml, /id="sidebar-button"[^>]*title="Open Firefox Sidebar"[^>]*aria-label="Open Firefox Sidebar"/);
 assert.match(popupHtml, /id="photos-only-input"[^>]*type="checkbox"/);
-assert.match(popupHtml, /id="live-capture-button"[^>]*aria-pressed="false"/);
 assert.match(popupHtml, /id="instagram-collections-button"[^>]*hidden>Stories &amp; highlights<\/button>/);
+assert.match(popupHtml, /id="instagram-collection-filter-select"/);
+for (const collectionFilter of ["all", "posts", "story", "highlights"]) {
+  assert.match(
+    popupHtml,
+    new RegExp(`<option value=["']${collectionFilter}["']`),
+    `Missing Instagram collection filter: ${collectionFilter}`
+  );
+}
 assert.match(popupHtml, /id="smart-filter-panel"[^>]*hidden/);
 assert.match(popupHtml, /id="smart-filters-button"[^>]*aria-expanded="false"[^>]*aria-controls="smart-filter-panel"/);
 assert.match(popupHtml, /id="min-width-input"[^>]*type="number"[^>]*min="0"/);
@@ -196,7 +232,7 @@ assert.match(popupJs, /rootMargin:\s*"0px"/);
 assert.match(popupJs, /sourceTabIdFromUrl/);
 assert.match(popupJs, /launchOptionsFromUrl/);
 assert.match(popupJs, /sidebar:\s*params\.get\("sidebar"\) === "1"/);
-assert.match(popupJs, /liveCapture:\s*params\.get\("live"\) === "1"/);
+assert.doesNotMatch(popupJs, /params\.get\("live"\)/);
 assert.match(popupJs, /const sidebarMode = launchOptions\.sidebar/);
 assert.match(popupJs, /const responsiveSurface = managerWindowMode \|\| sidebarMode/);
 assert.match(popupJs, /initialize\(\)\.catch\(handleInitializationError\)/);
@@ -210,7 +246,7 @@ assert.match(popupJs, /classList\.add\("sidebar-panel"\)/);
 assert.match(popupJs, /classList\.add\("responsive-surface"\)/);
 assert.match(popupJs, /type:\s*"OPEN_MANAGER_WINDOW"/);
 assert.match(popupJs, /sourceTabId:\s*state\.sourceTabId/);
-assert.match(popupJs, /liveCapture:\s*Boolean\(options && options\.liveCapture\)/);
+assert.match(popupJs, /elements\["open-window-button"\]\.addEventListener\("click", openManagerWindow\)/);
 assert.match(popupJs, /browser\.sidebarAction\.open\(\)/);
 assert.match(popupJs, /elements\["sidebar-button"\]\.addEventListener\("click", openFirefoxSidebar\)/);
 assert.match(popupJs, /browser\.tabs\.onActivated\.addListener/);
@@ -219,17 +255,29 @@ assert.match(popupJs, /else if \(changeInfo\.url\)/);
 assert.match(popupJs, /if \(!value\) \{[\s\S]*?return true;/);
 assert.match(popupJs, /browser\.permissions\.request\(SIDEBAR_ALL_URLS_PERMISSION\)/);
 assert.match(popupJs, /state\.sidebarPermissionNeeded = !state\.sidebarHasBroadAccess/);
-assert.doesNotMatch(
-  popupJs,
-  /if \(!responsiveSurface\)\s*\{\s*await openManagerWindow\(\{ liveCapture: true \}\)/,
-  "Live capture must toggle in the compact popup instead of opening a manager window"
-);
+for (const removedElementId of [
+  "deduplicate-button",
+  "duplicate-panel",
+  "duplicates-button",
+  "hide-duplicates-input",
+  "live-capture-button",
+  "rescan-button"
+]) {
+  assert.doesNotMatch(
+    popupJs,
+    new RegExp(`elements\\["${removedElementId}"\\]`),
+    `${removedElementId} must not remain wired in popup.js`
+  );
+}
 assert.match(popupJs, /Filters\.matchesSmartFilters/);
 assert.match(popupJs, /Filters\.hasActiveSmartFilters/);
 assert.match(popupJs, /smartFilters:\s*Filters\.normalizeFilters\(\)/);
 assert.match(popupJs, /Templates\.validate\(elements\["filename-template-input"\]\.value\)/);
 assert.match(popupJs, /Templates\.render\(/);
-assert.match(popupJs, /Duplicates\.analyzeDuplicates\(candidates\)/);
+assert.match(
+  popupJs,
+  /module\.exports\s*=\s*\{[\s\S]*matchesInstagramCollectionFilter,[\s\S]*mergeInstagramCollections,/
+);
 assert.match(popupJs, /runtime\.getURL\("history\/history\.html"\)/);
 assert.match(popupJs, /type:\s*"GET_DOWNLOAD_DASHBOARD"/);
 assert.match(popupJs, /elements\["bulk-download-button"\]\.addEventListener\("click", downloadSelectedImages\)/);
@@ -252,10 +300,25 @@ assert.match(popupJs, /const archiveItems = renderedDownloadItems\(images, templ
 assert.match(popupJs, /items:\s*archiveItems/);
 assert.match(popupJs, /collectLiveGalleryFingerprint/);
 assert.match(popupJs, /collectInstagramMediaFromPage/);
-assert.match(popupJs, /includeRelated:\s*Boolean\(settings\.instagramCollections\)/);
+assert.match(popupJs, /includeProfilePosts:\s*!settings\.instagramCollections/);
+assert.match(popupJs, /includeStories:\s*Boolean\(settings\.instagramCollections\)/);
+assert.match(popupJs, /includeHighlights:\s*Boolean\(settings\.instagramCollections\)/);
 assert.match(popupJs, /Instagram\.canCollectRelated\(state\.pageUrl\)/);
+assert.match(popupJs, /Instagram\.routeKeyForUrl\(tab\.url\)/);
+assert.match(
+  popupJs,
+  /if \(instagramRouteKey && !settings\.instagramCollections && !injectionResults\)\s*\{[\s\S]*handled:\s*true,[\s\S]*images:\s*\[\]/
+);
 assert.match(popupJs, /Instagram stories and highlights could not be collected; the existing results were kept/);
 assert.match(popupJs, /scanPage\(\{ instagramCollections: true, preserveSelection: true \}\)/);
+assert.match(
+  popupJs,
+  /const scanned = await scanPage\(\);\s*refreshQueueBadge\(\);\s*startQueueBadgePolling\(\);\s*if \(scanned\)\s*\{\s*await startLiveCapture\(\{ skipInitialScan: true, quiet: true \}\);/
+);
+assert.match(
+  popupJs,
+  /const scanned = await scanPage\(\{[\s\S]*sidebarFollow:\s*true,[\s\S]*\}\);\s*if \(scanned && request\.generation === sidebarFollowGeneration\)\s*\{\s*await startLiveCapture\(\{ skipInitialScan: true, quiet: true \}\);/
+);
 assert.match(popupJs, /const YouTube = globalThis\.AnyDownloadYouTube/);
 assert.match(popupJs, /const collectYouTubeMediaFromPage = globalThis\.AnyDownloadYouTubeCollector/);
 assert.match(popupJs, /YouTube\.isYouTubeUrl\(tab\.url\)/);
@@ -263,6 +326,26 @@ assert.match(popupJs, /func:\s*collectYouTubeMediaFromPage/);
 assert.match(popupJs, /includeVideoOnly:\s*false/);
 assert.match(popupJs, /youtubeCollectionSucceeded/);
 assert.match(popupJs, /scanPage\(\{[\s\S]*preserveSelection:\s*true,[\s\S]*live:\s*true[\s\S]*\}\)/);
+assert.match(
+  popupJs,
+  /const fingerprint = await liveFingerprintForSource\(\);[\s\S]*if \(state\.busy\) \{\s*scheduleLiveCapturePoll\(generation\);\s*return;/,
+  "Automatic updates must defer rather than stop when another action becomes busy during a fingerprint request"
+);
+assert.match(
+  popupJs,
+  /Automatic live updates are temporarily unavailable and will retry/,
+  "Transient watcher failures must retry now that there is no manual live control"
+);
+assert.match(
+  popupJs,
+  /canRetainSameInstagramRoute\([\s\S]*state\.pageUrl = nextUrl;[\s\S]*resetSidebarPageState\([\s\S]*previous media was cleared/,
+  "Source navigation must preserve same-post index changes but clear stale cross-route results"
+);
+assert.match(
+  popupJs,
+  /const scanSourceGeneration = sourcePageGeneration;[\s\S]*scanSourceStillCurrent\(settings, scanSourceGeneration\)/,
+  "In-flight scans must be invalidated when their source route changes"
+);
 assert.match(backgroundJs, /contexts:\s*\["image",\s*"video"\]/);
 assert.match(backgroundJs, /const Instagram = globalThis\.ImageDownloaderInstagram/);
 assert.match(backgroundJs, /func:\s*collectInstagramMediaFromPage/);
@@ -275,9 +358,9 @@ assert.match(backgroundJs, /targetElementId/);
 assert.doesNotMatch(backgroundJs, /browser\.action\.onClicked\.addListener/);
 assert.match(backgroundJs, /message\.type === "OPEN_MANAGER_WINDOW"/);
 assert.match(backgroundJs, /browser\.tabs\.get\(message\.sourceTabId\)/);
-assert.match(backgroundJs, /function managerWindowUrl\(sourceTabId, options = \{\}\)/);
-assert.match(backgroundJs, /options\.liveCapture === true \? "&live=1" : ""/);
-assert.match(backgroundJs, /openResizableImageWindow\(tab, \{[\s\S]*liveCapture:\s*Boolean\(message\.liveCapture\)[\s\S]*\}\)/);
+assert.match(backgroundJs, /function managerWindowUrl\(sourceTabId\)/);
+assert.match(backgroundJs, /openResizableImageWindow\(tab\)/);
+assert.doesNotMatch(backgroundJs, /liveCapture|[?&]live=1/);
 assert.match(backgroundJs, /browser\.windows\.create/);
 assert.match(backgroundJs, /type:\s*"popup"/);
 assert.match(backgroundJs, /sourceTabId/);
@@ -381,7 +464,6 @@ for (const relativePath of [
   "shared/collector.js",
   "shared/core.js",
   "shared/download-queue.js",
-  "shared/duplicates.js",
   "shared/templates.js",
   "shared/youtube.js",
   "sidebar/sidebar.html",
@@ -489,7 +571,6 @@ for (const relativePath of [
   "shared/collector.js",
   "shared/core.js",
   "shared/download-queue.js",
-  "shared/duplicates.js",
   "shared/filters.js",
   "shared/archive.js",
   "shared/templates.js",

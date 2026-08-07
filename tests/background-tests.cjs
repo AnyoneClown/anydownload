@@ -680,31 +680,30 @@ function storageArea(initial = {}) {
   assert.equal(updatedWindows[0].details.width, undefined, "Reusing a manager must preserve user-resized bounds");
   assert.ok(badgeCalls.some((call) => call.type === "text" && call.details.text === "✓"));
 
-  const liveOpenResult = await runtimeMessage({
+  const reopenedResult = await runtimeMessage({
     type: "OPEN_MANAGER_WINDOW",
-    sourceTabId: tab.id,
-    liveCapture: true
+    sourceTabId: tab.id
   });
-  assert.equal(liveOpenResult.ok, true);
-  assert.equal(liveOpenResult.reused, true);
-  assert.equal(createdWindows.length, 1, "Live capture must reuse an existing manager window");
+  assert.equal(reopenedResult.ok, true);
+  assert.equal(reopenedResult.reused, true);
+  assert.equal(createdWindows.length, 1, "Opening again must reuse an existing manager window");
   assert.equal(updatedTabs.length, 2);
   assert.equal(updatedTabs[1].tabId, normalManager.tabId);
-  const liveManagerUrl = new URL(updatedTabs[1].details.url);
-  assert.equal(liveManagerUrl.searchParams.get("sourceTabId"), "41");
-  assert.equal(liveManagerUrl.searchParams.get("live"), "1");
+  const reopenedManagerUrl = new URL(updatedTabs[1].details.url);
+  assert.equal(reopenedManagerUrl.searchParams.get("sourceTabId"), "41");
+  assert.equal(reopenedManagerUrl.searchParams.get("live"), null);
   assert.deepEqual(
-    [...liveManagerUrl.searchParams.keys()].sort(),
-    ["launch", "live", "sourceTabId"]
+    [...reopenedManagerUrl.searchParams.keys()].sort(),
+    ["launch", "sourceTabId"]
   );
   assert.notEqual(
-    liveManagerUrl.searchParams.get("launch"),
+    reopenedManagerUrl.searchParams.get("launch"),
     reusedManagerUrl.searchParams.get("launch"),
-    "A live launch must reload the reused manager"
+    "Every reopen must reload the reused manager"
   );
   assert.equal(updatedWindows[1].windowId, normalManager.windowId);
   assert.equal(updatedWindows[1].details.focused, true);
-  assert.equal(updatedWindows[1].details.width, undefined, "Live reuse must preserve user-resized bounds");
+  assert.equal(updatedWindows[1].details.width, undefined, "Reusing must preserve user-resized bounds");
 
   const privateTab = {
     id: 42,
