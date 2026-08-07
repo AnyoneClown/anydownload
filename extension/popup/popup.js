@@ -650,11 +650,9 @@
   function cacheElements() {
     const ids = [
       "action-detail",
-      "archive-download-button",
       "archive-footer-button",
       "ask-single-input",
       "backgrounds-input",
-      "bulk-download-button",
       "clear-ignored-button",
       "download-button",
       "filter-input",
@@ -1931,25 +1929,6 @@
     elements["select-none-button"].textContent = hasFilter ? "Clear matches" : "Clear";
     elements["download-button"].hidden = state.showIgnored;
     elements["archive-footer-button"].hidden = state.showIgnored;
-    elements["bulk-download-button"].hidden = state.showIgnored || selected === 0;
-    elements["bulk-download-button"].textContent = selected === 1
-      ? "Download 1"
-      : `Download ${selected.toLocaleString()}`;
-    elements["bulk-download-button"].disabled = state.busy || selected === 0 || !folder.ok || !template.ok;
-    elements["bulk-download-button"].title = folder.ok && template.ok
-      ? "Download all selected files"
-      : folder.error || template.error || "Enter valid download settings";
-    elements["archive-download-button"].hidden = state.showIgnored || selected === 0;
-    elements["archive-download-button"].textContent = selected === 1
-      ? "ZIP 1"
-      : `ZIP ${selected.toLocaleString()}`;
-    elements["archive-download-button"].disabled = state.busy || selected === 0 ||
-      selectedHasVideo || !folder.ok || !template.ok;
-    elements["archive-download-button"].title = selectedHasVideo
-      ? "ZIP archives currently support image-only selections"
-      : folder.ok && template.ok
-      ? "Download all selected images as ZIP archives"
-      : folder.error || template.error || "Enter valid download settings";
     elements["selected-label"].textContent = state.showIgnored
       ? `${ignoredCount.toLocaleString()} ignored here`
       : `${selected.toLocaleString()} selected`;
@@ -3546,8 +3525,6 @@
       }
       renderImages();
     });
-    elements["bulk-download-button"].addEventListener("click", downloadSelectedImages);
-    elements["archive-download-button"].addEventListener("click", downloadSelectedArchive);
     elements["archive-footer-button"].addEventListener("click", downloadSelectedArchive);
     elements["download-button"].addEventListener("click", downloadSelectedImages);
   }

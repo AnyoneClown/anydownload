@@ -186,9 +186,22 @@ assert.match(popupHtml, /id="clear-ignored-button"/);
 assert.match(popupHtml, /src="\.\.\/shared\/collector\.js"/);
 assert.match(popupHtml, /src="\.\.\/shared\/youtube\.js"/);
 assert.match(popupHtml, /src="\.\.\/shared\/filters\.js"/);
-assert.match(popupHtml, /id="bulk-download-button"[^>]*title="Download all selected files"[^>]*hidden[^>]*disabled/);
-assert.match(popupHtml, /id="archive-download-button"[^>]*title="Download selected images as ZIP archives"[^>]*hidden[^>]*disabled/);
 assert.match(popupHtml, /id="archive-footer-button"[^>]*disabled>Download ZIP<\/button>/);
+assert.match(popupHtml, /id="download-button"[^>]*disabled>Download selected<\/button>/);
+for (const removedTopActionId of ["bulk-download-button", "archive-download-button"]) {
+  assert.doesNotMatch(
+    popupHtml,
+    new RegExp(`id=["']${removedTopActionId}["']`),
+    `${removedTopActionId} must not duplicate the footer download actions`
+  );
+  assert.doesNotMatch(
+    popupJs,
+    new RegExp(`elements\\["${removedTopActionId}"\\]`),
+    `${removedTopActionId} must not remain wired in popup.js`
+  );
+}
+assert.doesNotMatch(popupCss, /\.bulk-download-button\b/);
+assert.doesNotMatch(popupCss, /\.archive-download-button\b/);
 assert.match(popupHtml, /id="sidebar-follow-button"[^>]*hidden>Enable auto-follow<\/button>/);
 assert.match(popupHtml, /id="sidebar-button"[^>]*title="Open Firefox Sidebar"[^>]*aria-label="Open Firefox Sidebar"/);
 assert.match(popupHtml, /id="instagram-collections-button"[^>]*hidden>Stories &amp; highlights<\/button>/);
@@ -302,9 +315,8 @@ assert.match(
 );
 assert.match(popupJs, /runtime\.getURL\("history\/history\.html"\)/);
 assert.match(popupJs, /type:\s*"GET_DOWNLOAD_DASHBOARD"/);
-assert.match(popupJs, /elements\["bulk-download-button"\]\.addEventListener\("click", downloadSelectedImages\)/);
-assert.match(popupJs, /elements\["archive-download-button"\]\.addEventListener\("click", downloadSelectedArchive\)/);
 assert.match(popupJs, /elements\["archive-footer-button"\]\.addEventListener\("click", downloadSelectedArchive\)/);
+assert.match(popupJs, /elements\["download-button"\]\.addEventListener\("click", downloadSelectedImages\)/);
 assert.match(popupJs, /function hostPermissionPatternsForImages\(images\)/);
 assert.match(popupJs, /browser\.permissions\.request\(\{ origins \}\)/);
 assert.doesNotMatch(

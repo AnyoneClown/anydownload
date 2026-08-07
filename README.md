@@ -14,7 +14,7 @@ The manifest targets Firefox desktop 140+ and Firefox for Android 142+. Firefox 
 6. Expand **Filename template** to keep the source name or combine page, host, index, dimension, and date tokens; the live example shows the resulting safe filename.
 7. Click an image thumbnail, video poster, or video placeholder to preview it in a full browser tab; choose **Ignore** to hide unwanted media; or right-click a page image or video and open the **AnyDownload** submenu.
 8. On a lazy or infinite-scroll gallery, keep the resizable manager or sidebar open while you scroll; automatic live updates add newly exposed images and direct video files without a manual reload or capture toggle.
-9. Enter a relative destination such as `Website media/example.com`, select the images and videos you want, and choose **Download N** or **Download selected**. Choose **Download ZIP** only for images. Use the download-arrow button in the header to inspect the queue, history, progress, and statistics.
+9. Enter a relative destination such as `Website media/example.com`, select the images and videos you want, and use **Download selected** at the bottom. Use **Download ZIP** there only for image selections. The download-arrow button in the header opens the queue, history, progress, and statistics.
 
 The temporary extension is removed when Firefox restarts. Use the **Reload** button on `about:debugging` after changing source files. Mozilla documents this workflow in [Temporary installation in Firefox](https://extensionworkshop.com/documentation/develop/temporary-installation-in-firefox/).
 
@@ -64,7 +64,7 @@ Expand **Filters** to show **Images & videos**, **Images**, or **Videos**. **Pho
 - **Instagram collection** appears on profile routes. It can show all collected profile media, posts only, the current story only, all highlights, or one discovered highlight by name.
 - **Format** supports Any, JPEG, PNG, WebP, GIF, SVG, AVIF, MP4, WebM, Ogg/OGV, MOV, M4V, and MKV.
 
-Smart-filter settings are remembered. Applying a filter removes nonmatching items from the current selection; **Select matches only** then checks only the visible eligible media. The compact action beside the selection controls always reports the actionable count as **Download N**, while the footer keeps the larger **Download selected** action. Both start the same validated bulk-download path, and neither includes ignored or filtered-out media. A batch may contain images, videos, or both.
+Smart-filter settings are remembered. Applying a filter removes nonmatching items from the current selection; **Select matches only** then checks only the visible eligible media. The bottom **Download selected** action starts the validated bulk-download path and never includes ignored or filtered-out media. A batch may contain images, videos, or both.
 
 ## Filename templates and record identity
 
@@ -95,7 +95,7 @@ Normal-window queue state and counters are stored in local extension storage and
 
 ## ZIP archives
 
-ZIP creation remains intentionally **image-only**. Choose **ZIP N** beside the selection controls or **Download ZIP** in the footer for an image-only selection; the ZIP actions are unavailable while any selected item is a video. Deselect videos or use the **Images** filter before building an archive, and download videos individually or in bulk through the ordinary queue instead. AnyDownload opens a visible **Archive Progress** tab, fetches the selected image originals sequentially, and builds each ZIP locally inside Firefox; image data is not uploaded to a service. Keep that tab open until it reports completion. Because JPEG, PNG, WebP, AVIF, and GIF files are already compressed, the archive uses the dependency-free ZIP “store” method instead of spending CPU recompressing them.
+ZIP creation remains intentionally **image-only**. Choose **Download ZIP** at the bottom for an image-only selection; the action is unavailable while any selected item is a video. Deselect videos or use the **Images** filter before building an archive, and download videos individually or in bulk through the ordinary queue instead. AnyDownload opens a visible **Archive Progress** tab, fetches the selected image originals sequentially, and builds each ZIP locally inside Firefox; image data is not uploaded to a service. Keep that tab open until it reports completion. Because JPEG, PNG, WebP, AVIF, and GIF files are already compressed, the archive uses the dependency-free ZIP “store” method instead of spending CPU recompressing them.
 
 Firefox asks for access only to the HTTP(S) origins used by the currently selected images. Embedded `data:image` items need no host permission. If a request is denied, expires, times out after two minutes, returns a non-image response, or is otherwise unavailable, the remaining files are still archived and `anydownload-errors.txt` records the failures. A job accepts at most 2,000 selected images and uses a 64 MiB fetch safety ceiling per image; each entry must also fit below the 64 MiB ZIP-part limit after its headers are added. If everything fits in one part, the result is `gallery.zip`; larger jobs are saved sequentially as `gallery-part-001.zip`, `gallery-part-002.zip`, and so on. This keeps memory bounded instead of retaining all selected images and the finished ZIP at once.
 
@@ -150,12 +150,12 @@ Toolbar action
        └─ live fingerprint changes trigger selection-preserving rescans
   └─ thumbnail/poster click stores a one-time payload and opens a packaged preview tab
   └─ Ignore stores a site-scoped media key and removes it from selection
-  └─ Download N / Download selected sends a validated DOWNLOAD_BATCH message
+  └─ Download selected sends a validated DOWNLOAD_BATCH message
        └─ filename template renders safe, unique names for the selected batch
        └─ durable background queue starts bounded downloads.download() work
             └─ YouTube tasks refresh an in-memory signed URL from the stored video ID/itag
             └─ Downloads dashboard shows progress, controls, history, and statistics
-  └─ ZIP N / Download ZIP accepts images only and requests their selected origins
+  └─ Download ZIP accepts images only and requests their selected origins
        └─ stores a validated one-time job and opens Archive Progress
             └─ visible page fetches originals sequentially
             └─ builds and saves bounded 64 MiB ZIP parts one at a time
@@ -263,7 +263,7 @@ The manifest declares `data_collection_permissions.required: ["none"]` because t
 - On YouTube, test a public watch video, Short, `youtu.be` redirect, embed, and YouTube Music video. Confirm the row reports a complete audio+video MP4 and its actual 240p/360p quality, the permission request appears only when Download is chosen, the completed file has sound, and durable queue storage contains the public video ID/itag but no `googlevideo.com`, `expire`, or playback-token query data. Interrupt and retry once to confirm the direct URL is refreshed. Then confirm private/age/member/paid/live/SABR-only cases fail with a useful boundary message rather than claiming a download.
 - Test videos with and without `poster`. Confirm the media list shows the poster when available, uses the video placeholder otherwise, and opens a controlled video preview without eagerly loading every full file merely to render its row.
 - On a thumbnail gallery, confirm each item appears once, its row identifies a full-size or responsive source, the popup loads the small preview, and **Preview**/**Save** use the original. Include an unordered `srcset` and confirm the numerically largest `w` or `x` candidate wins.
-- Click **Select all** and confirm the top action appears as **Download N**, its count tracks individual checkbox changes, and it starts the same batch as the footer **Download selected** button. Clear the selection and confirm the top action disappears; enter an unsafe folder and confirm both download actions are disabled.
+- Click **Select all** and confirm the bottom selection count tracks individual checkbox changes and **Download selected** starts that batch. Clear the selection and confirm the action is disabled; enter an unsafe folder and confirm the bottom download actions remain disabled.
 - Expand **Filters**, turn on **Photos only** on a page containing normal photos, logos, avatars, SVG icons, and tiny pixels, and confirm obvious non-photo assets leave the eligible selection. Turn the filter off and select any exceptions manually.
 - In **Filters**, switch among **Images & videos**, **Images**, and **Videos**, test each supported image/video format, and confirm **Photos only** excludes video records until it is turned off. Confirm **Select matches only** affects only filtered rows, nonmatching rows cannot remain silently selected, **Reset** restores defaults, and the settings survive closing/reopening the manager.
 - Test `{filename}`, `{name}-{index}.{ext}`, `{hostname}-{page-title}-{date}-{width}x{height}.{ext}`, duplicate rendered names, a missing token, and unsafe punctuation with both image and video selections. Confirm the live example matches ordinary filenames and image-only ZIP names, recognized extensions survive, invalid templates block downloads, and collisions receive stable numeric suffixes.
@@ -271,7 +271,7 @@ The manifest declares `data_collection_permissions.required: ["none"]` because t
 - Open an infinite-scroll test gallery and leave the manager or sidebar open. Uncheck one known item, leave another checked, then scroll until new images and direct video sources appear. Confirm automatic updates require no button, preserve known checked/unchecked state, select only eligible new media, and leave ignored or filter-rejected additions unselected.
 - Open the Firefox Sidebar from the toolbar button and from Firefox's sidebar menu. Choose **Enable auto-follow**, accept the optional permission, switch active tabs, and navigate the active tab; confirm the old watcher stops, each completed normal page is scanned automatically, and live updates start for the new source. Remove the permission in Firefox and confirm the sidebar explains how to enable it again.
 - Select local embedded and cross-origin images, choose **Download ZIP**, approve the selected origins, and confirm Archive Progress opens and saves an archive containing unique filenames. Include one failing URL and confirm the successful images plus `anydownload-errors.txt` remain in the ZIP; deny the permission once and confirm no fetch or download starts.
-- Select videos alone and together with images and confirm the ZIP actions are unavailable for selections containing video. Deselect the videos and confirm the image-only ZIP works; then confirm the videos remain available through ordinary single or bulk download.
+- Select videos alone and together with images and confirm the bottom ZIP action is unavailable for selections containing video. Deselect the videos and confirm the image-only ZIP works; then confirm the videos remain available through ordinary single or bulk download.
 - Run a 1,500–2,000 image ZIP job whose total exceeds 64 MiB. Confirm Archive Progress remains responsive, progress reaches the full selection, numbered `part-001`, `part-002`, … archives are saved sequentially, and no “Receiving end does not exist” message appears. Cancel a second run and confirm its unfinished part is discarded while already completed parts remain.
 - Download the same batch twice and confirm Firefox adds unique suffixes instead of overwriting.
 - Download one direct video, a video-only batch, and a mixed image/video batch. Confirm each enters the ordinary queue, uses the requested relative destination and template, reports progress/history like an image download, and continues after the manager closes.
@@ -293,7 +293,7 @@ The manifest declares `data_collection_permissions.required: ["none"]` because t
 - Test a page-owned `blob:`/MediaSource video, an HLS `.m3u8`, and a DASH `.mpd` player. Confirm AnyDownload does not claim to assemble those streams. Separately expose a direct HTTP(S) media URL and confirm it is handed to Firefox without a DRM detection/blocklist; the extension must neither claim to decrypt protected content nor alter the URL.
 - Confirm a full-size row changes from **checking full size…** to its actual pixel dimensions when it becomes visible, while off-screen rows do not start eager probes.
 - Open the compact toolbar popup, choose **Open window**, resize the manager larger and smaller, then repeat from the toolbar popup and confirm the same manager window is focused with its current size while the clicked source tab is rescanned.
-- In the compact popup, test a long page title, folder path, media URL, and filename; header controls, filters, row actions, **Download N**, and **Download selected** must remain inside the popup without horizontal scrolling.
+- In the compact popup, test a long page title, folder path, media URL, and filename; header controls, filters, row actions, and the bottom download actions must remain inside the popup without horizontal scrolling.
 
 ## Suggested next features
 

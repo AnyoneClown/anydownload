@@ -24,6 +24,7 @@ All notable changes to AnyDownload are documented here.
 - Manual manager reload and live-capture controls; live updates are always enabled after a successful scan.
 - Heuristic image duplicate analysis, its Duplicates panel, keep-best selection, and hide-extra-copies controls.
 - Minimum-width, minimum-height, orientation, and unknown-size filter controls.
+- Duplicate top-of-list download and ZIP actions; both actions now appear only in the bottom bar.
 
 ## [1.9.0] - 2026-08-07
 
