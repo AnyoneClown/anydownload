@@ -5,6 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 const Core = require("../extension/shared/core.js");
+const YouTube = require("../extension/shared/youtube.js");
 
 function storageArea(initial = {}) {
   const data = { ...initial };
@@ -43,6 +44,8 @@ function storageArea(initial = {}) {
   const tabGets = [];
   const scriptingCalls = [];
   const badgeCalls = [];
+  const permissionRequests = [];
+  const backgroundErrors = [];
   const fetchRequests = [];
   const fetchFixtures = new Map();
   const zipCalls = [];
@@ -180,7 +183,62 @@ function storageArea(initial = {}) {
     }
   };
 
+  const youtubeDirectUrl = "https://rr1---sn-fixture.googlevideo.com/videoplayback?itag=18&expire=9999999999&token=keep";
+  const youtubeResult = {
+    handled: true,
+    images: [{
+      url: youtubeDirectUrl,
+      previewUrl: "https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg",
+      filename: "Rick / Roll? - 360p.mp4",
+      alt: "Fixture video — 360p",
+      width: 640,
+      height: 360,
+      duration: 213.4,
+      mimeType: "video/mp4",
+      mediaType: "video",
+      sourceProvider: "youtube",
+      videoId: "dQw4w9WgXcQ",
+      qualityLabel: "360p",
+      hasAudio: true,
+      itag: 18,
+      kinds: ["YouTube direct file", "360p video + audio"]
+    }],
+    warnings: []
+  };
   const collector = function contextCollectorFixture() {};
+  const youtubeCollector = async function youtubeContextCollectorFixture() {
+    return youtubeResult;
+  };
+  const instagramDirectUrl = "https://scontent.cdninstagram.com/o1/v/t16/reel.mp4?token=keep";
+  const instagramResult = {
+    handled: true,
+    images: [{
+      url: instagramDirectUrl,
+      previewUrl: "https://scontent.cdninstagram.com/o1/v/t51/reel.jpg",
+      alt: "Fixture reel",
+      width: 1080,
+      height: 1920,
+      duration: 12.5,
+      mimeType: "video/mp4",
+      mediaType: "video",
+      sourceProvider: "instagram",
+      kinds: ["Instagram reel video"]
+    }],
+    warnings: []
+  };
+  const instagramCollector = async function instagramContextCollectorFixture() {
+    return instagramResult;
+  };
+  const InstagramFixture = {
+    isInstagramUrl(value) {
+      try {
+        return new URL(value).hostname === "www.instagram.com";
+      } catch (_error) {
+        return false;
+      }
+    },
+    collectFromPage: instagramCollector
+  };
   const browser = {
     action: {
       onClicked: {
@@ -239,9 +297,45 @@ function storageArea(initial = {}) {
         }
       }
     },
+    permissions: {
+      async request(details) {
+        permissionRequests.push(details);
+        return true;
+      }
+    },
     scripting: {
       async executeScript(details) {
         scriptingCalls.push(details);
+        if (details.func === instagramCollector) {
+          return [{ frameId: 0, result: instagramResult }];
+        }
+        if (details.func === youtubeCollector) {
+          return [{
+            frameId: 0,
+            result: youtubeResult
+          }];
+        }
+        if (details.args && details.args[0] && details.args[0].targetElementId === 75) {
+          return [{ frameId: 0, result: { images: [] } }];
+        }
+        if (details.args && details.args[0] && details.args[0].targetElementId === 74) {
+          return [{
+            frameId: 0,
+            result: {
+              images: [{
+                url: "https://media.example.test/direct/feature.mp4?token=keep",
+                previewUrl: "https://example.test/posters/feature.jpg",
+                alt: "Context video",
+                width: 1920,
+                height: 1080,
+                duration: 91.5,
+                mimeType: "video/mp4",
+                mediaType: "video",
+                kinds: ["Video"]
+              }]
+            }
+          }];
+        }
         return [{
           frameId: 0,
           result: {
@@ -321,6 +415,9 @@ function storageArea(initial = {}) {
     ImageDownloaderArchive: Archive,
     ImageDownloaderCore: Core,
     ImageDownloaderCollector: collector,
+    ImageDownloaderInstagram: InstagramFixture,
+    AnyDownloadYouTube: YouTube,
+    AnyDownloadYouTubeCollector: youtubeCollector,
     Blob: BlobFixture,
     Date,
     TextEncoder,
@@ -333,7 +430,11 @@ function storageArea(initial = {}) {
     clearTimeout(timerId) {
       timers.delete(timerId);
     },
-    console,
+    console: {
+      error(...args) {
+        backgroundErrors.push(args);
+      }
+    },
     crypto: { randomUUID: () => `00000000-0000-4000-8000-${String(nextUuid++).padStart(12, "0")}` },
     fetch: fetchFixture,
     setTimeout(callback, delay) {
@@ -352,6 +453,7 @@ function storageArea(initial = {}) {
   assert.equal(menuEntries.length, 6);
   assert.equal(menuEntries[0].id, "anydownload-image-actions");
   assert.ok(menuEntries.every((entry) => entry.contexts.includes("image")));
+  assert.ok(menuEntries.every((entry) => entry.contexts.includes("video")));
   assert.equal(actionClicked, null, "A default popup suppresses action.onClicked, so the listener must not be registered");
   assert.equal(typeof menuClicked, "function");
   assert.equal(typeof runtimeMessage, "function");
@@ -391,6 +493,153 @@ function storageArea(initial = {}) {
   const previewKeys = Object.keys(session.data).filter((key) => key.startsWith("imagePreview:"));
   assert.equal(previewKeys.length, 1);
   assert.equal(session.data[previewKeys[0]].url, "https://cdn.example.test/full/photo.jpg");
+
+  const videoContextInfo = {
+    ...contextInfo,
+    mediaType: "video",
+    srcUrl: "https://example.test/player/opaque-source",
+    targetElementId: 74
+  };
+  await menuClicked({ ...videoContextInfo, menuItemId: "anydownload-download-image" }, tab);
+  assert.equal(scriptingCalls.length, 4);
+  assert.equal(scriptingCalls[3].args[0].targetElementId, 74);
+  assert.equal(downloadRequests.length, 2);
+  assert.equal(
+    downloadRequests[1].url,
+    "https://media.example.test/direct/feature.mp4?token=keep",
+    "A context video download must preserve the exposed direct URL"
+  );
+  assert.equal(downloadRequests[1].filename, "Context images/example.test/feature.mp4");
+
+  await menuClicked({ ...videoContextInfo, menuItemId: "anydownload-preview-image" }, tab);
+  assert.equal(createdTabs.length, 2);
+  const videoPreviewKeys = Object.keys(session.data)
+    .filter((key) => key.startsWith("imagePreview:"))
+    .filter((key) => session.data[key].mediaType === "video");
+  assert.equal(videoPreviewKeys.length, 1);
+  const videoPreview = session.data[videoPreviewKeys[0]];
+  assert.equal(videoPreview.url, "https://media.example.test/direct/feature.mp4?token=keep");
+  assert.equal(videoPreview.previewUrl, "https://example.test/posters/feature.jpg");
+  assert.equal(videoPreview.duration, 91.5);
+  assert.equal(videoPreview.mediaType, "video");
+
+  const instagramTab = {
+    id: 46,
+    incognito: false,
+    url: "https://www.instagram.com/reel/AbCdEfGhIJK/",
+    title: "Fixture reel • Instagram",
+    windowId: 7
+  };
+  const instagramContextInfo = {
+    frameId: 0,
+    pageUrl: instagramTab.url,
+    mediaType: "video",
+    srcUrl: "blob:https://www.instagram.com/page-owned-player-source",
+    targetElementId: 77
+  };
+  const callsBeforeInstagram = scriptingCalls.length;
+  const downloadsBeforeInstagram = downloadRequests.length;
+  await menuClicked({
+    ...instagramContextInfo,
+    menuItemId: "anydownload-download-image"
+  }, instagramTab);
+  assert.equal(scriptingCalls.length, callsBeforeInstagram + 1);
+  assert.equal(scriptingCalls[callsBeforeInstagram].func, instagramCollector);
+  assert.equal(downloadRequests.length, downloadsBeforeInstagram + 1);
+  assert.equal(downloadRequests[downloadsBeforeInstagram].url, instagramDirectUrl);
+  assert.equal(
+    JSON.stringify(downloadRequests[downloadsBeforeInstagram].headers),
+    JSON.stringify([{ name: "Referer", value: "https://www.instagram.com/" }])
+  );
+
+  const youtubeTab = {
+    id: 45,
+    incognito: false,
+    url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    title: "Fixture video - YouTube",
+    windowId: 7
+  };
+  sourceTabs.set(youtubeTab.id, youtubeTab);
+  const youtubeContextInfo = {
+    frameId: 0,
+    pageUrl: youtubeTab.url,
+    mediaType: "video",
+    srcUrl: "blob:https://www.youtube.com/page-owned-player-source",
+    targetElementId: 76
+  };
+  const callsBeforeYouTube = scriptingCalls.length;
+  const downloadsBeforeYouTube = downloadRequests.length;
+  await menuClicked({
+    ...youtubeContextInfo,
+    menuItemId: "anydownload-download-image"
+  }, youtubeTab);
+  assert.equal(scriptingCalls.length, callsBeforeYouTube + 1);
+  assert.equal(scriptingCalls[callsBeforeYouTube].func, youtubeCollector);
+  assert.equal(scriptingCalls[callsBeforeYouTube].target.tabId, youtubeTab.id);
+  assert.equal(scriptingCalls[callsBeforeYouTube].target.frameIds, undefined);
+  assert.equal(scriptingCalls[callsBeforeYouTube].args[0].includeVideoOnly, false);
+  assert.equal(downloadRequests.length, downloadsBeforeYouTube + 1);
+  assert.equal(
+    JSON.stringify(permissionRequests[permissionRequests.length - 1]),
+    JSON.stringify({ origins: ["https://www.youtube.com/*"] })
+  );
+  assert.equal(downloadRequests[downloadsBeforeYouTube].url, youtubeDirectUrl);
+  assert.equal(
+    downloadRequests[downloadsBeforeYouTube].filename,
+    "Context images/example.test/Rick _ Roll_ - 360p.mp4",
+    "The specialized YouTube filename must survive validation and reach the download path"
+  );
+  const tabsBeforeYouTubePreview = createdTabs.length;
+  await menuClicked({
+    ...youtubeContextInfo,
+    menuItemId: "anydownload-preview-image"
+  }, youtubeTab);
+  assert.equal(createdTabs.length, tabsBeforeYouTubePreview + 1);
+  const youtubeCalls = scriptingCalls.slice(callsBeforeYouTube);
+  assert.equal(youtubeCalls.length, 2);
+  assert.ok(
+    youtubeCalls.every((call) => call.func === youtubeCollector),
+    "A successful YouTube collection must not fall back to the generic blob collector"
+  );
+  const youtubePreview = Object.values(session.data).find((value) =>
+    value && value.url === youtubeDirectUrl
+  );
+  assert.ok(youtubePreview, "The direct YouTube file must be stored for preview");
+  assert.equal(youtubePreview.name, "Rick _ Roll_ - 360p.mp4");
+  assert.equal(youtubePreview.previewUrl, "https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg");
+  assert.equal(youtubePreview.duration, 213.4);
+  assert.equal(youtubePreview.mediaType, "video");
+
+  const downloadsBeforeManifest = downloadRequests.length;
+  const scriptingBeforeManifest = scriptingCalls.length;
+  const queueStateBeforeManifest = local.data["downloadQueueState:v1"];
+  const hlsContextInfo = {
+    ...contextInfo,
+    mediaType: "video",
+    srcUrl: "https://media.example.test/streams/feature.m3u8?token=keep",
+    targetElementId: 75
+  };
+  await menuClicked({ ...hlsContextInfo, menuItemId: "anydownload-download-image" }, tab);
+  assert.equal(scriptingCalls.length, scriptingBeforeManifest + 1);
+  assert.equal(
+    downloadRequests.length,
+    downloadsBeforeManifest,
+    "An HLS context URL must not start a native download"
+  );
+  assert.deepEqual(
+    local.data["downloadQueueState:v1"],
+    queueStateBeforeManifest,
+    "An HLS context URL must not change durable queue storage"
+  );
+  assert.ok(
+    backgroundErrors.some((args) =>
+      args.some((value) => /streaming manifest, not a standalone video file/i.test(
+        value && value.message ? value.message : String(value)
+      ))
+    ),
+    "The rejected HLS context must explain that a manifest is not a standalone file"
+  );
+  assert.ok(badgeCalls.some((call) => call.type === "text" && call.details.text === "!"));
 
   const openResult = await runtimeMessage({
     type: "OPEN_MANAGER_WINDOW",
@@ -489,6 +738,7 @@ function storageArea(initial = {}) {
 
   await session.remove("imageManagerWindow:normal");
   rejectWindowCreates = true;
+  const tabsBeforeWindowFallback = createdTabs.length;
   const fallbackSourceTab = { ...tab, id: 44, windowId: 9 };
   sourceTabs.set(fallbackSourceTab.id, fallbackSourceTab);
   const fallbackResult = await runtimeMessage({
@@ -498,10 +748,15 @@ function storageArea(initial = {}) {
   rejectWindowCreates = false;
   assert.equal(fallbackResult.ok, true);
   assert.equal(createdWindows.length, 4, "Firefox must first attempt a resizable popup window");
-  assert.equal(createdTabs.length, 2, "A rejected popup window must fall back to a source-window tab");
-  assert.equal(createdTabs[1].active, true);
-  assert.equal(createdTabs[1].windowId, 9);
-  const fallbackUrl = new URL(createdTabs[1].url);
+  assert.equal(
+    createdTabs.length,
+    tabsBeforeWindowFallback + 1,
+    "A rejected popup window must fall back to a source-window tab"
+  );
+  const fallbackTab = createdTabs[tabsBeforeWindowFallback];
+  assert.equal(fallbackTab.active, true);
+  assert.equal(fallbackTab.windowId, 9);
+  const fallbackUrl = new URL(fallbackTab.url);
   assert.equal(fallbackUrl.searchParams.get("sourceTabId"), "44");
   assert.ok(fallbackUrl.searchParams.get("launch"));
   assert.equal(session.data["imageManagerWindow:normal"], undefined);
@@ -522,6 +777,41 @@ function storageArea(initial = {}) {
   assert.equal(staleResult.ok, false);
   assert.match(staleResult.error, /stale/i);
   assert.equal(createdWindows.length, windowsBeforeInvalidRequests);
+
+  const downloadsBeforeRejectedVideoArchives = downloadRequests.length;
+  const fetchesBeforeRejectedVideoArchives = fetchRequests.length;
+  const explicitVideoArchive = await runtimeMessage({
+    type: "DOWNLOAD_ARCHIVE",
+    folder: "Archive tests/video",
+    items: [{
+      url: "https://media.example.test/direct/feature.mp4",
+      filename: "feature.mp4",
+      mediaType: "video"
+    }]
+  });
+  assert.equal(explicitVideoArchive.ok, false);
+  assert.match(explicitVideoArchive.error, /ZIP archives support images only/i);
+
+  const embeddedVideoArchive = await runtimeMessage({
+    type: "DOWNLOAD_ARCHIVE",
+    folder: "Archive tests/video-data",
+    items: [{ url: "data:video/mp4;base64,AQID" }]
+  });
+  assert.equal(embeddedVideoArchive.ok, false);
+  assert.match(embeddedVideoArchive.error, /ZIP archives support images only/i);
+
+  const inferredVideoArchive = await runtimeMessage({
+    type: "DOWNLOAD_ARCHIVE",
+    folder: "Archive tests/video-inferred",
+    items: [{
+      url: "https://media.example.test/direct/feature.mp4?token=keep",
+      filename: "feature.mp4"
+    }]
+  });
+  assert.equal(inferredVideoArchive.ok, false);
+  assert.match(inferredVideoArchive.error, /ZIP archives support images only/i);
+  assert.equal(downloadRequests.length, downloadsBeforeRejectedVideoArchives);
+  assert.equal(fetchRequests.length, fetchesBeforeRejectedVideoArchives);
 
   const archiveUrls = [
     "https://assets.example.test/a/photo.jpg?size=full",

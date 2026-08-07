@@ -11,15 +11,97 @@
     meta: document.getElementById("image-meta"),
     name: document.getElementById("image-name"),
     original: document.getElementById("original-link"),
-    stage: document.getElementById("preview-stage")
+    stage: document.getElementById("preview-stage"),
+    footer: document.getElementById("preview-footer"),
+    video: document.getElementById("preview-video")
   };
 
   function showError(message) {
     elements.loading.hidden = true;
     elements.imageButton.hidden = true;
+    elements.video.hidden = true;
     elements.error.textContent = message;
     elements.error.hidden = false;
     elements.meta.textContent = "Preview unavailable";
+  }
+
+  function formatDuration(value) {
+    if (!Number.isFinite(value) || value < 0) {
+      return "";
+    }
+
+    const totalSeconds = Math.round(value);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours) {
+      return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    }
+    return `${minutes}:${String(seconds).padStart(2, "0")}`;
+  }
+
+  function videoErrorMessage() {
+    const error = elements.video.error;
+    if (!error) {
+      return "Firefox could not load this video. Its URL may have expired or require website-specific access.";
+    }
+
+    // MediaError is not exposed as a constructor in every extension-page
+    // environment, but its standardized numeric codes are stable.
+    if (error.code === 1) {
+      return "Video loading was interrupted. Try opening the preview again.";
+    }
+    if (error.code === 2) {
+      return "Firefox could not load this video because of a network error or an expired URL.";
+    }
+    if (error.code === 3) {
+      return "Firefox could not play this video. The file may be damaged or use an unsupported codec.";
+    }
+    return "Firefox could not play this video. Its format may be unsupported or the URL may require website-specific access.";
+  }
+
+  function showImage(urlResult, name, alt) {
+    elements.image.alt = alt;
+    elements.image.addEventListener("load", () => {
+      elements.loading.hidden = true;
+      elements.imageButton.disabled = false;
+      elements.meta.textContent = `${elements.image.naturalWidth.toLocaleString()} × ${elements.image.naturalHeight.toLocaleString()} pixels`;
+    }, { once: true });
+    elements.image.addEventListener("error", () => {
+      showError("Firefox could not load this image. Its URL may have expired or require a website-specific referrer.");
+    }, { once: true });
+    elements.image.src = urlResult.value;
+  }
+
+  function showVideo(urlResult, payload, validateUrl) {
+    elements.stage.classList.add("video-mode");
+    elements.imageButton.hidden = true;
+    elements.video.hidden = false;
+    elements.video.setAttribute("aria-label", payload.alt || payload.name || "Video preview");
+    elements.loading.textContent = "Loading video…";
+    elements.footer.textContent = "Use the video controls to play, pause, seek, adjust volume, or enter fullscreen.";
+
+    const posterResult = payload.previewUrl ? validateUrl(payload.previewUrl) : null;
+    if (posterResult && posterResult.ok) {
+      elements.video.poster = posterResult.value;
+    }
+
+    elements.video.addEventListener("loadedmetadata", () => {
+      elements.loading.hidden = true;
+      const details = [];
+      if (elements.video.videoWidth > 0 && elements.video.videoHeight > 0) {
+        details.push(`${elements.video.videoWidth.toLocaleString()} × ${elements.video.videoHeight.toLocaleString()} pixels`);
+      }
+      const duration = formatDuration(elements.video.duration);
+      if (duration) {
+        details.push(`Duration ${duration}`);
+      }
+      elements.meta.textContent = details.join(" • ") || "Video ready";
+    }, { once: true });
+    elements.video.addEventListener("error", () => {
+      showError(videoErrorMessage());
+    }, { once: true });
+    elements.video.src = urlResult.value;
   }
 
   async function loadPreview() {
@@ -34,7 +116,10 @@
     const stored = await area.get(key);
     await area.remove(key);
     const payload = stored[key];
-    const urlResult = Core.validateDownloadUrl(payload && payload.url);
+    const validateUrl = typeof Core.validateMediaUrl === "function"
+      ? Core.validateMediaUrl
+      : Core.validateDownloadUrl;
+    const urlResult = validateUrl(payload && payload.url);
     const createdAt = Number(payload && payload.createdAt);
     const age = Date.now() - createdAt;
     if (
@@ -47,25 +132,25 @@
       throw new Error("This preview has expired. Return to the page and open it again.");
     }
 
-    const name = String(payload.name || "Image preview").slice(0, 180);
+    const mediaType = String(payload.mediaType || "image").toLowerCase() === "video"
+      ? "video"
+      : "image";
+    const typeLabel = mediaType === "video" ? "Video" : "Image";
+    const name = String(payload.name || `${typeLabel} preview`).slice(0, 180);
+    const alt = String(payload.alt || name).slice(0, 500);
     elements.name.textContent = name;
-    elements.image.alt = String(payload.alt || name).slice(0, 500);
-    document.title = `${name} — Image preview`;
+    document.title = `${name} — ${typeLabel} preview`;
 
     if (/^https?:/i.test(urlResult.value)) {
       elements.original.href = urlResult.value;
       elements.original.hidden = false;
     }
 
-    elements.image.addEventListener("load", () => {
-      elements.loading.hidden = true;
-      elements.imageButton.disabled = false;
-      elements.meta.textContent = `${elements.image.naturalWidth.toLocaleString()} × ${elements.image.naturalHeight.toLocaleString()} pixels`;
-    }, { once: true });
-    elements.image.addEventListener("error", () => {
-      showError("Firefox could not load this image. Its URL may have expired or require a website-specific referrer.");
-    }, { once: true });
-    elements.image.src = urlResult.value;
+    if (mediaType === "video") {
+      showVideo(urlResult, { ...payload, name, alt }, validateUrl);
+    } else {
+      showImage(urlResult, name, alt);
+    }
   }
 
   elements.imageButton.addEventListener("click", () => {

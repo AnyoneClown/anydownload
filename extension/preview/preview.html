@@ -19,11 +19,12 @@
       <button id="image-button" class="image-button" type="button" aria-label="Toggle actual image size" aria-pressed="false" disabled>
         <img id="preview-image" alt="" referrerpolicy="no-referrer">
       </button>
+      <video id="preview-video" class="preview-video" controls preload="metadata" playsinline hidden></video>
       <div id="loading-message" class="state-message">Loading image…</div>
       <div id="error-message" class="state-message error" role="alert" hidden></div>
     </main>
 
-    <footer class="preview-footer">
+    <footer id="preview-footer" class="preview-footer">
       Click the image, or focus it and press Enter or Space, to switch between fit-to-window and actual size.
     </footer>
 

@@ -11,9 +11,29 @@
   "use strict";
 
   const MAX_DIMENSION = 1000000;
-  const VALID_FORMATS = new Set(["any", "jpeg", "png", "webp", "gif", "svg", "avif"]);
+  const VALID_FORMATS = new Set([
+    "any",
+    "jpeg",
+    "png",
+    "webp",
+    "gif",
+    "svg",
+    "avif",
+    "m4v",
+    "mkv",
+    "mov",
+    "mp4",
+    "ogv",
+    "webm"
+  ]);
+  const VIDEO_FORMATS = new Set(["m4v", "mkv", "mov", "mp4", "ogv", "webm"]);
+  const VALID_MEDIA_TYPES = new Set(["any", "image", "video"]);
   const VALID_ORIENTATIONS = new Set(["any", "landscape", "portrait", "square"]);
   const FORMAT_ALIASES = Object.freeze({
+    "application/mp4": "mp4",
+    "application/ogg": "ogv",
+    "application/webm": "webm",
+    "application/x-matroska": "mkv",
     apng: "png",
     "image/apng": "png",
     avif: "avif",
@@ -28,16 +48,33 @@
     "image/jpeg": "jpeg",
     png: "png",
     "image/png": "png",
+    m4v: "m4v",
+    "video/m4v": "m4v",
+    "video/x-m4v": "m4v",
+    mkv: "mkv",
+    "video/x-matroska": "mkv",
+    mov: "mov",
+    quicktime: "mov",
+    "video/quicktime": "mov",
+    "video/x-quicktime": "mov",
+    mp4: "mp4",
+    "video/mp4": "mp4",
+    ogg: "ogv",
+    ogv: "ogv",
+    "video/ogg": "ogv",
     svg: "svg",
     "svg+xml": "svg",
     "image/svg+xml": "svg",
     webp: "webp",
-    "image/webp": "webp"
+    "image/webp": "webp",
+    webm: "webm",
+    "video/webm": "webm"
   });
   const NON_PHOTO_TOKEN = /(?:^|[^a-z0-9])(?:analytics|avatar|avatars|badge|badges|beacon|blank|emoji|emojis|emoticon|emoticons|favicon|favicons|gravatar|icon|icons|logo|logos|pixel|pixels|spacer|sprite|sprites|tracker|tracking|transparent)(?:[^a-z0-9]|$)/i;
   const NON_PHOTO_EXTENSION = /\.(?:ico|cur)(?:$|[?#])/i;
 
   const DEFAULT_FILTERS = Object.freeze({
+    mediaType: "any",
     photosOnly: false,
     minWidth: 0,
     minHeight: 0,
@@ -108,8 +145,22 @@
     return VALID_ORIENTATIONS.has(normalized) ? normalized : DEFAULT_FILTERS.orientation;
   }
 
+  function normalizeMediaType(value, fallback) {
+    let normalized = "";
+    try {
+      normalized = String(value == null ? "" : value).trim().toLowerCase();
+    } catch (_error) {
+      return fallback;
+    }
+    return VALID_MEDIA_TYPES.has(normalized) ? normalized : fallback;
+  }
+
   function normalizeFilters(filters) {
     return {
+      mediaType: normalizeMediaType(
+        readProperty(filters, "mediaType"),
+        DEFAULT_FILTERS.mediaType
+      ),
       photosOnly: normalizeBoolean(
         readProperty(filters, "photosOnly"),
         DEFAULT_FILTERS.photosOnly
@@ -172,6 +223,30 @@
     };
   }
 
+  function mediaTypeForItem(item) {
+    const explicit = normalizeMediaType(readProperty(item, "mediaType"), "");
+    if (explicit === "image" || explicit === "video") {
+      return explicit;
+    }
+
+    for (const key of ["mimeType", "contentType", "type"]) {
+      let mime = "";
+      try {
+        mime = String(readProperty(item, key) || "").trim().toLowerCase();
+      } catch (_error) {
+        mime = "";
+      }
+      if (mime.startsWith("video/")) {
+        return "video";
+      }
+      if (mime.startsWith("image/")) {
+        return "image";
+      }
+    }
+
+    return VIDEO_FORMATS.has(imageFileType(item)) ? "video" : "image";
+  }
+
   function searchableImageText(image) {
     const values = ["url", "alt", "filename", "name", "title"].map((key) => {
       try {
@@ -189,6 +264,10 @@
 
   function isLikelyPhoto(image) {
     if (!image || typeof image !== "object") {
+      return false;
+    }
+
+    if (mediaTypeForItem(image) === "video") {
       return false;
     }
 
@@ -240,6 +319,9 @@
     const dimensions = imageDimensions(image);
     const dimensionsKnown = dimensions.width > 0 && dimensions.height > 0;
 
+    if (normalized.mediaType !== "any" && mediaTypeForItem(image) !== normalized.mediaType) {
+      return false;
+    }
     if (!dimensionsKnown && !normalized.includeUnknown) {
       return false;
     }
@@ -264,7 +346,8 @@
 
   function hasActiveSmartFilters(filters) {
     const normalized = normalizeFilters(filters);
-    return normalized.photosOnly !== DEFAULT_FILTERS.photosOnly ||
+    return normalized.mediaType !== DEFAULT_FILTERS.mediaType ||
+      normalized.photosOnly !== DEFAULT_FILTERS.photosOnly ||
       normalized.minWidth !== DEFAULT_FILTERS.minWidth ||
       normalized.minHeight !== DEFAULT_FILTERS.minHeight ||
       normalized.format !== DEFAULT_FILTERS.format ||

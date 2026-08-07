@@ -220,16 +220,30 @@
       "img",
       "picture source",
       "svg image",
-      "video[poster]",
+      "video",
+      "video source",
       "input[type='image']",
       "a[data-full]",
       "a[data-original]",
       "a[data-image]",
+      "a[download]",
+      "a[type^='video/' i]",
+      "a[type='application/mp4' i]",
+      "a[type='application/ogg' i]",
+      "a[type='application/webm' i]",
+      "a[type='application/x-matroska' i]",
       "a[href$='.jpg' i]",
       "a[href$='.jpeg' i]",
       "a[href$='.png' i]",
       "a[href$='.webp' i]",
       "a[href$='.avif' i]",
+      "a[href$='.mp4' i]",
+      "a[href$='.webm' i]",
+      "a[href$='.ogv' i]",
+      "a[href$='.ogg' i]",
+      "a[href$='.mov' i]",
+      "a[href$='.m4v' i]",
+      "a[href$='.mkv' i]",
       "[data-src]",
       "[data-srcset]",
       "[data-original]",
@@ -237,7 +251,7 @@
       "[style*='url']"
     ].join(",");
     const attributes = [
-      "src", "currentSrc", "srcset", "href", "poster", "data-src", "data-srcset",
+      "src", "currentSrc", "srcset", "href", "type", "download", "poster", "data-src", "data-srcset",
       "data-lazy-src", "data-original", "data-original-src", "data-full", "data-full-src", "data-large",
       "data-zoom-image", "style", "class", "width", "height"
     ];
@@ -256,6 +270,11 @@
 
     add(document.URL);
     add(document.images ? document.images.length : 0);
+    try {
+      add(document.querySelectorAll("video").length);
+    } catch (_error) {
+      add(0);
+    }
     add(document.documentElement ? document.documentElement.scrollHeight : 0);
     add(document.documentElement ? document.documentElement.scrollWidth : 0);
 
@@ -409,7 +428,8 @@
     const usedNames = new Set();
     return (Array.isArray(images) ? images : []).map((image, index) => ({
       url: image && typeof image.url === "string" ? image.url : "",
-      filename: filenameForImage(image, index, usedNames)
+      filename: filenameForImage(image, index, usedNames),
+      mediaType: image && image.mediaType === "video" ? "video" : "image"
     }));
   }
 
@@ -434,6 +454,11 @@
 
   const Core = globalThis.ImageDownloaderCore;
   const collectImagesFromPage = globalThis.ImageDownloaderCollector;
+  const Instagram = globalThis.ImageDownloaderInstagram;
+  const collectInstagramMediaFromPage = Instagram && Instagram.collectFromPage;
+  const YouTube = globalThis.AnyDownloadYouTube;
+  const collectYouTubeMediaFromPage = globalThis.AnyDownloadYouTubeCollector ||
+    YouTube && YouTube.collectYouTubeMediaFromPage;
   const Filters = globalThis.ImageDownloaderFilters;
   const Templates = globalThis.ImageDownloaderTemplates;
   const Duplicates = globalThis.ImageDownloaderDuplicates;
@@ -480,6 +505,7 @@
     duplicateByUrl: new Map(),
     duplicateExtraUrls: new Set(),
     hideDuplicates: false,
+    instagramCollectionMode: false,
     liveCapture: false,
     pageTitle: "",
     pageUrl: "",
@@ -561,7 +587,9 @@
       "ignored-button",
       "image-list",
       "include-unknown-input",
+      "instagram-collections-button",
       "live-capture-button",
+      "media-type-filter-select",
       "min-height-input",
       "min-width-input",
       "notice",
@@ -596,15 +624,34 @@
     return Templates.validate(elements["filename-template-input"].value);
   }
 
+  function mediaTypeFor(image) {
+    return image && image.mediaType === "video" ? "video" : "image";
+  }
+
+  function baseFilenameForMedia(image, index) {
+    const inferred = (Core.filenameForMedia || Core.filenameForImage)(
+      image && image.url,
+      index,
+      mediaTypeFor(image)
+    );
+    const suggested = String(image && image.filename || "").slice(0, 500).trim();
+    const recognized = mediaTypeFor(image) === "video"
+      ? /\.(?:m4v|mkv|mov|mp4|ogg|ogv|webm)$/i.test(suggested)
+      : /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp)$/i.test(suggested);
+    return recognized ? Core.sanitizeFilename(suggested, inferred) : inferred;
+  }
+
   function filenameMetadata(image, index, date) {
+    const mediaType = mediaTypeFor(image);
     return {
-      filename: Core.filenameForImage(image && image.url, index),
+      filename: baseFilenameForMedia(image, index),
       url: image && image.url,
       pageUrl: state.pageUrl,
       pageTitle: state.pageTitle,
       width: image && image.width,
       height: image && image.height,
       mimeType: image && (image.mimeType || image.type),
+      mediaType,
       index: index + 1,
       date
     };
@@ -659,12 +706,12 @@
         );
         previews.set(
           image.url,
-          preview.ok ? preview.value : Core.filenameForImage(image.url, 0)
+          preview.ok ? preview.value : baseFilenameForMedia(image, 0)
         );
       }
     } else {
       state.images.forEach((image, index) => {
-        previews.set(image.url, Core.filenameForImage(image.url, index));
+        previews.set(image.url, baseFilenameForMedia(image, index));
       });
     }
     state.filenamePreviewByUrl = previews;
@@ -822,7 +869,8 @@
     const candidates = eligibleDuplicateCandidates(
       state.images,
       isImageIgnored,
-      (image) => Filters.matchesSmartFilters(image, state.smartFilters)
+      (image) => mediaTypeFor(image) === "image" &&
+        Filters.matchesSmartFilters(image, state.smartFilters)
     );
     const analysis = Duplicates.analyzeDuplicates(candidates);
     const duplicateByUrl = new Map();
@@ -1028,7 +1076,7 @@
         if (state.liveCapture) {
           stopLiveCapture();
         }
-        setNotice("Opened the resizable image window.", "success");
+        setNotice("Opened the resizable media window.", "success");
       } else {
         globalScope.close();
       }
@@ -1228,11 +1276,11 @@
   async function ignoreImage(image) {
     const key = ignoredKey(image);
     if (!state.siteKey || !key) {
-      setNotice("This image cannot be added to the ignore list.", "error");
+      setNotice("This media item cannot be added to the ignore list.", "error");
       return;
     }
     if (!state.ignoredKeys.has(key) && state.ignoredKeys.size >= MAX_IGNORED_PER_SITE) {
-      setNotice(`This website already has the maximum of ${MAX_IGNORED_PER_SITE} ignored image rules.`, "error");
+      setNotice(`This website already has the maximum of ${MAX_IGNORED_PER_SITE} ignored media rules.`, "error");
       return;
     }
 
@@ -1250,7 +1298,7 @@
     try {
       await persistIgnoredMutation("add", key);
     } catch (error) {
-      setNotice(`The image is hidden for now, but Firefox could not remember it: ${error.message || error}`, "error");
+      setNotice(`The media item is hidden for now, but Firefox could not remember it: ${error.message || error}`, "error");
     }
   }
 
@@ -1272,7 +1320,7 @@
     try {
       await persistIgnoredMutation("remove", key);
     } catch (error) {
-      setNotice(`The image is restored for now, but Firefox could not remember it: ${error.message || error}`, "error");
+      setNotice(`The media item is restored for now, but Firefox could not remember it: ${error.message || error}`, "error");
     }
   }
 
@@ -1280,7 +1328,7 @@
     if (
       state.ignoredKeys.size > 1 &&
       !window.confirm(
-        `Restore all ${state.ignoredKeys.size.toLocaleString()} ignored-image rules for this website? Restored images will remain unselected.`
+        `Restore all ${state.ignoredKeys.size.toLocaleString()} ignored-media rules for this website? Restored items will remain unselected.`
       )
     ) {
       return;
@@ -1292,14 +1340,14 @@
       }
     }
     state.ignoredKeys.clear();
-    setNotice(`Restored all ignored-image rules for this website. Restored images remain unselected.`);
+    setNotice("Restored all ignored-media rules for this website. Restored items remain unselected.");
     refreshDuplicateAnalysis();
     renderImages();
     focusIgnoredToggle();
     try {
       await clearPersistedIgnoredRules();
     } catch (error) {
-      setNotice(`The images are restored for now, but Firefox could not clear the stored rules: ${error.message || error}`, "error");
+      setNotice(`The media items are restored for now, but Firefox could not clear the stored rules: ${error.message || error}`, "error");
     }
   }
 
@@ -1312,24 +1360,32 @@
   }
 
   async function openImagePreview(image) {
-    const urlResult = Core.validateDownloadUrl(image && image.url);
+    const validateMediaUrl = Core.validateMediaUrl || Core.validateDownloadUrl;
+    const urlResult = validateMediaUrl(image && image.url);
     if (!urlResult.ok) {
-      setNotice(`Cannot preview this image: ${urlResult.error}`, "error");
+      setNotice(`Cannot preview this media file: ${urlResult.error}`, "error");
       return;
     }
+
+    const previewResult = image && image.previewUrl
+      ? validateMediaUrl(image.previewUrl)
+      : { ok: false };
 
     const id = createPreviewId();
     const key = `imagePreview:${id}`;
     const payload = {
       url: urlResult.value,
+      previewUrl: previewResult.ok ? previewResult.value : "",
       name: friendlyFilename(image),
       alt: String(image.alt || "").slice(0, 500),
+      duration: Math.max(0, Number(image.duration) || 0),
+      mediaType: mediaTypeFor(image),
       createdAt: Date.now()
     };
     try {
       await browser.storage.session.set({ [key]: payload });
     } catch (error) {
-      setNotice(`Firefox could not prepare the in-memory preview: ${error.message || error}`, "error");
+      setNotice(`Firefox could not prepare the in-memory media preview: ${error.message || error}`, "error");
       return;
     }
 
@@ -1347,6 +1403,7 @@
   }
 
   function mergeScanResults(injectionResults) {
+    const validateMediaUrl = Core.validateMediaUrl || Core.validateDownloadUrl;
     const byUrl = new Map();
     const warnings = new Set();
     let primaryPage = null;
@@ -1377,13 +1434,13 @@
         warnings.add(String(warning).slice(0, 500));
       }
       for (const image of scan.images) {
-        const urlResult = Core.validateDownloadUrl(image && image.url);
+        const urlResult = validateMediaUrl(image && image.url);
         if (!urlResult.ok) {
           continue;
         }
         const normalizedUrl = urlResult.value;
         const previewResult = image && image.previewUrl
-          ? Core.validateDownloadUrl(image.previewUrl)
+          ? validateMediaUrl(image.previewUrl)
           : { ok: false };
         const normalizedPreviewUrl = previewResult.ok && previewResult.value !== normalizedUrl
           ? previewResult.value
@@ -1406,9 +1463,20 @@
           byUrl.set(normalizedUrl, {
             url: normalizedUrl,
             previewUrl,
+            filename: String(image.filename || "").slice(0, 500),
             alt: String(image.alt || "").slice(0, 500),
             width: Math.max(0, Number(image.width) || 0),
             height: Math.max(0, Number(image.height) || 0),
+            duration: Math.max(0, Number(image.duration) || 0),
+            mediaType: image && image.mediaType === "video" ? "video" : "image",
+            mimeType: String(image && image.mimeType || "").slice(0, 100),
+            sourceProvider: String(image && image.sourceProvider || "").slice(0, 50),
+            videoId: /^[A-Za-z0-9_-]{11}$/.test(String(image && image.videoId || ""))
+              ? String(image.videoId)
+              : "",
+            qualityLabel: String(image && image.qualityLabel || "").slice(0, 40),
+            hasAudio: typeof (image && image.hasAudio) === "boolean" ? image.hasAudio : null,
+            itag: Math.max(0, Math.round(Number(image && image.itag) || 0)),
             kinds: Array.from(image.kinds || [])
               .slice(0, 8)
               .map((kind) => String(kind).slice(0, 50))
@@ -1423,6 +1491,21 @@
         }
         current.width = Math.max(current.width || 0, image.width || 0);
         current.height = Math.max(current.height || 0, image.height || 0);
+        current.duration = Math.max(current.duration || 0, Number(image.duration) || 0);
+        current.mediaType = current.mediaType === "video" || image.mediaType === "video"
+          ? "video"
+          : "image";
+        current.mimeType = current.mimeType || String(image.mimeType || "").slice(0, 100);
+        current.filename = current.filename || String(image.filename || "").slice(0, 500);
+        current.sourceProvider = current.sourceProvider ||
+          String(image.sourceProvider || "").slice(0, 50);
+        current.videoId = current.videoId ||
+          (/^[A-Za-z0-9_-]{11}$/.test(String(image.videoId || "")) ? String(image.videoId) : "");
+        current.qualityLabel = current.qualityLabel || String(image.qualityLabel || "").slice(0, 40);
+        if (current.hasAudio === null && typeof image.hasAudio === "boolean") {
+          current.hasAudio = image.hasAudio;
+        }
+        current.itag = current.itag || Math.max(0, Math.round(Number(image.itag) || 0));
         current.alt = current.alt || String(image.alt || "").slice(0, 500);
         if (!current.previewUrl && normalizedPreviewUrl &&
           totalUrlLength + normalizedPreviewUrl.length <= Core.MAX_BATCH_TOTAL_URL_LENGTH) {
@@ -1433,7 +1516,7 @@
     }
 
     if (aggregateLimitReached) {
-      warnings.add(`Combined frame results were trimmed to the ${MAX_DISCOVERED_IMAGES.toLocaleString()}-image and 2 MB safety limits.`);
+      warnings.add(`Combined frame results were trimmed to the ${MAX_DISCOVERED_IMAGES.toLocaleString()}-item and 2 MB safety limits.`);
     }
     if (primaryPage && primaryPage.embeddedFrameCount > scannedChildFrames) {
       warnings.add("Some embedded frames could not be inspected with temporary page access.");
@@ -1468,6 +1551,7 @@
       photosOnly: elements["photos-only-input"].checked,
       minWidth: elements["min-width-input"].value,
       minHeight: elements["min-height-input"].value,
+      mediaType: elements["media-type-filter-select"].value,
       format: elements["format-filter-select"].value,
       orientation: elements["orientation-filter-select"].value,
       includeUnknown: elements["include-unknown-input"].checked
@@ -1480,6 +1564,7 @@
     elements["photos-only-input"].checked = normalized.photosOnly;
     elements["min-width-input"].value = String(normalized.minWidth);
     elements["min-height-input"].value = String(normalized.minHeight);
+    elements["media-type-filter-select"].value = normalized.mediaType;
     elements["format-filter-select"].value = normalized.format;
     elements["orientation-filter-select"].value = normalized.orientation;
     elements["include-unknown-input"].checked = normalized.includeUnknown;
@@ -1490,6 +1575,7 @@
     return Number(normalized.photosOnly) +
       Number(normalized.minWidth > 0) +
       Number(normalized.minHeight > 0) +
+      Number(normalized.mediaType !== "any") +
       Number(normalized.format !== "any") +
       Number(normalized.orientation !== "any") +
       Number(!normalized.includeUnknown);
@@ -1566,7 +1652,7 @@
 
   function friendlyFilename(image) {
     const index = Math.max(0, state.images.indexOf(image));
-    return state.filenamePreviewByUrl.get(image.url) || Core.filenameForImage(image.url, index);
+    return state.filenamePreviewByUrl.get(image.url) || baseFilenameForMedia(image, index);
   }
 
   function validPixelDimension(value) {
@@ -1593,16 +1679,34 @@
     return true;
   }
 
+  function formatMediaDuration(value) {
+    const seconds = Number(value);
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      return "";
+    }
+    const rounded = Math.round(seconds);
+    const hours = Math.floor(rounded / 3600);
+    const minutes = Math.floor((rounded % 3600) / 60);
+    const remainder = rounded % 60;
+    return hours
+      ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`
+      : `${minutes}:${String(remainder).padStart(2, "0")}`;
+  }
+
   function imageMetaText(image) {
-    let dimensions = "size unknown";
+    const video = mediaTypeFor(image) === "video";
+    let dimensions = video ? "resolution unknown" : "size unknown";
     if (image.width && image.height) {
       dimensions = `${Math.round(image.width).toLocaleString()} × ${Math.round(image.height).toLocaleString()}`;
-    } else if (image.dimensionStatus === "loading") {
+    } else if (!video && image.dimensionStatus === "loading") {
       dimensions = "checking full size…";
-    } else if (image.dimensionStatus === "unavailable") {
+    } else if (!video && image.dimensionStatus === "unavailable") {
       dimensions = "full size unavailable";
     }
-    return `${dimensions} · ${(image.kinds || ["Image"]).join(", ")}`;
+    const duration = video ? formatMediaDuration(image.duration) : "";
+    return [dimensions, duration, (image.kinds || [video ? "Video" : "Image"]).join(", ")]
+      .filter(Boolean)
+      .join(" · ");
   }
 
   function registerImageMeta(meta, image) {
@@ -1667,6 +1771,9 @@
   }
 
   function probeFullImageDimensions(image, generation) {
+    if (mediaTypeFor(image) === "video") {
+      return Promise.resolve(false);
+    }
     if (image.width && image.height) {
       return Promise.resolve(true);
     }
@@ -1694,7 +1801,7 @@
       return;
     }
     delete thumbnail.dataset.src;
-    const thumbnailIsFullImage = source === image.url;
+    const thumbnailIsFullImage = mediaTypeFor(image) === "image" && source === image.url;
     if (!image.width || !image.height) {
       if (thumbnailIsFullImage) {
         image.dimensionStatus = "loading";
@@ -1737,7 +1844,9 @@
     const ignoredCount = state.images.filter(isImageIgnored).length;
     const storedIgnoredCount = state.ignoredKeys.size;
     const availableCount = total - ignoredCount;
-    const selected = selectedDownloadableImages().length;
+    const selectedItems = selectedDownloadableImages();
+    const selected = selectedItems.length;
+    const selectedHasVideo = selectedItems.some((item) => mediaTypeFor(item) === "video");
     const visible = filteredImages();
     const hasFilter = Boolean(elements["filter-input"].value.trim()) ||
       (!state.showIgnored && (Filters.hasActiveSmartFilters(state.smartFilters) || state.hideDuplicates));
@@ -1748,10 +1857,10 @@
       ? `${visible.length.toLocaleString()} of ${viewTotal.toLocaleString()} ${state.showIgnored ? "ignored" : "available"} shown`
       : state.showIgnored
         ? storedIgnoredCount === ignoredCount
-          ? `${ignoredCount.toLocaleString()} ignored image${ignoredCount === 1 ? "" : "s"}`
+          ? `${ignoredCount.toLocaleString()} ignored item${ignoredCount === 1 ? "" : "s"}`
           : `${ignoredCount.toLocaleString()} on this page · ${storedIgnoredCount.toLocaleString()} site rules`
-        : `${availableCount.toLocaleString()} image${availableCount === 1 ? "" : "s"}`;
-    elements["ignored-button"].textContent = state.showIgnored ? "Show images" : `Ignored (${storedIgnoredCount.toLocaleString()})`;
+        : `${availableCount.toLocaleString()} media item${availableCount === 1 ? "" : "s"}`;
+    elements["ignored-button"].textContent = state.showIgnored ? "Show media" : `Ignored (${storedIgnoredCount.toLocaleString()})`;
     elements["ignored-button"].disabled = state.busy || (!storedIgnoredCount && !state.showIgnored);
     elements["ignored-button"].classList.toggle("active", state.showIgnored);
     elements["ignored-button"].setAttribute("aria-pressed", String(state.showIgnored));
@@ -1769,45 +1878,56 @@
       : `Download ${selected.toLocaleString()}`;
     elements["bulk-download-button"].disabled = state.busy || selected === 0 || !folder.ok || !template.ok;
     elements["bulk-download-button"].title = folder.ok && template.ok
-      ? "Download all selected images"
+      ? "Download all selected files"
       : folder.error || template.error || "Enter valid download settings";
     elements["archive-download-button"].hidden = state.showIgnored || selected === 0;
     elements["archive-download-button"].textContent = selected === 1
       ? "ZIP 1"
       : `ZIP ${selected.toLocaleString()}`;
-    elements["archive-download-button"].disabled = state.busy || selected === 0 || !folder.ok || !template.ok;
-    elements["archive-download-button"].title = folder.ok && template.ok
-      ? "Download all selected images as one ZIP archive"
+    elements["archive-download-button"].disabled = state.busy || selected === 0 ||
+      selectedHasVideo || !folder.ok || !template.ok;
+    elements["archive-download-button"].title = selectedHasVideo
+      ? "ZIP archives currently support image-only selections"
+      : folder.ok && template.ok
+      ? "Download all selected images as ZIP archives"
       : folder.error || template.error || "Enter valid download settings";
     elements["selected-label"].textContent = state.showIgnored
       ? `${ignoredCount.toLocaleString()} ignored here`
       : `${selected.toLocaleString()} selected`;
     elements["action-detail"].textContent = state.showIgnored
       ? storedIgnoredCount === ignoredCount
-        ? "Restore images to make them downloadable again"
+        ? "Restore media to make it downloadable again"
         : `${storedIgnoredCount.toLocaleString()} rules saved for this site`
       : selected
         ? template.ok
           ? `Ready for Downloads/${folder.ok ? folder.value : "…"}`
           : template.error
-        : "Choose images to download";
-    elements["download-button"].textContent = selected === 1 ? "Download image" : "Download selected";
+        : "Choose files to download";
+    elements["download-button"].textContent = selected === 1
+      ? `Download ${mediaTypeFor(selectedItems[0])}`
+      : "Download selected";
     elements["download-button"].disabled = state.busy || selected === 0 || !folder.ok || !template.ok;
-    elements["archive-footer-button"].disabled = state.busy || selected === 0 || !folder.ok || !template.ok;
+    elements["archive-footer-button"].disabled = state.busy || selected === 0 ||
+      selectedHasVideo || !folder.ok || !template.ok;
+    elements["archive-footer-button"].title = selectedHasVideo
+      ? "ZIP archives currently support image-only selections"
+      : "Download selected images as ZIP archives";
     elements["rescan-button"].disabled = state.busy;
     elements["live-capture-button"].disabled = state.busy && !state.liveCapture;
+    updateInstagramCollectionsButton();
     updateDuplicateUi();
     elements["image-list"].setAttribute(
       "aria-label",
-      state.showIgnored ? "Ignored images found on this page" : "Images found on this page"
+      state.showIgnored ? "Ignored media found on this page" : "Media found on this page"
     );
   }
 
   function makeImageRow(image) {
     const ignored = isImageIgnored(image);
+    const video = mediaTypeFor(image) === "video";
     const row = document.createElement("article");
     const duplicateInfo = state.duplicateByUrl.get(image.url);
-    row.className = `image-row${ignored ? " ignored" : ""}${duplicateInfo && !duplicateInfo.best ? " duplicate-copy" : ""}`;
+    row.className = `image-row${video ? " video" : ""}${ignored ? " ignored" : ""}${duplicateInfo && !duplicateInfo.best ? " duplicate-copy" : ""}`;
     row.setAttribute("role", "listitem");
 
     const checkbox = document.createElement("input");
@@ -1826,18 +1946,27 @@
 
     const thumbnailFrame = document.createElement("button");
     thumbnailFrame.type = "button";
-    thumbnailFrame.className = "thumbnail-frame";
-    thumbnailFrame.title = "Open image preview in a new tab";
+    thumbnailFrame.className = `thumbnail-frame${video ? " video" : ""}`;
+    thumbnailFrame.title = `Open ${video ? "video" : "image"} preview in a new tab`;
     thumbnailFrame.setAttribute("aria-label", `Preview ${friendlyFilename(image)} in a new tab`);
     thumbnailFrame.disabled = state.busy;
     thumbnailFrame.addEventListener("click", () => openImagePreview(image));
-    const thumbnail = document.createElement("img");
-    thumbnail.alt = "";
-    thumbnail.loading = "lazy";
-    thumbnail.referrerPolicy = "no-referrer";
-    thumbnail.dataset.src = image.previewUrl || image.url;
-    thumbnail.addEventListener("error", () => thumbnail.classList.add("broken"));
-    thumbnailFrame.appendChild(thumbnail);
+    let thumbnail = null;
+    const thumbnailUrl = video ? image.previewUrl : image.previewUrl || image.url;
+    if (thumbnailUrl) {
+      thumbnail = document.createElement("img");
+      thumbnail.alt = "";
+      thumbnail.loading = "lazy";
+      thumbnail.referrerPolicy = "no-referrer";
+      thumbnail.dataset.src = thumbnailUrl;
+      thumbnail.addEventListener("error", () => thumbnail.classList.add("broken"));
+      thumbnailFrame.appendChild(thumbnail);
+    } else {
+      const placeholder = document.createElement("span");
+      placeholder.className = "video-placeholder";
+      placeholder.textContent = "Video";
+      thumbnailFrame.appendChild(placeholder);
+    }
 
     const copy = document.createElement("div");
     copy.className = "image-copy";
@@ -1848,6 +1977,13 @@
     filenameLabel.textContent = initialFilename;
     name.title = image.alt || initialFilename;
     name.append(filenameLabel);
+    if (video) {
+      const mediaBadge = document.createElement("span");
+      mediaBadge.className = "media-type-badge";
+      mediaBadge.textContent = "Video";
+      mediaBadge.title = "Direct video file";
+      name.append(mediaBadge);
+    }
     let nameRecords = renderedNameNodes.get(image.url);
     if (!nameRecords) {
       nameRecords = new Set();
@@ -1887,17 +2023,19 @@
     registerImageMeta(meta, image);
     copy.append(name, url, meta);
 
-    thumbnail.anydownloadImage = image;
-    thumbnail.anydownloadGeneration = renderGeneration;
+    if (thumbnail) {
+      thumbnail.anydownloadImage = image;
+      thumbnail.anydownloadGeneration = renderGeneration;
+    }
     row.anydownloadImage = image;
     row.anydownloadThumbnail = thumbnail;
     row.anydownloadGeneration = renderGeneration;
-    if (thumbnailObserver) {
+    if (thumbnail && thumbnailObserver) {
       thumbnailObserver.observe(thumbnail);
-    } else {
+    } else if (thumbnail) {
       loadVisibleThumbnail(thumbnail);
     }
-    if (dimensionObserver) {
+    if (!video && dimensionObserver) {
       dimensionObserver.observe(row);
     }
 
@@ -1908,7 +2046,7 @@
       restore.type = "button";
       restore.className = "row-action-button restore";
       restore.textContent = "Restore";
-      restore.title = "Stop ignoring this image";
+      restore.title = "Stop ignoring this media item";
       restore.disabled = state.busy;
       restore.addEventListener("click", () => restoreImage(image));
       actions.appendChild(restore);
@@ -1918,7 +2056,7 @@
       ignore.type = "button";
       ignore.className = "row-action-button ignore";
       ignore.textContent = "Ignore";
-      ignore.title = "Hide this image on this website";
+      ignore.title = "Hide this media item on this website";
       ignore.disabled = state.busy;
       ignore.addEventListener("click", () => ignoreImage(image));
 
@@ -1926,7 +2064,7 @@
       download.type = "button";
       download.className = "row-action-button download";
       download.textContent = "Save";
-      download.title = "Download only this image";
+      download.title = `Download only this ${video ? "video" : "image"}`;
       download.disabled = state.busy;
       download.addEventListener("click", () => requestDownloads([image]));
       actions.append(ignore, download);
@@ -1993,6 +2131,7 @@
             visibleDimensionRows.set(image.url, { row, generation });
             if (
               !state.busy &&
+              mediaTypeFor(image) === "image" &&
               (!image.width || !image.height) &&
               image.dimensionStatus !== "unavailable" &&
               image.previewUrl &&
@@ -2031,16 +2170,16 @@
       const ignoredCount = state.images.filter(isImageIgnored).length;
       if (state.showIgnored) {
         empty.textContent = ignoredCount
-          ? "No ignored images match this filter."
+          ? "No ignored media match this filter."
           : state.ignoredKeys.size
-            ? `No ignored images are present on this page. Use Restore all to clear the ${state.ignoredKeys.size.toLocaleString()} stored site rule${state.ignoredKeys.size === 1 ? "" : "s"}.`
-            : "No ignored images are present on this page.";
+            ? `No ignored media are present on this page. Use Restore all to clear the ${state.ignoredKeys.size.toLocaleString()} stored site rule${state.ignoredKeys.size === 1 ? "" : "s"}.`
+            : "No ignored media are present on this page.";
       } else if (state.images.length && ignoredCount === state.images.length) {
-        empty.textContent = `All ${ignoredCount.toLocaleString()} images on this page are ignored. Open the Ignored view to restore any of them.`;
+        empty.textContent = `All ${ignoredCount.toLocaleString()} media items on this page are ignored. Open the Ignored view to restore any of them.`;
       } else {
         empty.textContent = state.images.length
-          ? "No images match this filter."
-          : "No downloadable images were found in the loaded page.";
+          ? "No media match this filter."
+          : "No downloadable images or direct video files were found in the loaded page.";
       }
       elements["image-list"].appendChild(empty);
       updateSummary();
@@ -2070,6 +2209,7 @@
       quiet: false,
       pinnedSource: false,
       live: false,
+      instagramCollections: false,
       tabId: null,
       sidebarFollow: false,
       sidebarGeneration: null
@@ -2083,6 +2223,7 @@
     const previousSelected = new Set(state.selected);
     const previousSiteKey = state.siteKey;
     const previousIgnoredKeys = new Set(state.ignoredKeys);
+    const previousInstagramCollectionMode = state.instagramCollectionMode;
     let scanTab = null;
     let succeeded = false;
     state.busy = true;
@@ -2095,6 +2236,7 @@
       state.ignoredKeys.clear();
       state.pageTitle = "";
       state.pageUrl = "";
+      state.instagramCollectionMode = false;
       clearDuplicateAnalysis();
       updateFilenameTemplateUi();
       elements["image-list"].replaceChildren();
@@ -2118,28 +2260,158 @@
       setIncognitoContext(tab.incognito);
       state.sourceWindowId = Number.isInteger(tab.windowId) ? tab.windowId : null;
 
-      const args = [{
+      const collectorArgs = [{
         includeBackgrounds: elements["backgrounds-input"].checked,
         maxImages: MAX_DISCOVERED_IMAGES,
         maxElements: MAX_SCANNED_ELEMENTS,
         maxDataUrlLength: 500000,
         maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH
       }];
-      let injectionResults;
+      let injectionResults = null;
       let usedFrameFallback = false;
-      try {
-        injectionResults = await browser.scripting.executeScript({
-          target: { tabId: tab.id, allFrames: true },
-          func: collectImagesFromPage,
-          args
-        });
-      } catch (_frameError) {
-        usedFrameFallback = true;
-        injectionResults = await browser.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: collectImagesFromPage,
-          args
-        });
+      let instagramWarning = "";
+      let instagramCollectionSucceeded = false;
+      let preservedInstagramFallback = false;
+      let youtubeWarning = "";
+      let youtubeCollectionSucceeded = false;
+      const instagramPage = Boolean(
+        Instagram &&
+        typeof Instagram.isInstagramUrl === "function" &&
+        typeof collectInstagramMediaFromPage === "function" &&
+        Instagram.isInstagramUrl(tab.url)
+      );
+
+      if (instagramPage) {
+        if (settings.instagramCollections) {
+          elements["page-label"].textContent = "Collecting Instagram stories and highlights…";
+        }
+        try {
+          const instagramResults = await browser.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: collectInstagramMediaFromPage,
+            args: [{
+              includeRelated: Boolean(settings.instagramCollections),
+              maxItems: MAX_DISCOVERED_IMAGES,
+              maxDocuments: 32,
+              maxDocumentBytes: 4000000,
+              maxTotalDocumentBytes: 32000000,
+              maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH
+            }]
+          });
+          const firstInstagramResult = instagramResults && instagramResults[0];
+          const instagramResult = firstInstagramResult && firstInstagramResult.result;
+          if (instagramResult && instagramResult.handled && Array.isArray(instagramResult.images)) {
+            injectionResults = instagramResults;
+            instagramCollectionSucceeded = Boolean(settings.instagramCollections);
+          } else if (settings.instagramCollections) {
+            const detail = firstInstagramResult && firstInstagramResult.error
+              ? ` (${firstInstagramResult.error})`
+              : "";
+            instagramWarning = `Instagram stories and highlights could not be collected; the existing results were kept.${detail}`;
+          }
+        } catch (error) {
+          instagramWarning = settings.instagramCollections
+            ? `Instagram stories and highlights could not be collected; the existing results were kept. (${error.message || error})`
+            : `Instagram-specific collection was unavailable; the visible page was scanned instead. (${error.message || error})`;
+        }
+      }
+
+      const youtubePage = Boolean(
+        !instagramPage &&
+        YouTube &&
+        typeof YouTube.isYouTubeUrl === "function" &&
+        typeof collectYouTubeMediaFromPage === "function" &&
+        YouTube.isYouTubeUrl(tab.url) &&
+        /(?:[?&]v=[A-Za-z0-9_-]{11}(?:[&#]|$)|\/(?:embed|live|shorts|v)\/[A-Za-z0-9_-]{11}(?:[/?#]|$)|youtu\.be\/[A-Za-z0-9_-]{11}(?:[/?#]|$))/i.test(String(tab.url || ""))
+      );
+
+      const youtubeVideoIdMatch = String(tab.url || "").match(
+        /(?:[?&]v=|\/(?:embed|live|shorts|v)\/|youtu\.be\/)([A-Za-z0-9_-]{11})(?:[/?&#]|$)/i
+      );
+      const youtubeVideoId = youtubeVideoIdMatch ? youtubeVideoIdMatch[1] : "";
+      const reusableYouTubeResults = Boolean(
+        youtubePage &&
+        settings.live &&
+        youtubeVideoId &&
+        previousImages.some((image) =>
+          image && image.sourceProvider === "youtube" && image.videoId === youtubeVideoId
+        )
+      );
+      if (reusableYouTubeResults) {
+        injectionResults = [{
+          frameId: 0,
+          result: {
+            handled: true,
+            pageUrl: tab.url,
+            pageTitle: state.pageTitle || String(tab.title || ""),
+            embeddedFrameCount: 0,
+            images: previousImages.filter((image) => image && image.sourceProvider === "youtube"),
+            warnings: state.scanWarnings
+          }
+        }];
+        youtubeCollectionSucceeded = true;
+      }
+
+      if (youtubePage && !injectionResults) {
+        elements["page-label"].textContent = "Resolving a direct YouTube video file…";
+        try {
+          const youtubeResults = await browser.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: collectYouTubeMediaFromPage,
+            args: [{
+              includeVideoOnly: false,
+              maxFormats: 24,
+              maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH,
+              maxResponses: 8,
+              maxScripts: 160,
+              maxScriptBytes: 4000000,
+              maxTotalScriptBytes: 12000000,
+              maxResponseBytes: 8000000,
+              requestTimeoutMs: 8000
+            }]
+          });
+          const youtubeResult = youtubeResults && youtubeResults[0] && youtubeResults[0].result;
+          if (youtubeResult && youtubeResult.handled && Array.isArray(youtubeResult.images)) {
+            injectionResults = youtubeResults;
+            youtubeCollectionSucceeded = youtubeResult.images.some((image) =>
+              image && image.mediaType === "video"
+            );
+          }
+        } catch (error) {
+          youtubeWarning = `YouTube-specific collection was unavailable; the visible page was scanned instead. (${error.message || error})`;
+        }
+      }
+
+      if (settings.instagramCollections && !injectionResults) {
+        const previousMatchesTab = previousSiteKey && Core.siteKeyForUrl(tab.url) === previousSiteKey;
+        injectionResults = [{
+          frameId: 0,
+          result: {
+            pageUrl: tab.url,
+            pageTitle: previousMatchesTab ? state.pageTitle : String(tab.title || ""),
+            embeddedFrameCount: 0,
+            images: previousMatchesTab ? previousImages : [],
+            warnings: []
+          }
+        }];
+        preservedInstagramFallback = previousMatchesTab;
+      }
+
+      if (!injectionResults) {
+        try {
+          injectionResults = await browser.scripting.executeScript({
+            target: { tabId: tab.id, allFrames: true },
+            func: collectImagesFromPage,
+            args: collectorArgs
+          });
+        } catch (_frameError) {
+          usedFrameFallback = true;
+          injectionResults = await browser.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: collectImagesFromPage,
+            args: collectorArgs
+          });
+        }
       }
       if (!sidebarScanStillCurrent(settings)) {
         state.siteKey = "";
@@ -2154,6 +2426,12 @@
       if (usedFrameFallback) {
         merged.warnings.push("Some embedded frames could not be inspected; the main page was scanned.");
       }
+      if (instagramWarning) {
+        merged.warnings.push(instagramWarning);
+      }
+      if (youtubeWarning) {
+        merged.warnings.push(youtubeWarning);
+      }
 
       const nextSiteKey = Core.siteKeyForUrl(merged.page.pageUrl);
       const preserveThisPage = settings.preserveSelection && nextSiteKey === previousSiteKey;
@@ -2162,7 +2440,7 @@
         await loadIgnoredKeys();
       } catch (error) {
         state.ignoredKeys = preserveThisPage ? previousIgnoredKeys : new Set();
-        merged.warnings.push(`Firefox could not load ignored-image rules: ${error.message || error}`);
+        merged.warnings.push(`Firefox could not load ignored-media rules: ${error.message || error}`);
       }
       if (!sidebarScanStillCurrent(settings)) {
         state.siteKey = "";
@@ -2178,6 +2456,16 @@
           }
           image.width = image.width || previous.width || 0;
           image.height = image.height || previous.height || 0;
+          image.duration = image.duration || previous.duration || 0;
+          image.mimeType = image.mimeType || previous.mimeType || "";
+          image.filename = image.filename || previous.filename || "";
+          image.sourceProvider = image.sourceProvider || previous.sourceProvider || "";
+          image.videoId = image.videoId || previous.videoId || "";
+          image.qualityLabel = image.qualityLabel || previous.qualityLabel || "";
+          if (image.hasAudio === null || image.hasAudio === undefined) {
+            image.hasAudio = previous.hasAudio;
+          }
+          image.itag = image.itag || previous.itag || 0;
           image.previewUrl = image.previewUrl || previous.previewUrl || "";
           if ((!image.width || !image.height) && previous.dimensionStatus) {
             image.dimensionStatus = previous.dimensionStatus;
@@ -2193,7 +2481,7 @@
           maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH
         });
         if (accumulated.trimmed) {
-          merged.warnings.push("Live capture reached the 1,500-image or 2 MB safety limit.");
+          merged.warnings.push("Live capture reached the 1,500-item or 2 MB safety limit.");
         }
         merged.images = accumulated.images;
       }
@@ -2209,6 +2497,10 @@
       state.scanWarnings = merged.warnings;
       state.pageTitle = merged.page.pageTitle || "";
       state.pageUrl = merged.page.pageUrl || "";
+      state.instagramCollectionMode = Boolean(
+        instagramCollectionSucceeded ||
+        (settings.instagramCollections && preservedInstagramFallback && previousInstagramCollectionMode)
+      );
       refreshDuplicateAnalysis();
       const hostname = hostFromUrl(merged.page.pageUrl);
       elements["page-label"].textContent = merged.page.pageTitle || hostname;
@@ -2224,13 +2516,23 @@
         : 0;
       if (settings.live && addedCount) {
         setNotice(
-          `Live capture added ${addedCount.toLocaleString()} new image${addedCount === 1 ? "" : "s"}. Keep scrolling to load more.`,
+          `Live capture added ${addedCount.toLocaleString()} new media item${addedCount === 1 ? "" : "s"}. Keep scrolling to load more.`,
+          "success"
+        );
+      } else if (instagramCollectionSucceeded && merged.images.length && !merged.warnings.length) {
+        setNotice(
+          `Collected ${merged.images.length.toLocaleString()} Instagram media item${merged.images.length === 1 ? "" : "s"} from the current page and available story/highlight collections.`,
+          "success"
+        );
+      } else if (youtubeCollectionSucceeded && !merged.warnings.length) {
+        setNotice(
+          `Found ${merged.images.length.toLocaleString()} complete YouTube video file${merged.images.length === 1 ? "" : "s"} with audio.`,
           "success"
         );
       } else if (merged.warnings.length) {
         setNotice(merged.warnings.join(" "));
       } else if (!merged.images.length) {
-        setNotice("Try scrolling to load lazy images, then scan again.");
+        setNotice("Try scrolling to load lazy media, then scan again.");
       }
       succeeded = true;
     } catch (error) {
@@ -2245,6 +2547,7 @@
         state.sourceWindowId = null;
         state.pageTitle = "";
         state.pageUrl = "";
+        state.instagramCollectionMode = false;
         clearDuplicateAnalysis();
         elements["page-label"].textContent = "This page cannot be scanned";
       }
@@ -2279,7 +2582,7 @@
     );
     if (state.busy || !images.length) {
       if (!state.busy) {
-        setNotice("No non-ignored images are selected.", "error");
+        setNotice("No downloadable media files are selected.", "error");
       }
       return;
     }
@@ -2294,11 +2597,36 @@
       return;
     }
 
+    let youtubePermissionPromise = Promise.resolve(true);
+    if (images.some((image) => image && image.sourceProvider === "youtube")) {
+      if (!browser.permissions || typeof browser.permissions.request !== "function") {
+        setNotice("This Firefox build cannot grant the YouTube access needed to refresh expiring video links.", "error");
+        return;
+      }
+      try {
+        // Keep this call in the direct click stack. The durable queue stores a
+        // public video ID and refreshes the expiring file URL on start/retry.
+        youtubePermissionPromise = browser.permissions.request({
+          origins: ["https://www.youtube.com/*"]
+        });
+      } catch (error) {
+        setNotice(`Firefox could not request YouTube access. (${error.message || error})`, "error");
+        return;
+      }
+    }
+
     state.busy = true;
-    setNotice(`Adding ${images.length.toLocaleString()} download${images.length === 1 ? "" : "s"} to the queue…`);
+    setNotice(
+      images.some((image) => image && image.sourceProvider === "youtube")
+        ? "Allow access to YouTube so expiring video links can be refreshed when the queue starts or retries."
+        : `Adding ${images.length.toLocaleString()} download${images.length === 1 ? "" : "s"} to the queue…`
+    );
     renderImages();
 
     try {
+      if (!await youtubePermissionPromise) {
+        throw new Error("YouTube access was not granted, so no video was queued.");
+      }
       const storedSettings = {
         askForSingle: elements["ask-single-input"].checked,
         includeBackgrounds: elements["backgrounds-input"].checked,
@@ -2321,7 +2649,7 @@
         (!state.hideDuplicates || !state.duplicateExtraUrls.has(image.url))
       );
       if (!images.length) {
-        setNotice("No non-ignored images are selected.", "error");
+        setNotice("No downloadable media files are selected.", "error");
         return;
       }
       state.hasStoredFolder = true;
@@ -2391,6 +2719,7 @@
         }
       }
       images = images.filter((image) =>
+        mediaTypeFor(image) === "image" &&
         !isImageIgnored(image) &&
         Filters.matchesSmartFilters(image, state.smartFilters) &&
         (!state.hideDuplicates || !state.duplicateExtraUrls.has(image.url))
@@ -2440,13 +2769,18 @@
   }
 
   function downloadSelectedArchive() {
-    const images = selectedDownloadableImages();
-    if (state.busy || !images.length) {
+    const selected = selectedDownloadableImages();
+    if (state.busy || !selected.length) {
       if (!state.busy) {
         setNotice("No non-ignored images are selected.", "error");
       }
       return undefined;
     }
+    if (selected.some((item) => mediaTypeFor(item) === "video")) {
+      setNotice("ZIP archives currently support images only. Clear the selected videos and try again.", "error");
+      return undefined;
+    }
+    const images = selected;
     if (images.length > 2000) {
       setNotice("Choose at most 2,000 images for one ZIP archive.", "error");
       return undefined;
@@ -2501,8 +2835,30 @@
     button.title = state.liveCapture
       ? "Stop watching this gallery"
       : responsiveSurface
-        ? "Watch this gallery for images loaded while you scroll"
-        : "Watch this gallery while the toolbar popup remains open";
+        ? "Watch this page for media loaded while you scroll"
+        : "Watch this page for media while the toolbar popup remains open";
+  }
+
+  function updateInstagramCollectionsButton() {
+    const button = elements["instagram-collections-button"];
+    if (!button) {
+      return;
+    }
+    let instagramPage = false;
+    try {
+      instagramPage = Boolean(
+        Instagram &&
+        typeof Instagram.canCollectRelated === "function" &&
+        Instagram.canCollectRelated(state.pageUrl)
+      );
+    } catch (_error) {
+      instagramPage = false;
+    }
+    button.hidden = !instagramPage;
+    button.disabled = state.busy;
+    button.textContent = state.instagramCollectionMode
+      ? "Refresh stories & highlights"
+      : "Stories & highlights";
   }
 
   function stopLiveCapture(message, type) {
@@ -2606,8 +2962,8 @@
     updateLiveCaptureButton();
     setNotice(
       responsiveSurface
-        ? "Live capture is on. Keep scrolling the gallery; new images will be added automatically."
-        : "Live capture is on while this toolbar popup stays open. Use Open window or the Sidebar only if you need to interact with the page while capturing.",
+        ? "Live capture is on. Keep scrolling; new images and direct videos will be added automatically."
+        : "Live capture is on while this toolbar popup stays open. Use Open window or the Sidebar if you need to interact with the page while capturing.",
       "success"
     );
 
@@ -2652,6 +3008,18 @@
       return;
     }
     await scanPage();
+  }
+
+  async function collectInstagramCollections() {
+    if (!window.confirm(
+      "Collect the profile owner's active story and exposed highlights? Instagram may record story access as a view."
+    )) {
+      return;
+    }
+    if (state.liveCapture) {
+      stopLiveCapture();
+    }
+    await scanPage({ instagramCollections: true, preserveSelection: true });
   }
 
   function cancelScheduledSidebarFollow() {
@@ -2985,6 +3353,7 @@
       elements["sidebar-follow-button"].addEventListener("click", requestSidebarFollowPermission);
     }
     elements["rescan-button"].addEventListener("click", rescanFromButton);
+    elements["instagram-collections-button"].addEventListener("click", collectInstagramCollections);
     elements["filter-input"].addEventListener("input", renderImages);
     elements["folder-input"].addEventListener("input", updateSummary);
     elements["filename-template-button"].addEventListener("click", () => {
@@ -3027,6 +3396,7 @@
     for (const id of [
       "min-width-input",
       "min-height-input",
+      "media-type-filter-select",
       "format-filter-select",
       "orientation-filter-select",
       "include-unknown-input"

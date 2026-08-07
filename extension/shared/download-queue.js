@@ -174,29 +174,29 @@
 
   function validateUrl(value) {
     if (typeof value !== "string" || !value) {
-      return { ok: false, error: "Missing image URL." };
+      return { ok: false, error: "Missing media URL." };
     }
     if (value.startsWith("data:")) {
-      if (!/^data:image\/[a-z0-9.+-]+[;,]/i.test(value)) {
-        return { ok: false, error: "Only image data URLs are allowed." };
+      if (!/^data:(?:image|video)\/[a-z0-9.+-]+[;,]/i.test(value)) {
+        return { ok: false, error: "Only image and video data URLs are allowed." };
       }
       if (value.length > MAX_DATA_URL_LENGTH) {
-        return { ok: false, error: "Embedded image URL is too long." };
+        return { ok: false, error: "Embedded media URL is too long." };
       }
       return { ok: true, value };
     }
     if (value.length > MAX_HTTP_URL_LENGTH) {
-      return { ok: false, error: "Image URL is too long." };
+      return { ok: false, error: "Media URL is too long." };
     }
     try {
       const parsed = new URL(value);
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        return { ok: false, error: "Unsupported image URL scheme." };
+        return { ok: false, error: "Unsupported media URL scheme." };
       }
       parsed.hash = "";
       return { ok: true, value: parsed.href };
     } catch (_error) {
-      return { ok: false, error: "Invalid image URL." };
+      return { ok: false, error: "Invalid media URL." };
     }
   }
 
@@ -686,6 +686,7 @@
           url: task.url,
           filename: task.filename,
           folder: job.folder,
+          source: job.source,
           saveAs: job.saveAs,
           attempt: task.attempt
         });

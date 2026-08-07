@@ -10,6 +10,6 @@
     window.location.replace(managerUrl);
   } catch (error) {
     console.error("Unable to open the AnyDownload sidebar", error);
-    status.textContent = "The image manager could not open automatically. Use the link below to try again.";
+    status.textContent = "The media manager could not open automatically. Use the link below to try again.";
   }
 })();

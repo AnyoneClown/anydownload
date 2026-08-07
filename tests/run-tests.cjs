@@ -29,7 +29,7 @@ assert.equal(
 );
 const popupRelativePath = manifest.action.default_popup;
 const popupPath = assertLocalResource(root, popupRelativePath, "Manifest popup");
-assert.equal(manifest.sidebar_action && manifest.sidebar_action.default_title, "AnyDownload images");
+assert.equal(manifest.sidebar_action && manifest.sidebar_action.default_title, "AnyDownload media");
 assert.equal(manifest.sidebar_action && manifest.sidebar_action.default_panel, "sidebar/sidebar.html");
 assert.equal(manifest.sidebar_action && manifest.sidebar_action.open_at_install, false);
 const sidebarPath = assertLocalResource(
@@ -59,7 +59,9 @@ const historyCss = fs.readFileSync(path.join(root, "history/history.css"), "utf8
 const historyJs = fs.readFileSync(path.join(root, "history/history.js"), "utf8");
 
 assert.equal(manifest.manifest_version, 3);
-assert.equal(manifest.version, "1.7.0");
+assert.equal(manifest.name, "AnyDownload — Page Media Downloader");
+assert.equal(manifest.version, "1.9.0");
+assert.equal(manifest.action.default_title, "Download page media");
 assert.equal(Core.MAX_BATCH_TOTAL_URL_LENGTH, 2000000);
 assert.deepEqual(manifest.permissions.sort(), ["activeTab", "downloads", "menus", "scripting", "storage"]);
 assert.deepEqual(manifest.optional_host_permissions, ["<all_urls>"]);
@@ -68,6 +70,8 @@ assert.deepEqual(
   [
     "shared/core.js",
     "shared/collector.js",
+    "shared/instagram.js",
+    "shared/youtube.js",
     "shared/archive.js",
     "shared/templates.js",
     "shared/download-queue.js",
@@ -75,6 +79,11 @@ assert.deepEqual(
   ]
 );
 assert.match(manifest.content_security_policy.extension_pages, /connect-src http: https: data: blob:/);
+assert.match(
+  manifest.content_security_policy.extension_pages,
+  /media-src 'self' http: https: data: blob:/,
+  "Extension pages must be allowed to preview direct HTTP, data, and blob video sources"
+);
 assert.deepEqual(
   manifest.browser_specific_settings.gecko.data_collection_permissions.required,
   ["none"]
@@ -90,6 +99,8 @@ assert.deepEqual(
   [
     "../shared/core.js",
     "../shared/collector.js",
+    "../shared/instagram.js",
+    "../shared/youtube.js",
     "../shared/filters.js",
     "../shared/templates.js",
     "../shared/duplicates.js",
@@ -136,7 +147,7 @@ assert.match(popupHtml, /id="duplicates-button"[^>]*aria-controls="duplicate-pan
 assert.match(popupHtml, /id="duplicate-panel"[^>]*hidden/);
 assert.match(popupHtml, /id="deduplicate-button"[^>]*disabled>Keep best selected<\/button>/);
 assert.match(popupHtml, /id="hide-duplicates-input"[^>]*type="checkbox"/);
-assert.match(popupHtml, />Save As for one image<\/span>/);
+assert.match(popupHtml, />Save As for one file<\/span>/);
 assert.match(popupHtml, />CSS backgrounds<\/span>/);
 assert.match(popupCss, /\.folder-panel\s*\{[^}]*padding:\s*7px 12px 8px;/s);
 assert.match(popupCss, /\.folder-toolbar\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;/s);
@@ -144,18 +155,24 @@ assert.match(popupCss, /\.folder-options\s*\{[^}]*display:\s*flex;[^}]*flex:\s*1
 assert.match(popupHtml, /id="ignored-button"[^>]*aria-pressed="false"/);
 assert.match(popupHtml, /id="clear-ignored-button"/);
 assert.match(popupHtml, /src="\.\.\/shared\/collector\.js"/);
+assert.match(popupHtml, /src="\.\.\/shared\/youtube\.js"/);
 assert.match(popupHtml, /src="\.\.\/shared\/filters\.js"/);
-assert.match(popupHtml, /id="bulk-download-button"[^>]*title="Download all selected images"[^>]*hidden[^>]*disabled/);
-assert.match(popupHtml, /id="archive-download-button"[^>]*title="Download selected images as one ZIP archive"[^>]*hidden[^>]*disabled/);
+assert.match(popupHtml, /id="bulk-download-button"[^>]*title="Download all selected files"[^>]*hidden[^>]*disabled/);
+assert.match(popupHtml, /id="archive-download-button"[^>]*title="Download selected images as ZIP archives"[^>]*hidden[^>]*disabled/);
 assert.match(popupHtml, /id="archive-footer-button"[^>]*disabled>Download ZIP<\/button>/);
 assert.match(popupHtml, /id="sidebar-follow-button"[^>]*hidden>Enable auto-follow<\/button>/);
 assert.match(popupHtml, /id="sidebar-button"[^>]*title="Open Firefox Sidebar"[^>]*aria-label="Open Firefox Sidebar"/);
 assert.match(popupHtml, /id="photos-only-input"[^>]*type="checkbox"/);
 assert.match(popupHtml, /id="live-capture-button"[^>]*aria-pressed="false"/);
+assert.match(popupHtml, /id="instagram-collections-button"[^>]*hidden>Stories &amp; highlights<\/button>/);
 assert.match(popupHtml, /id="smart-filter-panel"[^>]*hidden/);
 assert.match(popupHtml, /id="smart-filters-button"[^>]*aria-expanded="false"[^>]*aria-controls="smart-filter-panel"/);
 assert.match(popupHtml, /id="min-width-input"[^>]*type="number"[^>]*min="0"/);
 assert.match(popupHtml, /id="min-height-input"[^>]*type="number"[^>]*min="0"/);
+assert.match(popupHtml, /id="media-type-filter-select"/);
+for (const format of ["mp4", "webm", "ogv", "mov", "m4v", "mkv"]) {
+  assert.match(popupHtml, new RegExp(`<option value=["']${format}["']`));
+}
 assert.match(popupHtml, /id="format-filter-select"/);
 assert.match(popupHtml, /id="orientation-filter-select"/);
 assert.match(popupHtml, /id="include-unknown-input"[^>]*type="checkbox"[^>]*checked/);
@@ -234,8 +251,25 @@ assert.match(popupJs, /items:\s*downloadItems/);
 assert.match(popupJs, /const archiveItems = renderedDownloadItems\(images, templateValue\)/);
 assert.match(popupJs, /items:\s*archiveItems/);
 assert.match(popupJs, /collectLiveGalleryFingerprint/);
+assert.match(popupJs, /collectInstagramMediaFromPage/);
+assert.match(popupJs, /includeRelated:\s*Boolean\(settings\.instagramCollections\)/);
+assert.match(popupJs, /Instagram\.canCollectRelated\(state\.pageUrl\)/);
+assert.match(popupJs, /Instagram stories and highlights could not be collected; the existing results were kept/);
+assert.match(popupJs, /scanPage\(\{ instagramCollections: true, preserveSelection: true \}\)/);
+assert.match(popupJs, /const YouTube = globalThis\.AnyDownloadYouTube/);
+assert.match(popupJs, /const collectYouTubeMediaFromPage = globalThis\.AnyDownloadYouTubeCollector/);
+assert.match(popupJs, /YouTube\.isYouTubeUrl\(tab\.url\)/);
+assert.match(popupJs, /func:\s*collectYouTubeMediaFromPage/);
+assert.match(popupJs, /includeVideoOnly:\s*false/);
+assert.match(popupJs, /youtubeCollectionSucceeded/);
 assert.match(popupJs, /scanPage\(\{[\s\S]*preserveSelection:\s*true,[\s\S]*live:\s*true[\s\S]*\}\)/);
-assert.match(backgroundJs, /contexts:\s*\["image"\]/);
+assert.match(backgroundJs, /contexts:\s*\["image",\s*"video"\]/);
+assert.match(backgroundJs, /const Instagram = globalThis\.ImageDownloaderInstagram/);
+assert.match(backgroundJs, /func:\s*collectInstagramMediaFromPage/);
+assert.match(backgroundJs, /const YouTube = globalThis\.AnyDownloadYouTube/);
+assert.match(backgroundJs, /const collectYouTubeMediaFromPage = globalThis\.AnyDownloadYouTubeCollector/);
+assert.match(backgroundJs, /isYouTubeVideoPageUrl\(tab\.url\)/);
+assert.match(backgroundJs, /func:\s*collectYouTubeMediaFromPage/);
 assert.match(backgroundJs, /browser\.menus\.onClicked\.addListener/);
 assert.match(backgroundJs, /targetElementId/);
 assert.doesNotMatch(backgroundJs, /browser\.action\.onClicked\.addListener/);
@@ -275,7 +309,10 @@ assert.match(archivePageJs, /downloadsApi\.search\(\{ id: downloadId \}\)/);
 assert.match(archivePageJs, /archivePartFilename/);
 assert.match(archivePageCss, /@media\s*\(max-width:\s*480px\)/);
 assert.match(previewHtml, /id="image-button"[^>]*aria-pressed="false"/);
+assert.match(previewHtml, /<video id="preview-video"[^>]*controls[^>]*preload="metadata"[^>]*playsinline[^>]*hidden><\/video>/);
 assert.match(previewJs, /browser\.storage\.session/);
+assert.match(previewJs, /payload\.mediaType/);
+assert.match(previewJs, /elements\.video\.src = urlResult\.value/);
 
 assert.match(sidebarHtml, /^<!doctype html>/i, "Sidebar must use standards mode");
 assert.match(sidebarHtml, /id="sidebar-status"[^>]*role="status"[^>]*aria-live="polite"/);
@@ -346,6 +383,7 @@ for (const relativePath of [
   "shared/download-queue.js",
   "shared/duplicates.js",
   "shared/templates.js",
+  "shared/youtube.js",
   "sidebar/sidebar.html",
   "sidebar/sidebar.js"
 ]) {
@@ -373,6 +411,16 @@ assert.equal(
 );
 assert.equal(Core.filenameForImage("data:image/png;base64,AA==", 2), "image-0003.png");
 assert.equal(Core.filenameForImage("https://example.com/payload.exe", 3), "payload_exe");
+assert.equal(
+  Core.filenameForMedia("https://example.com/clips/trailer.MP4?token=abc", 0, "video"),
+  "trailer.MP4"
+);
+assert.equal(
+  Core.filenameForMedia("https://example.com/render?format=video/webm", 1, "video"),
+  "render.webm"
+);
+assert.equal(Core.filenameForMedia("data:video/mp4;base64,AA==", 2, "video"), "video-0003.mp4");
+assert.equal(Core.filenameForMedia("https://example.com/payload.exe", 3, "video"), "payload_exe");
 assert.equal(Core.sanitizeFilename("../CON?.jpg", "image"), "_CON_.jpg");
 const longWebpName = `${"a".repeat(96)}.webp`;
 const preservedLongWebp = Core.filenameForImage(
@@ -401,6 +449,12 @@ assert.equal(Core.uniquifyFilename("PHOTO.JPG", used), "PHOTO-3.JPG");
 assert.equal(Core.validateDownloadUrl("javascript:alert(1)").ok, false);
 assert.equal(Core.validateDownloadUrl("data:text/html,hello").ok, false);
 assert.equal(Core.validateDownloadUrl("data:image/png;base64,AA==").ok, true);
+assert.equal(Core.validateMediaUrl("data:video/mp4;base64,AA==").ok, true);
+assert.equal(Core.validateMediaUrl("data:application/mp4;base64,AA==").ok, false);
+assert.equal(
+  Core.validateMediaUrl("https://media.example/video.mp4?token=abc#preview").value,
+  "https://media.example/video.mp4?token=abc"
+);
 assert.equal(Core.validateDownloadUrl("blob:https://example.com/id").ok, false);
 assert.equal(Core.buildDownloadPath("Site/image", "photo.jpg"), "Site/image/photo.jpg");
 

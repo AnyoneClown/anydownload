@@ -15,6 +15,16 @@
     const found = new Map();
     const warnings = [];
     const IMAGE_EXTENSION = /\.(?:apng|avif|bmp|gif|ico|jpe?g|jxl|png|svg|tiff?|webp)$/i;
+    const VIDEO_EXTENSION = /\.(?:m4v|mkv|mov|mp4|ogg|ogv|webm)$/i;
+    const VIDEO_MANIFEST_EXTENSION = /\.(?:m3u8|mpd)$/i;
+    const LAZY_VIDEO_SOURCE_ATTRIBUTES = [
+      "data-src",
+      "data-lazy-src",
+      "data-video-src",
+      "data-video-url",
+      "data-url"
+    ];
+    const LAZY_VIDEO_POSTER_ATTRIBUTES = ["data-poster", "data-poster-src"];
     const FULL_IMAGE_ATTRIBUTES = [
       "data-full",
       "data-full-src",
@@ -58,41 +68,69 @@
     let truncated = false;
     let payloadLimitReached = false;
     let skippedLargeDataUrls = 0;
+    let skippedLargeVideoDataUrls = 0;
     let skippedBlobUrls = 0;
+    let skippedBlobVideoUrls = 0;
     let skippedLongUrls = 0;
+    let skippedLongVideoUrls = 0;
+    const skippedVideoManifestUrls = new Set();
     let totalUrlLength = 0;
+    let sawVideoMedia = false;
 
     function safeText(value, maxLength) {
       return String(value == null ? "" : value).slice(0, maxLength);
     }
 
-    function normalizeUrl(rawValue) {
+    function normalizeUrl(rawValue, mediaType, recordSkip) {
       if (typeof rawValue !== "string") {
         return "";
       }
+      const expectedMediaType = mediaType === "video" ? "video" : "image";
+      const shouldRecordSkip = recordSkip !== false;
       const value = rawValue.trim();
       if (!value) {
         return "";
       }
       if (/^data:/i.test(value)) {
-        if (!/^data:image\/[a-z0-9.+-]+[;,]/i.test(value)) {
+        const dataPattern = expectedMediaType === "video"
+          ? /^data:video\/[a-z0-9.+-]+[;,]/i
+          : /^data:image\/[a-z0-9.+-]+[;,]/i;
+        if (!dataPattern.test(value)) {
           return "";
         }
         if (value.length > settings.maxDataUrlLength) {
-          skippedLargeDataUrls += 1;
+          if (shouldRecordSkip) {
+            if (expectedMediaType === "video") {
+              skippedLargeVideoDataUrls += 1;
+            } else {
+              skippedLargeDataUrls += 1;
+            }
+          }
           return "";
         }
         return `data:${value.slice(5)}`;
       }
       if (value.length > 16384) {
-        skippedLongUrls += 1;
+        if (shouldRecordSkip) {
+          if (expectedMediaType === "video") {
+            skippedLongVideoUrls += 1;
+          } else {
+            skippedLongUrls += 1;
+          }
+        }
         return "";
       }
 
       try {
         const parsed = new URL(value, document.baseURI);
         if (parsed.protocol === "blob:") {
-          skippedBlobUrls += 1;
+          if (shouldRecordSkip) {
+            if (expectedMediaType === "video") {
+              skippedBlobVideoUrls += 1;
+            } else {
+              skippedBlobUrls += 1;
+            }
+          }
           return "";
         }
         if (!["http:", "https:"].includes(parsed.protocol)) {
@@ -103,6 +141,96 @@
       } catch (_error) {
         return "";
       }
+    }
+
+    function isVideoManifestMimeType(rawValue) {
+      const mimeType = normalizedMimeType(rawValue);
+      return /(?:mpegurl|dash\+xml)$/.test(mimeType);
+    }
+
+    function normalizeVideoUrl(rawValue, recordSkip, declaredType) {
+      const url = normalizeUrl(rawValue, "video", recordSkip);
+      if (!url || /^data:video\//i.test(url)) {
+        return url;
+      }
+      try {
+        const parsed = new URL(url);
+        const format = (parsed.searchParams.get("format") || parsed.searchParams.get("fm") || "")
+          .toLowerCase()
+          .replace(/^(?:application|video)\//, "");
+        if (
+          VIDEO_MANIFEST_EXTENSION.test(parsed.pathname) ||
+          ["dash+xml", "dash", "hls", "m3u8", "mpd", "mpegurl", "vnd.apple.mpegurl", "x-mpegurl"]
+            .includes(format) ||
+          isVideoManifestMimeType(declaredType)
+        ) {
+          if (recordSkip !== false) {
+            skippedVideoManifestUrls.add(url);
+          }
+          return "";
+        }
+      } catch (_error) {
+        return "";
+      }
+      return url;
+    }
+
+    function normalizedMimeType(rawValue) {
+      const mimeType = safeText(rawValue, 200).split(";", 1)[0].trim().toLowerCase();
+      return /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(mimeType)
+        ? mimeType
+        : "";
+    }
+
+    function isVideoMimeType(rawValue) {
+      const mimeType = normalizedMimeType(rawValue);
+      return /^video\//.test(mimeType) ||
+        mimeType === "application/mp4" ||
+        mimeType === "application/ogg" ||
+        mimeType === "application/webm" ||
+        mimeType === "application/x-matroska";
+    }
+
+    function videoMimeType(rawUrl, declaredType) {
+      const normalizedDeclaredType = normalizedMimeType(declaredType);
+      if (isVideoMimeType(normalizedDeclaredType)) {
+        return normalizedDeclaredType;
+      }
+
+      const dataMatch = String(rawUrl || "").match(/^data:(video\/[a-z0-9.+-]+)[;,]/i);
+      if (dataMatch) {
+        return dataMatch[1].toLowerCase();
+      }
+
+      try {
+        const pathname = new URL(rawUrl).pathname.toLowerCase();
+        if (/\.mp4$/i.test(pathname)) {
+          return "video/mp4";
+        }
+        if (/\.webm$/i.test(pathname)) {
+          return "video/webm";
+        }
+        if (/\.(?:ogg|ogv)$/i.test(pathname)) {
+          return "video/ogg";
+        }
+        if (/\.mov$/i.test(pathname)) {
+          return "video/quicktime";
+        }
+        if (/\.m4v$/i.test(pathname)) {
+          return "video/x-m4v";
+        }
+        if (/\.mkv$/i.test(pathname)) {
+          return "video/x-matroska";
+        }
+      } catch (_error) {
+        return "";
+      }
+      return "";
+    }
+
+    function normalizedDuration(rawValue) {
+      const duration = Number(rawValue);
+      return Number.isFinite(duration) && duration > 0 ? duration : 0;
     }
 
     function parseDimensionHint(value) {
@@ -141,16 +269,19 @@
 
     function addImage(rawUrl, details) {
       details = details || {};
-      const url = normalizeUrl(rawUrl);
+      const url = normalizeUrl(rawUrl, "image");
       if (!url) {
         return;
       }
-      const normalizedPreviewUrl = normalizeUrl(details.previewUrl);
+      const normalizedPreviewUrl = normalizeUrl(details.previewUrl, "image");
       const previewUrl = normalizedPreviewUrl && normalizedPreviewUrl !== url
         ? normalizedPreviewUrl
         : "";
       const existing = found.get(url);
       if (existing) {
+        if (existing.mediaType !== "image") {
+          return;
+        }
         if (details.kind && existing.kinds.length < 8 && !existing.kinds.includes(details.kind)) {
           existing.kinds.push(details.kind);
         }
@@ -186,8 +317,78 @@
         alt: safeText(details.alt, 500),
         width: Math.max(0, Number(details.width) || 0),
         height: Math.max(0, Number(details.height) || 0),
-        kinds: [safeText(details.kind || "Page image", 50)]
+        kinds: [safeText(details.kind || "Page image", 50)],
+        mediaType: "image"
       });
+    }
+
+    function addVideo(rawUrl, details) {
+      details = details || {};
+      sawVideoMedia = true;
+      const url = normalizeVideoUrl(rawUrl, true, details.mimeType);
+      if (!url) {
+        return;
+      }
+      const normalizedPreviewUrl = normalizeUrl(details.previewUrl, "image");
+      const previewUrl = normalizedPreviewUrl && normalizedPreviewUrl !== url
+        ? normalizedPreviewUrl
+        : "";
+      const duration = normalizedDuration(details.duration);
+      const mimeType = videoMimeType(url, details.mimeType);
+      const existing = found.get(url);
+      if (existing) {
+        existing.mediaType = "video";
+        if (details.kind && existing.kinds.length < 8 && !existing.kinds.includes(details.kind)) {
+          existing.kinds.push(details.kind);
+        }
+        existing.width = Math.max(existing.width || 0, Number(details.width) || 0);
+        existing.height = Math.max(existing.height || 0, Number(details.height) || 0);
+        existing.alt = existing.alt || safeText(details.alt, 500);
+        if (!existing.previewUrl && previewUrl &&
+          totalUrlLength + previewUrl.length <= settings.maxPayloadLength) {
+          existing.previewUrl = previewUrl;
+          totalUrlLength += previewUrl.length;
+        }
+        if (duration) {
+          existing.duration = Math.max(existing.duration || 0, duration);
+        }
+        if (!existing.mimeType && mimeType) {
+          existing.mimeType = mimeType;
+        }
+        return;
+      }
+
+      if (found.size >= settings.maxImages) {
+        truncated = true;
+        return;
+      }
+      if (totalUrlLength + url.length > settings.maxPayloadLength) {
+        payloadLimitReached = true;
+        return;
+      }
+
+      totalUrlLength += url.length;
+      const storedPreviewUrl = previewUrl &&
+        totalUrlLength + previewUrl.length <= settings.maxPayloadLength
+        ? previewUrl
+        : "";
+      totalUrlLength += storedPreviewUrl.length;
+      const record = {
+        url,
+        previewUrl: storedPreviewUrl,
+        alt: safeText(details.alt, 500),
+        width: Math.max(0, Number(details.width) || 0),
+        height: Math.max(0, Number(details.height) || 0),
+        kinds: [safeText(details.kind || "Video", 50)],
+        mediaType: "video"
+      };
+      if (duration) {
+        record.duration = duration;
+      }
+      if (mimeType) {
+        record.mimeType = mimeType;
+      }
+      found.set(url, record);
     }
 
     function parseSrcset(srcset) {
@@ -325,6 +526,39 @@
         }
         const downloadName = safeText(anchor && anchor.getAttribute && anchor.getAttribute("download"), 500);
         return IMAGE_EXTENSION.test(downloadName);
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    function isClearlyVideoLink(anchor, normalizedUrl) {
+      const declaredType = anchor && anchor.getAttribute
+        ? anchor.getAttribute("type")
+        : "";
+      if (isVideoMimeType(declaredType)) {
+        return true;
+      }
+      const downloadName = safeText(anchor && anchor.getAttribute && anchor.getAttribute("download"), 500);
+      if (VIDEO_EXTENSION.test(downloadName)) {
+        return true;
+      }
+      if (!normalizedUrl) {
+        return false;
+      }
+      if (/^data:video\//i.test(normalizedUrl)) {
+        return true;
+      }
+      try {
+        const parsed = new URL(normalizedUrl);
+        if (VIDEO_EXTENSION.test(parsed.pathname)) {
+          return true;
+        }
+        const format = (parsed.searchParams.get("format") || parsed.searchParams.get("fm") || "")
+          .replace(/^video\//i, "");
+        if (VIDEO_EXTENSION.test(`file.${format}`)) {
+          return true;
+        }
+        return false;
       } catch (_error) {
         return false;
       }
@@ -581,7 +815,99 @@
       };
     }
 
-    let targetImage = null;
+    function resolveVideoElement(element) {
+      const sources = Array.from(element.children || [])
+        .filter((child) => String(child.localName || "").toLowerCase() === "source");
+      const candidates = [];
+      const seenRawUrls = new Set();
+
+      function consider(rawUrl, source, kind) {
+        const rawText = typeof rawUrl === "string" ? rawUrl.trim() : "";
+        if (!rawText || seenRawUrls.has(rawText)) {
+          return;
+        }
+        seenRawUrls.add(rawText);
+        candidates.push({ rawUrl: rawText, source, kind });
+      }
+
+      consider(element.currentSrc, null, "Video");
+      consider(element.src || (element.getAttribute && element.getAttribute("src")), element, "Video");
+      for (const attribute of LAZY_VIDEO_SOURCE_ATTRIBUTES) {
+        consider(
+          element.getAttribute && element.getAttribute(attribute),
+          element,
+          "Lazy video"
+        );
+      }
+      for (const source of sources) {
+        consider(
+          source.src || (source.getAttribute && source.getAttribute("src")),
+          source,
+          "Video source"
+        );
+        for (const attribute of LAZY_VIDEO_SOURCE_ATTRIBUTES) {
+          consider(
+            source.getAttribute && source.getAttribute(attribute),
+            source,
+            "Lazy video source"
+          );
+        }
+      }
+
+      for (const candidate of candidates) {
+        let declaredType = candidate.source && candidate.source.getAttribute
+          ? candidate.source.getAttribute("type")
+          : element.getAttribute && element.getAttribute("type");
+        if (!declaredType) {
+          const candidateUrl = normalizeUrl(candidate.rawUrl, "video", false);
+          for (const source of sources) {
+            const sourceValues = [
+              source.src || (source.getAttribute && source.getAttribute("src")),
+              ...LAZY_VIDEO_SOURCE_ATTRIBUTES.map((attribute) =>
+                source.getAttribute && source.getAttribute(attribute)
+              )
+            ];
+            if (sourceValues.some((value) =>
+              normalizeUrl(value, "video", false) === candidateUrl
+            )) {
+              declaredType = source.getAttribute && source.getAttribute("type");
+              break;
+            }
+          }
+        }
+        const url = normalizeVideoUrl(candidate.rawUrl, true, declaredType);
+        if (!url) {
+          continue;
+        }
+
+        let previewUrl = element.poster ||
+          (element.getAttribute && element.getAttribute("poster")) || "";
+        if (!previewUrl) {
+          for (const attribute of LAZY_VIDEO_POSTER_ATTRIBUTES) {
+            previewUrl = element.getAttribute && element.getAttribute(attribute);
+            if (previewUrl) {
+              break;
+            }
+          }
+        }
+
+        return {
+          url,
+          previewUrl,
+          alt: (element.getAttribute && (
+            element.getAttribute("aria-label") || element.getAttribute("title")
+          )) || "",
+          width: Math.max(0, Number(element.videoWidth) || 0),
+          height: Math.max(0, Number(element.videoHeight) || 0),
+          duration: element.duration,
+          mimeType: videoMimeType(url, declaredType),
+          kind: candidate.kind
+        };
+      }
+      return null;
+    }
+
+    let targetMedia = null;
     if (Number.isInteger(settings.targetElementId)) {
       try {
         if (
@@ -591,8 +917,9 @@
           typeof browser.menus.getTargetElement === "function"
         ) {
           const targetElement = browser.menus.getTargetElement(settings.targetElementId);
-          if (targetElement && String(targetElement.localName || "").toLowerCase() === "img") {
-            targetImage = targetElement;
+          const targetTagName = targetElement && String(targetElement.localName || "").toLowerCase();
+          if (targetTagName === "img" || targetTagName === "video") {
+            targetMedia = targetElement;
           }
         }
       } catch (_error) {
@@ -601,9 +928,9 @@
     }
 
     const roots = [document];
-    const allElements = targetImage ? [targetImage] : [];
+    const allElements = targetMedia ? [targetMedia] : [];
     let elementLimitReached = false;
-    for (let rootIndex = 0; !targetImage && rootIndex < roots.length && allElements.length < settings.maxElements; rootIndex += 1) {
+    for (let rootIndex = 0; !targetMedia && rootIndex < roots.length && allElements.length < settings.maxElements; rootIndex += 1) {
       try {
         const walker = document.createTreeWalker(roots[rootIndex], NodeFilter.SHOW_ELEMENT);
         let element;
@@ -634,6 +961,24 @@
       if (tagName === "iframe" || tagName === "frame") {
         embeddedFrameCount += 1;
       }
+      if (tagName === "a") {
+        const rawHref = element.href || (element.getAttribute && element.getAttribute("href"));
+        const href = normalizeUrl(rawHref, "video", false);
+        if (isClearlyVideoLink(element, href)) {
+          addVideo(rawHref, {
+            kind: "Linked video",
+            alt: (element.getAttribute && (
+              element.getAttribute("aria-label") ||
+              element.getAttribute("title") ||
+              element.getAttribute("download")
+            )) || "",
+            mimeType: videoMimeType(
+              href,
+              element.getAttribute && element.getAttribute("type")
+            )
+          });
+        }
+      }
       if (tagName === "img") {
         const resolved = resolveImageElement(element);
         if (resolved) {
@@ -657,13 +1002,20 @@
           width: element.width,
           height: element.height
         });
-      } else if (tagName === "video" && element.poster) {
-        addImage(element.poster, {
-          kind: "Video poster",
-          alt: element.getAttribute("aria-label") || "",
-          width: element.videoWidth,
-          height: element.videoHeight
-        });
+      } else if (tagName === "video") {
+        sawVideoMedia = true;
+        if (element.poster) {
+          addImage(element.poster, {
+            kind: "Video poster",
+            alt: element.getAttribute("aria-label") || "",
+            width: element.videoWidth,
+            height: element.videoHeight
+          });
+        }
+        const resolved = resolveVideoElement(element);
+        if (resolved) {
+          addVideo(resolved.url, resolved);
+        }
       }
 
       if (settings.includeBackgrounds && !truncated && !payloadLimitReached) {
@@ -693,19 +1045,31 @@
     }
 
     if (truncated) {
-      warnings.push(`The scan reached its safety limit of ${settings.maxImages.toLocaleString()} distinct images.`);
+      warnings.push(`The scan reached its safety limit of ${settings.maxImages.toLocaleString()} distinct ${sawVideoMedia ? "media items" : "images"}.`);
     }
     if (payloadLimitReached) {
-      warnings.push("Some images were skipped because their combined URL data exceeded the 2 MB safety limit.");
+      warnings.push(`Some ${sawVideoMedia ? "media items" : "images"} were skipped because their combined URL data exceeded the 2 MB safety limit.`);
     }
     if (skippedLargeDataUrls) {
       warnings.push(`${skippedLargeDataUrls} very large embedded image${skippedLargeDataUrls === 1 ? " was" : "s were"} skipped.`);
     }
+    if (skippedLargeVideoDataUrls) {
+      warnings.push(`${skippedLargeVideoDataUrls} very large embedded video${skippedLargeVideoDataUrls === 1 ? " was" : "s were"} skipped.`);
+    }
     if (skippedBlobUrls) {
       warnings.push(`${skippedBlobUrls} page-owned blob image${skippedBlobUrls === 1 ? " was" : "s were"} skipped because Firefox cannot download it from an extension.`);
     }
+    if (skippedBlobVideoUrls) {
+      warnings.push(`${skippedBlobVideoUrls} page-owned blob video URL${skippedBlobVideoUrls === 1 ? " was" : "s were"} skipped because Firefox cannot download it from an extension.`);
+    }
     if (skippedLongUrls) {
       warnings.push(`${skippedLongUrls} unusually long image URL${skippedLongUrls === 1 ? " was" : "s were"} skipped.`);
+    }
+    if (skippedLongVideoUrls) {
+      warnings.push(`${skippedLongVideoUrls} unusually long video URL${skippedLongVideoUrls === 1 ? " was" : "s were"} skipped.`);
+    }
+    if (skippedVideoManifestUrls.size) {
+      warnings.push(`${skippedVideoManifestUrls.size} streaming video manifest${skippedVideoManifestUrls.size === 1 ? " was" : "s were"} skipped because it is not a standalone video file.`);
     }
     if (document.querySelector("canvas")) {
       warnings.push("Canvas pixels are not downloadable as source images.");

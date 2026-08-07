@@ -88,6 +88,7 @@ class FakeElement {
     this.height = Number(properties.height) || 0;
     this.videoWidth = Number(properties.videoWidth) || 0;
     this.videoHeight = Number(properties.videoHeight) || 0;
+    this.duration = Number(properties.duration) || 0;
     this._currentSrc = properties.currentSrc || "";
     this._attributes = new Map();
 
@@ -725,6 +726,156 @@ function urls(result) {
   );
   assert.deepEqual(urls(result), ["https://gallery.test/limit/original.jpg"]);
   assert.ok(result.warnings.some((warning) => /limit|first 1|1 distinct/i.test(warning)));
+}
+
+// A direct video element prefers its browser-selected currentSrc, retains its
+// poster as a lightweight preview, and exposes useful playback metadata.
+{
+  const fallbackSource = element("source", {
+    src: "/videos/fallback.webm",
+    type: "video/webm"
+  });
+  const result = scan([
+    element(
+      "video",
+      {
+        src: "/videos/element.mp4",
+        poster: "/posters/feature.jpg",
+        "aria-label": "Feature trailer"
+      },
+      {
+        currentSrc: "/videos/current.mp4?token=abc",
+        videoWidth: 1920,
+        videoHeight: 1080,
+        duration: 65.4
+      },
+      [fallbackSource]
+    )
+  ]);
+  const video = result.images.find((item) => item.mediaType === "video");
+  const poster = result.images.find((item) => item.mediaType === "image");
+
+  assert.ok(video, "The selected direct video source must be collected");
+  assert.equal(video.url, "https://gallery.test/videos/current.mp4?token=abc");
+  assert.equal(video.previewUrl, "https://gallery.test/posters/feature.jpg");
+  assert.equal(video.alt, "Feature trailer");
+  assert.equal(video.width, 1920);
+  assert.equal(video.height, 1080);
+  assert.equal(video.duration, 65.4);
+  assert.equal(video.mimeType, "video/mp4");
+  assert.ok(video.kinds.includes("Video"));
+  assert.ok(poster, "A video poster must remain available as an ordinary image too");
+  assert.equal(poster.url, "https://gallery.test/posters/feature.jpg");
+}
+
+// Child <source> URLs and clearly direct linked files are collected when a
+// video element itself has no selected source.
+{
+  const result = scan([
+    element("video", {}, {}, [
+      element("source", { src: "/videos/source-only.webm", type: "video/webm" })
+    ]),
+    element("a", {
+      href: "/downloads/behind-scenes.MOV?signature=keep",
+      download: "behind-scenes.mov",
+      type: "video/quicktime",
+      "aria-label": "Behind the scenes"
+    }),
+    element("a", {
+      href: "/api/direct-video?id=9&token=keep",
+      type: "application/mp4",
+      "aria-label": "Extensionless MP4"
+    })
+  ]);
+  const videos = result.images.filter((item) => item.mediaType === "video");
+
+  assert.deepEqual(videos.map((item) => item.url), [
+    "https://gallery.test/videos/source-only.webm",
+    "https://gallery.test/downloads/behind-scenes.MOV?signature=keep",
+    "https://gallery.test/api/direct-video?id=9&token=keep"
+  ]);
+  assert.equal(videos[0].mimeType, "video/webm");
+  assert.ok(videos[0].kinds.includes("Video source"));
+  assert.equal(videos[1].mimeType, "video/quicktime");
+  assert.ok(videos[1].kinds.includes("Linked video"));
+  assert.equal(videos[2].mimeType, "application/mp4");
+  assert.ok(videos[2].kinds.includes("Linked video"));
+}
+
+// Lazy-loading attributes on video sources are resolved without waiting for
+// playback, and a lazy poster is retained as the preview URL.
+{
+  const result = scan([
+    element("video", { "data-poster": "/posters/lazy.jpg" }, {}, [
+      element("source", {
+        "data-src": "/videos/lazy-source.m4v?token=keep",
+        type: "video/x-m4v"
+      })
+    ])
+  ]);
+  assert.equal(result.images.length, 1);
+  assert.equal(result.images[0].mediaType, "video");
+  assert.equal(result.images[0].url, "https://gallery.test/videos/lazy-source.m4v?token=keep");
+  assert.equal(result.images[0].previewUrl, "https://gallery.test/posters/lazy.jpg");
+  assert.equal(result.images[0].mimeType, "video/x-m4v");
+  assert.ok(result.images[0].kinds.includes("Lazy video source"));
+}
+
+// Bounded embedded videos are valid direct media. Page-owned blobs and HLS or
+// DASH manifests are intentionally skipped because they are not standalone files.
+{
+  const embedded = scan([
+    element("video", { src: "data:video/mp4;base64,AA==" })
+  ]);
+  assert.equal(embedded.images.length, 1);
+  assert.equal(embedded.images[0].mediaType, "video");
+  assert.equal(embedded.images[0].url, "data:video/mp4;base64,AA==");
+  assert.equal(embedded.images[0].mimeType, "video/mp4");
+
+  const skipped = scan([
+    element("video", { src: "blob:https://gallery.test/page-owned" }),
+    element("video", { src: "/stream/live.m3u8" }),
+    element("video", {}, {}, [
+      element("source", { src: "/stream/manifest.mpd", type: "application/dash+xml" })
+    ]),
+    element("video", {}, {}, [
+      element("source", {
+        src: "/stream/extensionless",
+        type: "application/vnd.apple.mpegurl"
+      })
+    ])
+  ]);
+  assert.equal(skipped.images.length, 0);
+  assert.ok(skipped.warnings.some((warning) => /blob video URL/i.test(warning)));
+  assert.ok(skipped.warnings.some((warning) => /streaming video manifest/i.test(warning)));
+}
+
+// A Firefox context-menu target can limit collection to the exact clicked
+// video, just as it already does for images.
+{
+  const firstVideo = element("video", { src: "/target/first.mp4" });
+  const secondVideo = element("video", { src: "/target/second.webm" });
+  const hadBrowser = Object.prototype.hasOwnProperty.call(globalThis, "browser");
+  const previousBrowser = globalThis.browser;
+
+  try {
+    globalThis.browser = {
+      menus: {
+        getTargetElement(targetElementId) {
+          return targetElementId === 74 ? secondVideo : null;
+        }
+      }
+    };
+    const targeted = scan([firstVideo, secondVideo], { targetElementId: 74 });
+    assert.deepEqual(urls(targeted), ["https://gallery.test/target/second.webm"]);
+    assert.equal(targeted.images[0].mediaType, "video");
+  } finally {
+    if (hadBrowser) {
+      globalThis.browser = previousBrowser;
+    } else {
+      delete globalThis.browser;
+    }
+  }
 }
 
 console.log("All collector fixture checks passed.");

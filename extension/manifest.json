@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Page Image Downloader",
-  "version": "1.7.0",
-  "description": "Find full-size images, filter duplicates, customize filenames, and manage downloads with a queue, history, ZIPs, and statistics.",
+  "name": "AnyDownload — Page Media Downloader",
+  "version": "1.9.0",
+  "description": "Download page media, Instagram collections, and basic progressive YouTube videos with safe bulk queues.",
   "permissions": [
     "activeTab",
     "downloads",
@@ -14,7 +14,7 @@
     "<all_urls>"
   ],
   "action": {
-    "default_title": "Download page images",
+    "default_title": "Download page media",
     "default_popup": "popup/popup.html",
     "default_icon": {
       "16": "icons/image-downloader.svg",
@@ -22,7 +22,7 @@
     }
   },
   "sidebar_action": {
-    "default_title": "AnyDownload images",
+    "default_title": "AnyDownload media",
     "default_panel": "sidebar/sidebar.html",
     "default_icon": {
       "16": "icons/image-downloader.svg",
@@ -38,6 +38,8 @@
     "scripts": [
       "shared/core.js",
       "shared/collector.js",
+      "shared/instagram.js",
+      "shared/youtube.js",
       "shared/archive.js",
       "shared/templates.js",
       "shared/download-queue.js",
@@ -59,6 +61,6 @@
     }
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'none'; img-src 'self' http: https: data: blob:; style-src 'self'; connect-src http: https: data: blob:"
+    "extension_pages": "script-src 'self'; object-src 'none'; img-src 'self' http: https: data: blob:; media-src 'self' http: https: data: blob:; style-src 'self'; connect-src http: https: data: blob:"
   }
 }

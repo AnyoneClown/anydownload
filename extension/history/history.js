@@ -177,7 +177,7 @@
     copy.className = "task-copy";
     const title = document.createElement("strong");
     title.className = "task-title";
-    title.textContent = task.filename || "Image download";
+    title.textContent = task.filename || "Media download";
     title.title = task.filename || "";
     const detail = document.createElement("span");
     detail.className = "task-meta";

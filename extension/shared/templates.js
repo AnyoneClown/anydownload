@@ -50,6 +50,16 @@
     "tiff",
     "webp"
   ]);
+  const VIDEO_EXTENSIONS = new Set([
+    "m4v",
+    "mkv",
+    "mov",
+    "mp4",
+    "ogg",
+    "ogv",
+    "webm"
+  ]);
+  const MEDIA_EXTENSIONS = new Set([...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS]);
   const MIME_EXTENSIONS = Object.freeze({
     "image/apng": "apng",
     "image/avif": "avif",
@@ -61,7 +71,19 @@
     "image/svg+xml": "svg",
     "image/tiff": "tiff",
     "image/vnd.microsoft.icon": "ico",
-    "image/webp": "webp"
+    "image/webp": "webp",
+    "application/mp4": "mp4",
+    "application/ogg": "ogv",
+    "application/webm": "webm",
+    "application/x-matroska": "mkv",
+    "video/m4v": "m4v",
+    "video/mp4": "mp4",
+    "video/ogg": "ogv",
+    "video/quicktime": "mov",
+    "video/webm": "webm",
+    "video/x-m4v": "m4v",
+    "video/x-matroska": "mkv",
+    "video/x-quicktime": "mov"
   });
   const CONTROL_OR_BIDI = /[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/;
 
@@ -195,35 +217,46 @@
     return Math.min(1000000000, Math.max(1, Math.round(number)));
   }
 
-  function normalizeImageExtension(value) {
-    const extension = safeText(value, 32)
-      .trim()
-      .toLowerCase()
-      .replace(/^image\//, "")
+  function normalizeMediaType(value) {
+    return safeText(value, 20).trim().toLowerCase() === "video" ? "video" : "image";
+  }
+
+  function normalizeMediaExtension(value, mediaType) {
+    const normalized = safeText(value, 100).split(";", 1)[0].trim().toLowerCase();
+    let extension = MIME_EXTENSIONS[normalized] || normalized
+      .replace(/^(?:image|video)\//, "")
       .replace(/^\./, "");
     if (extension === "svg+xml") {
-      return "svg";
+      extension = "svg";
     }
     if (["jfif", "jpe"].includes(extension)) {
-      return "jpg";
+      extension = "jpg";
     }
-    return IMAGE_EXTENSIONS.has(extension) ? extension : "";
+    const extensions = mediaType === "image"
+      ? IMAGE_EXTENSIONS
+      : mediaType === "video"
+        ? VIDEO_EXTENSIONS
+        : MEDIA_EXTENSIONS;
+    return extensions.has(extension) ? extension : "";
   }
 
-  function extensionFromFilename(value) {
+  function extensionFromFilename(value, mediaType) {
     const match = safeText(value, 500).match(/\.([a-z0-9]{2,5})$/i);
-    return match ? normalizeImageExtension(match[1]) : "";
+    return match ? normalizeMediaExtension(match[1], mediaType) : "";
   }
 
-  function extensionFromMime(value) {
+  function extensionFromMime(value, mediaType) {
     const mime = safeText(value, 100).split(";", 1)[0].trim().toLowerCase();
-    return MIME_EXTENSIONS[mime] || "";
+    const extension = MIME_EXTENSIONS[mime] || "";
+    return extension ? normalizeMediaExtension(extension, mediaType) : "";
   }
 
   function equivalentExtension(first, second) {
     const normalizedFirst = ["jpeg", "jpg"].includes(first) ? "jpg" : first;
     const normalizedSecond = ["jpeg", "jpg"].includes(second) ? "jpg" : second;
-    return Boolean(normalizedFirst && normalizedFirst === normalizedSecond);
+    const equivalentFirst = ["ogg", "ogv"].includes(normalizedFirst) ? "ogv" : normalizedFirst;
+    const equivalentSecond = ["ogg", "ogv"].includes(normalizedSecond) ? "ogv" : normalizedSecond;
+    return Boolean(equivalentFirst && equivalentFirst === equivalentSecond);
   }
 
   function ensureExtension(value, extension, fallback) {
@@ -312,17 +345,20 @@
   function metadataValues(metadata) {
     const index = positiveInteger(safeProperty(metadata, "index"), 1);
     const sequence = String(index).padStart(4, "0");
-    const fallback = `image-${sequence}`;
+    const mediaType = normalizeMediaType(safeProperty(metadata, "mediaType"));
+    const fallback = `${mediaType}-${sequence}`;
     const url = safeText(safeProperty(metadata, "url"), 16384);
     const providedFilename = safeText(safeProperty(metadata, "filename"), 500).trim();
-    const inferredFilename = Core.filenameForImage(url, index - 1);
+    const inferredFilename = typeof Core.filenameForMedia === "function"
+      ? Core.filenameForMedia(url, index - 1, mediaType)
+      : Core.filenameForImage(url, index - 1);
     const baseFilename = Core.sanitizeFilename(providedFilename || inferredFilename, fallback);
-    const extension = normalizeImageExtension(safeProperty(metadata, "ext")) ||
-      extensionFromMime(safeProperty(metadata, "mimeType")) ||
-      extensionFromFilename(baseFilename) ||
-      extensionFromFilename(inferredFilename);
+    const extension = normalizeMediaExtension(safeProperty(metadata, "ext"), mediaType) ||
+      extensionFromMime(safeProperty(metadata, "mimeType"), mediaType) ||
+      extensionFromFilename(baseFilename, mediaType) ||
+      extensionFromFilename(inferredFilename, mediaType);
     const filename = ensureExtension(baseFilename, extension, fallback);
-    const filenameExtension = extensionFromFilename(filename);
+    const filenameExtension = extensionFromFilename(filename, mediaType);
     const name = filenameExtension
       ? filename.slice(0, -(filenameExtension.length + 1))
       : filename;

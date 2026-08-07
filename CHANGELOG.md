@@ -2,6 +2,56 @@
 
 All notable changes to AnyDownload are documented here.
 
+## [1.9.0] - 2026-08-07
+
+### Added
+
+- Route-scoped Instagram post and reel extraction that expands every ordered photo and direct video in a carousel regardless of the starting `img_index`.
+- Full active-story and open-highlight extraction from Instagram's structured page data, including mixed image/video collections and their best exposed resolutions.
+- An explicit **Stories & highlights** action for collecting the current Instagram post plus the profile owner's active story and exposed highlights in the user's existing signed-in session.
+- Bounded Instagram document, item, and payload traversal with clear partial-access, expiry, and unsupported-stream warnings.
+- Automatic basic YouTube extraction on public watch, Shorts, embed, live-route, and YouTube Music video URLs. The resolver accepts only direct HTTPS MP4/WebM files already returned by YouTube's player API and prefers complete video-plus-audio formats.
+- A two-client anonymous YouTube fallback (Android VR, then standard Android) for pages whose web player exposes only a page-owned Blob or SABR metadata. It normally yields a progressive MP4 around 240p/360p; high-resolution split tracks are deliberately not merged.
+- Title-, quality-, poster-, duration-, and dimension-aware YouTube rows, previews, ordinary downloads, and desktop video context actions.
+- Durable YouTube provider tasks: the queue stores only the public video ID and requested itag, resolves a fresh short-lived file URL immediately before start/retry, and never writes signed Googlevideo playback URLs to extension storage.
+
+### Privacy and access
+
+- Instagram collection runs inside the temporarily authorized source tab and does not read or persist cookies, session tokens, or account credentials.
+- Private, close-friends, expired, or otherwise restricted media is collected only when Instagram already exposes it to the current browser session; no login or access control is bypassed.
+- Related story/highlight collection is user initiated because Instagram may count opened story data as viewed.
+- Instagram downloads send only an allowlisted first-party `Referer: https://www.instagram.com/` header so Instagram's CDN can accept the file request; no arbitrary page-supplied headers are forwarded.
+- YouTube fallback requests go directly from the extension to YouTube with `credentials: "omit"`; account cookies, authorization headers, page visitor tokens, API keys, player responses, and signed file URLs are not persisted.
+
+### Provider boundaries
+
+- Basic YouTube support targets public on-demand videos with a complete progressive file. Age/private/member/paid/region-gated videos, live or upcoming streams, rentals, captions, alternate audio, and formats requiring a signature cipher, SABR/HLS/DASH reconstruction, separate-track muxing, a proof-of-origin token, a licence, or decryption remain unsupported.
+- No DRM URL blocklist is applied to direct files. Protected-playback metadata is reported and a direct URL may still be handed to Firefox unchanged, but AnyDownload does not obtain licences or decrypt protected bytes.
+
+## [1.8.0] - 2026-08-07
+
+### Added
+
+- Direct video-file discovery for exposed HTTP(S) MP4, WebM, Ogg/OGV, MOV, M4V, and MKV sources, including media selected by `<video>` and nested `<source>` elements.
+- Video rows that use the page's poster when available and a clear video placeholder otherwise, plus full-tab previews with native Firefox playback controls.
+- Media-type and video-format filters so the manager can show all media, images only, or videos only while retaining the existing photo, dimension, orientation, and image-duplicate tools.
+- Ordinary single, video-only bulk, and mixed image/video batch downloads through the durable queue, with the existing filename templates, relative destination folders, progress controls, history, statistics, retries, and private-session separation.
+- Image/video context-menu actions for direct download, preview, ignore, and opening the full media list.
+- Live Capture discovery and selection-preserving rescans for newly exposed direct video sources as well as images.
+
+### Changed
+
+- User-facing manager terminology now describes media where behavior applies to both images and videos, while image-specific full-size, photo, duplicate, and dimension behavior remains documented separately.
+- Recognized video extensions and MIME hints now retain safe MP4, WebM, Ogg/OGV, MOV, M4V, and MKV filenames instead of falling back to image-only naming assumptions.
+- ZIP creation remains intentionally image-only; direct videos use the ordinary queue individually or in bulk and are never assembled into the local image archive.
+- Extension and package versions are now `1.8.0`.
+
+### Media boundaries
+
+- No DRM detector or DRM URL blocklist was added. A direct HTTP(S) media URL exposed by the page is handed to Firefox's Downloads API unchanged.
+- AnyDownload does not acquire DRM licenses, bypass access controls, or decrypt protected bytes. A directly downloaded protected file may therefore remain encrypted or unusable outside its authorized player.
+- Page-owned `blob:`/MediaSource playback, HLS (`.m3u8`), DASH (`.mpd`), segmented streams, and separate audio/video tracks are not recorded or assembled by this direct-file release.
+
 ## [1.7.0] - 2026-08-07
 
 ### Added

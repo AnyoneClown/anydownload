@@ -139,6 +139,41 @@ assert.throws(
   }, now),
   /unsupported/i
 );
+assert.throws(
+  () => ArchivePage.validateArchiveRequest({
+    createdAt: now,
+    folder: "images",
+    incognito: false,
+    items: [{
+      url: "https://media.example/feature.mp4",
+      filename: "feature.mp4",
+      mediaType: "video"
+    }]
+  }, now),
+  /ZIP archives support images only/i
+);
+assert.throws(
+  () => ArchivePage.validateArchiveRequest({
+    createdAt: now,
+    folder: "images",
+    incognito: false,
+    items: [{ url: "data:video/mp4;base64,AQID" }]
+  }, now),
+  /ZIP archives support images only/i
+);
+assert.throws(
+  () => ArchivePage.validateArchiveRequest({
+    createdAt: now,
+    folder: "images",
+    incognito: false,
+    items: [{
+      url: "https://media.example/feature.mp4?token=keep",
+      filename: "feature.mp4"
+    }]
+  }, now),
+  /ZIP archives support images only/i,
+  "A direct video filename must be rejected even when mediaType is omitted"
+);
 
 assert.equal(ArchivePage.storedZipEntryFootprint("a.jpg", 10), 96);
 assert.equal(

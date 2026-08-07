@@ -11,6 +11,7 @@ const DownloadQueue = require("../extension/shared/download-queue.js");
 const QUEUE_STORAGE_KEY = "downloadQueueState:v1";
 const SCRIPT_PATHS = [
   "../extension/shared/core.js",
+  "../extension/shared/youtube.js",
   "../extension/shared/templates.js",
   "../extension/shared/download-queue.js",
   "../extension/background.js"
@@ -300,9 +301,11 @@ function createHarness(options = {}) {
         return randomFillSync(array);
       }
     },
-    fetch: async () => {
-      throw new Error("Unexpected fetch");
-    },
+    fetch: typeof options.fetch === "function"
+      ? options.fetch
+      : async () => {
+          throw new Error("Unexpected fetch");
+        },
     setTimeout
   };
   vm.createContext(context);
@@ -452,6 +455,217 @@ async function testQueueConcurrencyProgressAndStatistics() {
   const persisted = JSON.stringify(harness.local.dump());
   assert.doesNotMatch(persisted, /\/Users\/tester/);
   assert.match(persisted, /rewritten-by-firefox\.jpg/);
+}
+
+async function testDirectVideoSingleAndBulkPassthrough() {
+  const single = createHarness();
+  const singleResponse = await single.send({
+    type: "DOWNLOAD_BATCH",
+    folder: "AnyDownload/videos",
+    saveAs: true,
+    pageTitle: "Video page",
+    pageUrl: "https://example.test/videos",
+    items: [{
+      url: "https://media.example.test/direct/feature.mp4?token=keep",
+      filename: "feature.mp4",
+      mediaType: "video"
+    }]
+  });
+  assert.equal(singleResponse.ok, true);
+  assert.equal(singleResponse.queued, 1);
+  assert.equal(single.downloadCalls.length, 1);
+  assert.equal(
+    single.downloadCalls[0].url,
+    "https://media.example.test/direct/feature.mp4?token=keep"
+  );
+  assert.equal(single.downloadCalls[0].filename, "AnyDownload/videos/feature.mp4");
+  assert.equal(single.downloadCalls[0].saveAs, true, "Single-video Save As must remain available");
+
+  const bulk = createHarness();
+  const bulkResponse = await bulk.send({
+    type: "DOWNLOAD_BATCH",
+    folder: "AnyDownload/video-bulk",
+    saveAs: true,
+    items: [
+      {
+        url: "https://media.example.test/direct/first.webm?signature=keep",
+        filename: "first.webm",
+        mediaType: "video"
+      },
+      {
+        url: "https://media.example.test/direct/second.mov",
+        filename: "second.mov",
+        mediaType: "video"
+      },
+      {
+        url: "data:video/mp4;base64,AQID",
+        filename: "embedded.mp4",
+        mediaType: "video"
+      }
+    ]
+  });
+  assert.equal(bulkResponse.ok, true);
+  assert.equal(bulkResponse.queued, 3);
+  assert.equal(bulk.downloadCalls.length, 3);
+  assert.deepEqual(
+    bulk.downloadCalls.slice(0, 2).map((call) => call.url),
+    [
+      "https://media.example.test/direct/first.webm?signature=keep",
+      "https://media.example.test/direct/second.mov"
+    ],
+    "Bulk direct video URLs must reach Firefox without rewriting"
+  );
+  assert.deepEqual(
+    bulk.downloadCalls.map((call) => call.filename),
+    ["first.webm", "second.mov", "embedded.mp4"]
+      .map((name) => `AnyDownload/video-bulk/${name}`)
+  );
+  assert.ok(bulk.downloadCalls[2].url.startsWith("blob:anydownload-"));
+  assert.equal(bulk.createdObjectUrls[0], bulk.downloadCalls[2].url);
+  assert.ok(
+    bulk.downloadCalls.every((call) => call.saveAs === false),
+    "Save As applies only when exactly one media file is requested"
+  );
+  await bulk.emitDownloadChange(bulk.downloadCalls[2].id, {
+    state: "complete",
+    bytesReceived: 3,
+    totalBytes: 3
+  });
+  await waitFor(
+    () => bulk.revokedObjectUrls.includes(bulk.createdObjectUrls[0]),
+    "An embedded video object URL must be released after Firefox finishes"
+  );
+}
+
+async function testYouTubeProviderReferencesStayDurableAndRefreshOnRetry() {
+  const videoId = "dQw4w9WgXcQ";
+  const submittedUrl =
+    "https://rr0---sn-test.googlevideo.com/videoplayback?itag=18&expire=1111111111&token=submitted-secret";
+  const resolvedUrls = [
+    "https://rr1---sn-test.googlevideo.com/videoplayback?itag=18&expire=2222222222&token=fresh-first",
+    "https://rr2---sn-test.googlevideo.com/videoplayback?itag=18&expire=3333333333&token=fresh-retry"
+  ];
+  const fetchCalls = [];
+  const harness = createHarness({
+    fetch: async (url, init) => {
+      const callIndex = fetchCalls.length;
+      fetchCalls.push({ url: String(url), init: copy(init) });
+      const directUrl = resolvedUrls[Math.min(callIndex, resolvedUrls.length - 1)];
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({
+            playabilityStatus: { status: "OK" },
+            videoDetails: {
+              videoId,
+              title: "Durable YouTube queue fixture",
+              lengthSeconds: "42"
+            },
+            streamingData: {
+              formats: [{
+                itag: 18,
+                url: directUrl,
+                mimeType: 'video/mp4; codecs="avc1.42001E, mp4a.40.2"',
+                width: 640,
+                height: 360,
+                qualityLabel: "360p"
+              }]
+            }
+          });
+        }
+      };
+    }
+  });
+
+  const accepted = await harness.send({
+    type: "DOWNLOAD_BATCH",
+    folder: "AnyDownload/youtube",
+    pageTitle: "Durable YouTube queue fixture",
+    pageUrl: `https://www.youtube.com/watch?v=${videoId}`,
+    items: [{
+      url: submittedUrl,
+      filename: "youtube-fixture.mp4",
+      mediaType: "video"
+    }]
+  });
+  assert.equal(accepted.ok, true);
+  assert.equal(accepted.queued, 1);
+  assert.equal(fetchCalls.length, 1, "A claimed YouTube task must resolve one fresh direct URL");
+  assert.equal(harness.downloadCalls[0].url, resolvedUrls[0]);
+
+  let stored = harness.local.dump()[QUEUE_STORAGE_KEY];
+  const durableUrl = new URL(stored.jobs[0].tasks[0].url);
+  assert.equal(durableUrl.origin, "https://www.youtube.com");
+  assert.equal(durableUrl.pathname, "/watch");
+  assert.equal(durableUrl.searchParams.get("v"), videoId);
+  assert.equal(durableUrl.searchParams.get("anydownload_provider"), "youtube");
+  assert.equal(durableUrl.searchParams.get("anydownload_itag"), "18");
+  assert.deepEqual(
+    Array.from(durableUrl.searchParams.keys()).sort(),
+    ["anydownload_itag", "anydownload_provider", "v"],
+    "Only the public video identity and selected itag may be durable"
+  );
+  const persistedText = JSON.stringify(harness.local.dump());
+  assert.doesNotMatch(persistedText, /googlevideo\.com/i);
+  assert.doesNotMatch(persistedText, /submitted-secret|fresh-first|fresh-retry/);
+
+  const firstDownloadId = harness.downloadCalls[0].id;
+  await harness.emitDownloadChange(firstDownloadId, {
+    state: "interrupted",
+    error: "NETWORK_FAILED"
+  });
+  await waitFor(() => {
+    const state = harness.local.dump()[QUEUE_STORAGE_KEY];
+    return state && state.jobs[0].tasks[0].status === "interrupted";
+  }, "The interrupted YouTube download must become retryable");
+
+  const dashboard = await harness.send({ type: "GET_DOWNLOAD_DASHBOARD", incognito: false });
+  const taskId = dashboard.snapshot.jobs[0].tasks[0].id;
+  const retried = await harness.send({
+    type: "DOWNLOAD_QUEUE_ACTION",
+    action: "retry",
+    targetType: "task",
+    id: taskId,
+    incognito: false
+  });
+  assert.equal(retried.ok, true);
+  assert.equal(fetchCalls.length, 2, "Retry must re-resolve instead of reusing an expiring media URL");
+  assert.equal(harness.downloadCalls.length, 2);
+  assert.equal(harness.downloadCalls[1].url, resolvedUrls[1]);
+  stored = harness.local.dump()[QUEUE_STORAGE_KEY];
+  assert.equal(stored.jobs[0].tasks[0].url, durableUrl.href);
+  assert.doesNotMatch(JSON.stringify(stored), /googlevideo\.com|fresh-first|fresh-retry/);
+}
+
+async function testInstagramDownloadsCarryOnlyCanonicalReferer() {
+  const harness = createHarness();
+  const response = await harness.send({
+    type: "DOWNLOAD_BATCH",
+    folder: "AnyDownload/instagram",
+    pageTitle: "Instagram post",
+    pageUrl: "https://www.instagram.com/p/Fixture123/",
+    items: [
+      {
+        url: "https://scontent.cdninstagram.com/v/t51.29350-15/photo.jpg?token=one",
+        filename: "photo.jpg",
+        mediaType: "image"
+      },
+      {
+        url: "https://scontent.cdninstagram.com/o1/v/t16/video.mp4?token=two",
+        filename: "video.mp4",
+        mediaType: "video"
+      }
+    ]
+  });
+  assert.equal(response.ok, true);
+  assert.equal(response.queued, 2);
+  assert.equal(harness.downloadCalls.length, 2);
+  for (const call of harness.downloadCalls) {
+    assert.deepEqual(call.headers, [
+      { name: "Referer", value: "https://www.instagram.com/" }
+    ]);
+  }
 }
 
 async function testNormalAndPrivateStorageIsolation() {
@@ -1194,6 +1408,9 @@ async function testBulkRetryLeavesCancelledTasksAlone() {
 
 (async () => {
   await testQueueConcurrencyProgressAndStatistics();
+  await testDirectVideoSingleAndBulkPassthrough();
+  await testYouTubeProviderReferencesStayDurableAndRefreshOnRetry();
+  await testInstagramDownloadsCarryOnlyCanonicalReferer();
   await testNormalAndPrivateStorageIsolation();
   await testPersistedRestartRecovery();
   await testStorageFailuresDoNotCorruptSchedulerState();

@@ -3,6 +3,11 @@
 
   const Core = globalThis.ImageDownloaderCore;
   const collectImagesFromPage = globalThis.ImageDownloaderCollector;
+  const Instagram = globalThis.ImageDownloaderInstagram;
+  const collectInstagramMediaFromPage = Instagram && Instagram.collectFromPage;
+  const YouTube = globalThis.AnyDownloadYouTube;
+  const collectYouTubeMediaFromPage = globalThis.AnyDownloadYouTubeCollector ||
+    (YouTube && YouTube.collectYouTubeMediaFromPage);
   const Archive = globalThis.ImageDownloaderArchive;
   const Templates = globalThis.ImageDownloaderTemplates;
   const DownloadQueue = globalThis.ImageDownloaderDownloadQueue;
@@ -18,6 +23,8 @@
   const DOWNLOAD_RETENTION_MAX_MS = 24 * 60 * 60 * 1000;
   const MAX_IGNORED_PER_SITE = 500;
   const MAX_IGNORED_RULES = 5000;
+  const VIDEO_FILE_EXTENSION = /\.(?:m4v|mkv|mov|mp4|ogg|ogv|webm)$/i;
+  const VIDEO_FILE_FORMATS = new Set(["m4v", "mkv", "mov", "mp4", "ogg", "ogv", "webm"]);
   const IGNORE_STORAGE_PREFIX = "ignoredImage:";
   const MANAGER_WINDOW_STORAGE_PREFIX = "imageManagerWindow:";
   const MANAGER_WINDOW_WIDTH = 800;
@@ -34,6 +41,7 @@
   const badgeTimers = new Map();
   const managerWindowQueues = new Map();
   const downloadQueueContexts = new Map();
+  const youtubeResolutionCache = new Map();
   let archiveInProgress = false;
 
   function acknowledgeMenuCreation() {
@@ -46,25 +54,25 @@
     if (!browser.menus || typeof browser.menus.create !== "function") {
       return;
     }
-    const common = { contexts: ["image"] };
+    const common = { contexts: ["image", "video"] };
     const entries = [
       { id: MENU_IDS.root, title: "AnyDownload", ...common },
       {
         id: MENU_IDS.download,
         parentId: MENU_IDS.root,
-        title: "Download full-size image",
+        title: "Download media",
         ...common
       },
       {
         id: MENU_IDS.preview,
         parentId: MENU_IDS.root,
-        title: "Preview full-size image",
+        title: "Preview media",
         ...common
       },
       {
         id: MENU_IDS.ignore,
         parentId: MENU_IDS.root,
-        title: "Ignore image on this site",
+        title: "Ignore media on this site",
         ...common
       },
       {
@@ -76,7 +84,7 @@
       {
         id: MENU_IDS.open,
         parentId: MENU_IDS.root,
-        title: "Open image list…",
+        title: "Open media list…",
         ...common
       }
     ];
@@ -107,7 +115,7 @@
 
   async function fallbackToManagerTab(url, tab) {
     if (!browser.tabs || typeof browser.tabs.create !== "function") {
-      throw new Error("Firefox cannot open the AnyDownload image window.");
+      throw new Error("Firefox cannot open the AnyDownload media window.");
     }
     const createProperties = { active: true, url };
     if (Number.isInteger(tab && tab.windowId)) {
@@ -225,30 +233,325 @@
     badgeTimers.set(tabId, timer);
   }
 
-  function normalizedImageUrl(value) {
-    const result = Core.validateDownloadUrl(value);
+  function normalizedMediaUrl(value) {
+    const validator = Core.validateMediaUrl || Core.validateDownloadUrl;
+    const result = validator(value);
     return result.ok ? result.value : "";
   }
 
-  function safeContextImage(image) {
-    const url = normalizedImageUrl(image && image.url);
+  function isStreamingVideoManifestUrl(value) {
+    try {
+      const parsed = new URL(String(value || ""));
+      if (/\.(?:m3u8|mpd)$/i.test(parsed.pathname)) {
+        return true;
+      }
+      const format = (parsed.searchParams.get("format") || parsed.searchParams.get("fm") || "")
+        .toLowerCase()
+        .replace(/^(?:application|video)\//, "");
+      return ["dash+xml", "dash", "hls", "m3u8", "mpd", "mpegurl", "vnd.apple.mpegurl", "x-mpegurl"]
+        .includes(format);
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function safeContextMedia(image) {
+    const url = normalizedMediaUrl(image && image.url);
     if (!url) {
       return null;
     }
     return {
       url,
-      previewUrl: normalizedImageUrl(image && image.previewUrl),
+      previewUrl: normalizedMediaUrl(image && image.previewUrl),
+      filename: String(image && image.filename || "").slice(0, 500),
       alt: String(image && image.alt || "").slice(0, 500),
       width: Math.max(0, Number(image && image.width) || 0),
       height: Math.max(0, Number(image && image.height) || 0),
+      duration: Math.max(0, Number(image && image.duration) || 0),
+      mediaType: image && image.mediaType === "video" ? "video" : "image",
+      mimeType: String(image && image.mimeType || "").slice(0, 100),
+      sourceProvider: String(image && image.sourceProvider || "").slice(0, 50),
+      videoId: /^[A-Za-z0-9_-]{11}$/.test(String(image && image.videoId || ""))
+        ? String(image.videoId)
+        : "",
+      qualityLabel: String(image && image.qualityLabel || "").slice(0, 40),
+      hasAudio: typeof (image && image.hasAudio) === "boolean" ? image.hasAudio : null,
+      itag: Math.max(0, Math.round(Number(image && image.itag) || 0)),
       kinds: Array.from(image && image.kinds || [])
         .slice(0, 8)
         .map((kind) => String(kind).slice(0, 50))
     };
   }
 
-  async function resolveContextImage(info, tab) {
-    const sourceUrl = normalizedImageUrl(info && info.srcUrl);
+  function isYouTubeVideoPageUrl(value) {
+    return Boolean(
+      YouTube &&
+      typeof YouTube.isYouTubeUrl === "function" &&
+      YouTube.isYouTubeUrl(value) &&
+      /(?:[?&]v=[A-Za-z0-9_-]{11}(?:[&#]|$)|\/(?:embed|live|shorts|v)\/[A-Za-z0-9_-]{11}(?:[/?#]|$)|youtu\.be\/[A-Za-z0-9_-]{11}(?:[/?#]|$))/i.test(String(value || ""))
+    );
+  }
+
+  function youtubeVideoIdFromPageUrl(value) {
+    if (!isYouTubeVideoPageUrl(value)) {
+      return "";
+    }
+    try {
+      const parsed = new URL(String(value || ""));
+      const queryId = String(parsed.searchParams.get("v") || "");
+      if (/^[A-Za-z0-9_-]{11}$/.test(queryId)) {
+        return queryId;
+      }
+      const parts = parsed.pathname.split("/").filter(Boolean);
+      const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+      const candidate = hostname === "youtu.be"
+        ? parts[0]
+        : ["embed", "live", "shorts", "v"].includes(String(parts[0] || "").toLowerCase())
+          ? parts[1]
+          : "";
+      return /^[A-Za-z0-9_-]{11}$/.test(String(candidate || "")) ? candidate : "";
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function youtubeQueueUrl(pageUrl, mediaUrl, mediaType) {
+    const videoId = mediaType === "video" ? youtubeVideoIdFromPageUrl(pageUrl) : "";
+    if (!videoId) {
+      return "";
+    }
+    try {
+      const media = new URL(String(mediaUrl || ""));
+      const hostname = media.hostname.toLowerCase().replace(/\.$/, "");
+      if (media.protocol !== "https:" ||
+        (hostname !== "googlevideo.com" && !hostname.endsWith(".googlevideo.com"))) {
+        return "";
+      }
+      const itag = Number(media.searchParams.get("itag"));
+      const queued = new URL("https://www.youtube.com/watch");
+      queued.searchParams.set("v", videoId);
+      queued.searchParams.set("anydownload_provider", "youtube");
+      if (Number.isSafeInteger(itag) && itag > 0 && itag <= 1000000) {
+        queued.searchParams.set("anydownload_itag", String(itag));
+      }
+      return queued.href;
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function youtubeQueueTaskDetails(value) {
+    try {
+      const parsed = new URL(String(value || ""));
+      if (
+        parsed.protocol !== "https:" ||
+        parsed.hostname.toLowerCase().replace(/\.$/, "") !== "www.youtube.com" ||
+        parsed.pathname !== "/watch" ||
+        parsed.searchParams.get("anydownload_provider") !== "youtube"
+      ) {
+        return null;
+      }
+      const videoId = String(parsed.searchParams.get("v") || "");
+      if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+        return null;
+      }
+      const rawItag = Number(parsed.searchParams.get("anydownload_itag"));
+      return {
+        videoId,
+        itag: Number.isSafeInteger(rawItag) && rawItag > 0 && rawItag <= 1000000
+          ? rawItag
+          : 0,
+        pageUrl: `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`
+      };
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function validatedGoogleVideoUrl(value) {
+    const normalized = normalizedMediaUrl(value);
+    if (!normalized) {
+      return "";
+    }
+    try {
+      const parsed = new URL(normalized);
+      const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+      return parsed.protocol === "https:" &&
+        (hostname === "googlevideo.com" || hostname.endsWith(".googlevideo.com"))
+        ? normalized
+        : "";
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  async function resolveQueueMediaUrl(task) {
+    const details = youtubeQueueTaskDetails(task && task.url);
+    if (!details) {
+      return task.url;
+    }
+    if (typeof collectYouTubeMediaFromPage !== "function") {
+      throw new Error("The YouTube direct-file resolver is unavailable.");
+    }
+
+    const now = Date.now();
+    if (Number(task && task.attempt) > 1) {
+      youtubeResolutionCache.delete(details.videoId);
+    }
+    let cached = youtubeResolutionCache.get(details.videoId);
+    if (!cached || cached.expiresAt <= now) {
+      const scan = await collectYouTubeMediaFromPage({
+        pageUrl: details.pageUrl,
+        pageTitle: String(task && task.filename || "YouTube video").slice(0, 300),
+        includeVideoOnly: true,
+        maxFormats: 24,
+        maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH,
+        maxResponses: 1,
+        maxScripts: 0,
+        maxResponseBytes: 8000000,
+        requestTimeoutMs: 10000
+      });
+      const images = scan && Array.isArray(scan.images)
+        ? scan.images.filter((image) => image && image.mediaType === "video")
+        : [];
+      if (!images.length) {
+        const explanation = scan && Array.isArray(scan.warnings)
+          ? scan.warnings.map((warning) => String(warning).slice(0, 500)).join(" ")
+          : "";
+        throw new Error(explanation || "YouTube did not expose a complete direct video file.");
+      }
+      cached = { images, expiresAt: now + 120000 };
+      if (youtubeResolutionCache.size >= 16) {
+        youtubeResolutionCache.delete(youtubeResolutionCache.keys().next().value);
+      }
+      youtubeResolutionCache.set(details.videoId, cached);
+    }
+
+    const selected = details.itag
+      ? cached.images.find((image) => Number(image.itag) === details.itag)
+      : null;
+    const candidate = selected ||
+      cached.images.find((image) => image.hasAudio === true) ||
+      cached.images[0];
+    const directUrl = validatedGoogleVideoUrl(candidate && candidate.url);
+    if (!directUrl) {
+      throw new Error("YouTube returned an invalid direct video URL.");
+    }
+    return directUrl;
+  }
+
+  function downloadHeadersForSource(value) {
+    try {
+      const parsed = new URL(String(value || ""));
+      const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+      if (hostname === "instagram.com" || hostname.endsWith(".instagram.com")) {
+        return [{ name: "Referer", value: "https://www.instagram.com/" }];
+      }
+    } catch (_error) {
+      // Unknown sources receive no extra request headers.
+    }
+    return [];
+  }
+
+  function preferredFilenameForMedia(image, index) {
+    const mediaType = image && image.mediaType === "video" ? "video" : "image";
+    const inferred = (Core.filenameForMedia || Core.filenameForImage)(
+      image && image.url,
+      index,
+      mediaType
+    );
+    const suggested = String(image && image.filename || "").slice(0, 500).trim();
+    const recognized = mediaType === "video"
+      ? /\.(?:m4v|mkv|mov|mp4|ogg|ogv|webm)$/i.test(suggested)
+      : /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp)$/i.test(suggested);
+    return recognized ? Core.sanitizeFilename(suggested, inferred) : inferred;
+  }
+
+  async function resolveContextMedia(info, tab) {
+    const requestedMediaType = info && info.mediaType === "video" ? "video" : "image";
+    const sourceUrl = normalizedMediaUrl(info && info.srcUrl);
+    let specializedError = "";
+    if (
+      requestedMediaType === "video" &&
+      tab &&
+      Number.isInteger(tab.id) &&
+      Instagram &&
+      typeof Instagram.isInstagramUrl === "function" &&
+      typeof collectInstagramMediaFromPage === "function" &&
+      Instagram.isInstagramUrl(tab.url)
+    ) {
+      try {
+        const instagramResults = await browser.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: collectInstagramMediaFromPage,
+          args: [{
+            includeRelated: false,
+            maxItems: Core.MAX_BATCH_SIZE,
+            maxDocuments: 1,
+            maxDocumentBytes: 4000000,
+            maxTotalDocumentBytes: 4000000,
+            maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH
+          }]
+        });
+        const instagramScan = instagramResults && instagramResults[0] && instagramResults[0].result;
+        const videos = instagramScan && Array.isArray(instagramScan.images)
+          ? instagramScan.images.map(safeContextMedia)
+            .filter((image) => image && image.mediaType === "video")
+          : [];
+        const exact = videos.find((image) =>
+          sourceUrl && (image.url === sourceUrl || image.previewUrl === sourceUrl)
+        );
+        if (exact || videos.length === 1) {
+          return exact || videos[0];
+        }
+        specializedError = videos.length > 1
+          ? "This Instagram carousel contains multiple videos; open the media list to choose the correct item."
+          : instagramScan && Array.isArray(instagramScan.warnings)
+            ? instagramScan.warnings.map((warning) => String(warning).slice(0, 500)).join(" ")
+            : "";
+      } catch (error) {
+        specializedError = `Instagram-specific collection failed: ${error.message || error}`;
+      }
+    }
+    if (
+      requestedMediaType === "video" &&
+      tab &&
+      Number.isInteger(tab.id) &&
+      typeof collectYouTubeMediaFromPage === "function" &&
+      isYouTubeVideoPageUrl(tab.url)
+    ) {
+      try {
+        const youtubeResults = await browser.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: collectYouTubeMediaFromPage,
+          args: [{
+            includeVideoOnly: false,
+            maxFormats: 24,
+            maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH,
+            maxResponses: 8,
+            maxScripts: 160,
+            maxScriptBytes: 4000000,
+            maxTotalScriptBytes: 12000000,
+            maxResponseBytes: 8000000,
+            requestTimeoutMs: 8000
+          }]
+        });
+        const youtubeScan = youtubeResults && youtubeResults[0] && youtubeResults[0].result;
+        const discovered = youtubeScan && Array.isArray(youtubeScan.images)
+          ? youtubeScan.images.map(safeContextMedia).filter(Boolean)
+          : [];
+        const complete = discovered.find((image) => image.mediaType === "video" && image.hasAudio);
+        const video = complete || discovered.find((image) => image.mediaType === "video");
+        if (video) {
+          return video;
+        }
+        specializedError = youtubeScan && Array.isArray(youtubeScan.warnings)
+          ? youtubeScan.warnings.map((warning) => String(warning).slice(0, 500)).join(" ")
+          : "";
+      } catch (error) {
+        specializedError = `YouTube-specific collection failed: ${error.message || error}`;
+      }
+    }
     if (tab && Number.isInteger(tab.id) && typeof collectImagesFromPage === "function") {
       const target = { tabId: tab.id };
       if (Number.isInteger(info && info.frameId)) {
@@ -273,7 +576,7 @@
           .flatMap((injection) => injection && injection.result && Array.isArray(injection.result.images)
             ? injection.result.images
             : [])
-          .map(safeContextImage)
+          .map(safeContextMedia)
           .filter(Boolean);
         const exact = discovered.find((image) =>
           sourceUrl && (image.url === sourceUrl || image.previewUrl === sourceUrl)
@@ -281,15 +584,19 @@
         if (exact) {
           return exact;
         }
-        if (Number.isInteger(info && info.targetElementId) && discovered.length === 1) {
-          return discovered[0];
+        const matchingType = discovered.filter((item) => item.mediaType === requestedMediaType);
+        if (Number.isInteger(info && info.targetElementId) && matchingType.length === 1) {
+          return matchingType[0];
         }
       } catch (_error) {
         // Fall back to Firefox's srcUrl when a protected page/frame blocks injection.
       }
     }
     if (!sourceUrl) {
-      throw new Error("Firefox did not expose a downloadable URL for this image.");
+      throw new Error(specializedError || "Firefox did not expose a downloadable URL for this media item.");
+    }
+    if (requestedMediaType === "video" && isStreamingVideoManifestUrl(sourceUrl)) {
+      throw new Error("This player exposes a streaming manifest, not a standalone video file.");
     }
     return {
       url: sourceUrl,
@@ -297,7 +604,10 @@
       alt: "",
       width: 0,
       height: 0,
-      kinds: ["Context image"]
+      duration: 0,
+      mediaType: requestedMediaType,
+      mimeType: "",
+      kinds: [requestedMediaType === "video" ? "Context video" : "Context image"]
     };
   }
 
@@ -315,8 +625,11 @@
     await browser.storage.session.set({
       [key]: {
         url: image.url,
-        name: Core.filenameForImage(image.url, 0),
+        previewUrl: image.previewUrl,
+        name: preferredFilenameForMedia(image, 0),
         alt: image.alt,
+        mediaType: image.mediaType,
+        duration: image.duration,
         createdAt: Date.now()
       }
     });
@@ -345,7 +658,7 @@
     );
     const imageKey = Core.ignoreKeyForUrl(image.url);
     if (!siteKey || !imageKey) {
-      throw new Error("This image cannot be ignored on this page.");
+      throw new Error("This media item cannot be ignored on this page.");
     }
     const area = tab && tab.incognito ? browser.storage.session : browser.storage.local;
     const storageKey = `${ignoreStoragePrefix(siteKey)}${imageKey}`;
@@ -393,7 +706,7 @@
     ]);
     const storedFolder = Core.validateFolderPath(stored.destinationFolder);
     const folder = storedFolder.ok ? storedFolder.value : defaultFolderForPage(info, tab);
-    let filename = Core.filenameForImage(image.url, 0);
+    let filename = preferredFilenameForMedia(image, 0);
     if (Templates && typeof Templates.render === "function") {
       const template = Templates.validate(stored.filenameTemplate || Templates.DEFAULT_TEMPLATE);
       if (template.ok) {
@@ -404,6 +717,8 @@
           pageTitle: tab && tab.title || "",
           width: image.width,
           height: image.height,
+          mediaType: image.mediaType,
+          mimeType: image.mimeType,
           index: 1,
           date: Date.now()
         });
@@ -414,9 +729,9 @@
       folder,
       saveAs: Boolean(stored.askForSingle),
       incognito: Boolean(tab && tab.incognito),
-      pageTitle: tab && tab.title || "Image download",
+      pageTitle: tab && tab.title || "Media download",
       pageUrl: info && (info.pageUrl || info.frameUrl) || tab && tab.url || "",
-      items: [{ url: image.url, filename }]
+      items: [{ url: image.url, filename, mediaType: image.mediaType }]
     }));
     if (!result.ok) {
       const firstError = result.errors && result.errors[0] && result.errors[0].error;
@@ -425,7 +740,23 @@
   }
 
   async function handleImageMenuClick(info, tab) {
-    const image = await resolveContextImage(info, tab);
+    let youtubePermissionPromise = Promise.resolve(true);
+    if (
+      info.menuItemId === MENU_IDS.download &&
+      info && info.mediaType === "video" &&
+      tab && isYouTubeVideoPageUrl(tab.url)
+    ) {
+      if (!browser.permissions || typeof browser.permissions.request !== "function") {
+        throw new Error("Firefox cannot grant the YouTube access needed to refresh this video link.");
+      }
+      youtubePermissionPromise = browser.permissions.request({
+        origins: ["https://www.youtube.com/*"]
+      });
+    }
+    if (!await youtubePermissionPromise) {
+      throw new Error("YouTube access was not granted, so no video was queued.");
+    }
+    const image = await resolveContextMedia(info, tab);
     if (info.menuItemId === MENU_IDS.download) {
       await downloadContextImage(image, info, tab);
     } else if (info.menuItemId === MENU_IDS.preview) {
@@ -471,10 +802,10 @@
     });
   });
 
-  function decodeDataImageUrl(dataUrl) {
+  function decodeDataMediaUrl(dataUrl) {
     const commaIndex = dataUrl.indexOf(",");
     if (commaIndex < 0) {
-      throw new Error("Malformed embedded image URL.");
+      throw new Error("Malformed embedded media URL.");
     }
     const header = dataUrl.slice(5, commaIndex);
     const payload = dataUrl.slice(commaIndex + 1);
@@ -495,7 +826,7 @@
   }
 
   function dataUrlToObjectUrl(dataUrl) {
-    const decoded = decodeDataImageUrl(dataUrl);
+    const decoded = decodeDataMediaUrl(dataUrl);
     return URL.createObjectURL(new Blob([decoded.bytes], { type: decoded.mimeType }));
   }
 
@@ -549,11 +880,11 @@
     }
 
     if (!Array.isArray(message.items) || message.items.length === 0) {
-      throw new Error("Choose at least one image.");
+      throw new Error("Choose at least one media file.");
     }
 
     if (message.items.length > Core.MAX_BATCH_SIZE) {
-      throw new Error(`A batch can contain at most ${Core.MAX_BATCH_SIZE} images.`);
+      throw new Error(`A batch can contain at most ${Core.MAX_BATCH_SIZE} media files.`);
     }
 
     const items = [];
@@ -561,26 +892,38 @@
     const usedNames = new Set();
     let totalUrlLength = 0;
     message.items.forEach((item, index) => {
-      const urlResult = Core.validateDownloadUrl(item && item.url);
-      if (!urlResult.ok) {
-        validationErrors.push({ index, error: `Image ${index + 1}: ${urlResult.error}` });
+      const validateMediaUrl = Core.validateMediaUrl || Core.validateDownloadUrl;
+      const directUrlResult = validateMediaUrl(item && item.url);
+      if (!directUrlResult.ok) {
+        validationErrors.push({ index, error: `Media file ${index + 1}: ${directUrlResult.error}` });
         return;
       }
-      if (totalUrlLength + urlResult.value.length > Core.MAX_BATCH_TOTAL_URL_LENGTH) {
-        validationErrors.push({ index, error: `Image ${index + 1}: the batch URL payload is too large.` });
+      const mediaType = item && item.mediaType === "video" ? "video" : "image";
+      const providerUrl = youtubeQueueUrl(
+        message.pageUrl,
+        directUrlResult.value,
+        mediaType
+      );
+      const queuedUrl = providerUrl || directUrlResult.value;
+      if (totalUrlLength + queuedUrl.length > Core.MAX_BATCH_TOTAL_URL_LENGTH) {
+        validationErrors.push({ index, error: `Media file ${index + 1}: the batch URL payload is too large.` });
         return;
       }
-      totalUrlLength += urlResult.value.length;
-      const fallbackName = Core.filenameForImage(urlResult.value, index);
+      totalUrlLength += queuedUrl.length;
+      const fallbackName = (Core.filenameForMedia || Core.filenameForImage)(
+        directUrlResult.value,
+        index,
+        mediaType
+      );
       const suppliedName = typeof (item && item.filename) === "string"
         ? Core.sanitizeFilename(item.filename, fallbackName)
         : fallbackName;
       const filename = Core.uniquifyFilename(suppliedName, usedNames);
-      items.push({ url: urlResult.value, filename, originalIndex: index });
+      items.push({ url: queuedUrl, filename, mediaType, originalIndex: index });
     });
 
     if (!items.length) {
-      throw new Error(validationErrors[0] ? validationErrors[0].error : "No valid image URLs were supplied.");
+      throw new Error(validationErrors[0] ? validationErrors[0].error : "No valid media URLs were supplied.");
     }
 
     return {
@@ -616,7 +959,52 @@
     const items = [];
     const validationErrors = [];
     let totalUrlLength = 0;
+
+    function archiveItemLooksLikeVideo(item) {
+      if (!item || typeof item !== "object") {
+        return false;
+      }
+      if (String(item.mediaType || "").toLowerCase() === "video") {
+        return true;
+      }
+      const rawUrl = String(item.url || "");
+      if (/^data:video\//i.test(rawUrl)) {
+        return true;
+      }
+      const mimeType = String(item.mimeType || item.type || "")
+        .split(";", 1)[0]
+        .trim()
+        .toLowerCase();
+      if (/^video\//.test(mimeType) || [
+        "application/mp4",
+        "application/ogg",
+        "application/webm",
+        "application/x-matroska"
+      ].includes(mimeType)) {
+        return true;
+      }
+      if (VIDEO_FILE_EXTENSION.test(String(item.filename || ""))) {
+        return true;
+      }
+      try {
+        const parsed = new URL(rawUrl);
+        if (VIDEO_FILE_EXTENSION.test(parsed.pathname)) {
+          return true;
+        }
+        const format = (parsed.searchParams.get("format") || parsed.searchParams.get("fm") || "")
+          .toLowerCase()
+          .replace(/^video\//, "");
+        return VIDEO_FILE_FORMATS.has(format);
+      } catch (_error) {
+        return false;
+      }
+    }
+
     message.items.forEach((item, index) => {
+      if (archiveItemLooksLikeVideo(item)) {
+        validationErrors.push({ index, error: `Image ${index + 1}: ZIP archives support images only.` });
+        return;
+      }
       const urlResult = Core.validateDownloadUrl(item && item.url);
       if (!urlResult.ok) {
         validationErrors.push({ index, error: `Image ${index + 1}: ${urlResult.error}` });
@@ -722,7 +1110,7 @@
 
   async function fetchArchiveBytes(url) {
     if (url.startsWith("data:")) {
-      return decodeDataImageUrl(url).bytes;
+      return decodeDataMediaUrl(url).bytes;
     }
 
     const controller = new AbortController();
@@ -1178,16 +1566,22 @@
         let objectUrl = "";
         let downloadId = null;
         try {
-          const downloadUrl = task.url.startsWith("data:")
-            ? (objectUrl = dataUrlToObjectUrl(task.url))
-            : task.url;
-          downloadId = await browser.downloads.download({
+          const resolvedUrl = await resolveQueueMediaUrl(task);
+          const downloadUrl = resolvedUrl.startsWith("data:")
+            ? (objectUrl = dataUrlToObjectUrl(resolvedUrl))
+            : resolvedUrl;
+          const downloadOptions = {
             url: downloadUrl,
             filename: Core.buildDownloadPath(task.folder, task.filename),
             conflictAction: "uniquify",
             saveAs: Boolean(task.saveAs),
             incognito: context.incognito
-          });
+          };
+          const headers = downloadHeadersForSource(task.source);
+          if (headers.length) {
+            downloadOptions.headers = headers;
+          }
+          downloadId = await browser.downloads.download(downloadOptions);
           if (!Number.isInteger(downloadId)) {
             throw new Error("Firefox did not return a download identifier.");
           }
@@ -1631,6 +2025,7 @@
       return {
         url: item.url,
         filename,
+        source: batch.source,
         targetPath: Core.buildDownloadPath(batch.folder, filename)
       };
     });
@@ -1646,16 +2041,22 @@
         const entry = entries[index];
         let objectUrl = "";
         try {
-          const downloadUrl = entry.url.startsWith("data:")
-            ? (objectUrl = dataUrlToObjectUrl(entry.url))
-            : entry.url;
-          const downloadId = await browser.downloads.download({
+          const resolvedUrl = await resolveQueueMediaUrl(entry);
+          const downloadUrl = resolvedUrl.startsWith("data:")
+            ? (objectUrl = dataUrlToObjectUrl(resolvedUrl))
+            : resolvedUrl;
+          const downloadOptions = {
             url: downloadUrl,
             filename: entry.targetPath,
             conflictAction: "uniquify",
             saveAs: batch.saveAs,
             incognito: batch.incognito
-          });
+          };
+          const headers = downloadHeadersForSource(entry.source);
+          if (headers.length) {
+            downloadOptions.headers = headers;
+          }
+          const downloadId = await browser.downloads.download(downloadOptions);
           if (typeof downloadId === "number") {
             started += 1;
             if (objectUrl) {
@@ -1696,7 +2097,7 @@
 
   browser.runtime.onInstalled.addListener(() =>
     rebuildContextMenus().catch((error) => {
-      console.error("AnyDownload could not rebuild its image context menu.", error);
+      console.error("AnyDownload could not rebuild its media context menu.", error);
     }).finally(resumeStoredQueues)
   );
 
@@ -1710,7 +2111,7 @@
         return openResizableImageWindow(tab).then(() => {
           showActionFeedback(tab && tab.id, true);
         }).catch((error) => {
-          console.error("AnyDownload could not open its image window.", error);
+          console.error("AnyDownload could not open its media window.", error);
           showActionFeedback(tab && tab.id, false);
         });
       }
@@ -1718,7 +2119,7 @@
         return undefined;
       }
       return handleImageMenuClick(info, tab).catch((error) => {
-        console.error("AnyDownload image action failed.", error);
+        console.error("AnyDownload media action failed.", error);
         showActionFeedback(tab && tab.id, false);
       });
     });

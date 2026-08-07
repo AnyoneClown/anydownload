@@ -116,6 +116,22 @@ assert.equal(firstBatch.state.jobs[0].saveAs, true);
 assert.equal(firstBatch.state.stats.lifetime.enqueued, 2);
 assert.equal(firstBatch.state.stats.today.enqueued, 2);
 
+const embeddedVideoBatch = Queue.enqueueBatch(Queue.emptyState(BASE_TIME), [
+  { url: "data:video/mp4;base64,AQID", filename: "embedded-video.mp4" },
+  { url: "data:application/mp4;base64,AQID", filename: "not-media.mp4" }
+], {
+  now: BASE_TIME,
+  idFactory: deterministicIds,
+  folder: "Website media"
+});
+assert.equal(embeddedVideoBatch.accepted, 1);
+assert.equal(embeddedVideoBatch.rejected.length, 1);
+assert.equal(
+  embeddedVideoBatch.state.jobs[0].tasks[0].url,
+  "data:video/mp4;base64,AQID"
+);
+assert.equal(embeddedVideoBatch.state.jobs[0].tasks[0].filename, "embedded-video.mp4");
+
 const invalidBatch = Queue.enqueueBatch(firstBatch.state, "not-an-array", { now: BASE_TIME });
 assert.equal(invalidBatch.accepted, 0);
 assert.match(invalidBatch.rejected[0].error, /array/i);

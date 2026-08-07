@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>AnyDownload — Page images</title>
+    <title>AnyDownload — Page media</title>
     <link rel="stylesheet" href="popup.css">
   </head>
   <body>
@@ -11,7 +11,7 @@
       <header class="app-header">
         <img class="app-icon" src="../icons/image-downloader.svg" alt="">
         <div>
-          <h1>Page images</h1>
+          <h1>Page media</h1>
           <p id="page-label">Scanning the current page…</p>
         </div>
         <div class="header-actions">
@@ -31,9 +31,9 @@
         <div class="folder-toolbar">
           <label id="folder-label" for="folder-input">Destination folder<span class="visually-hidden"> inside Firefox Downloads</span></label>
           <div class="folder-options">
-            <label class="option-row" title="Show a Save As dialog when downloading exactly one image">
+            <label class="option-row" title="Show a Save As dialog when downloading exactly one file">
               <input id="ask-single-input" type="checkbox">
-              <span>Save As for one image</span>
+              <span>Save As for one file</span>
             </label>
             <label class="option-row" title="Include CSS background images on the next scan">
               <input id="backgrounds-input" type="checkbox" checked>
@@ -43,7 +43,7 @@
         </div>
         <div class="folder-input-row">
           <span aria-hidden="true">Downloads /</span>
-          <input id="folder-input" type="text" value="Website images" maxlength="260" autocomplete="off" spellcheck="false" aria-describedby="folder-help">
+          <input id="folder-input" type="text" value="Website media" maxlength="260" autocomplete="off" spellcheck="false" aria-describedby="folder-help">
         </div>
         <p id="folder-help" class="field-help" role="status" aria-live="polite" hidden></p>
         <div class="filename-template-toolbar">
@@ -57,21 +57,21 @@
         </div>
       </section>
 
-      <section class="controls" aria-label="Image controls">
+      <section class="controls" aria-label="Media controls">
         <div class="summary-row">
-          <strong id="summary-label">0 images</strong>
+          <strong id="summary-label">0 media files</strong>
           <div id="selection-actions" class="selection-actions">
             <button id="ignored-button" class="text-button ignored-view-button" type="button" aria-pressed="false" disabled>Ignored (0)</button>
             <button id="clear-ignored-button" class="text-button danger-button" type="button" hidden>Restore all</button>
             <button id="select-all-button" class="text-button" type="button">Select all</button>
             <button id="select-none-button" class="text-button" type="button">Clear</button>
-            <button id="bulk-download-button" class="text-button bulk-download-button" type="button" title="Download all selected images" hidden disabled>Download</button>
-            <button id="archive-download-button" class="text-button archive-download-button" type="button" title="Download selected images as one ZIP archive" hidden disabled>ZIP</button>
+            <button id="bulk-download-button" class="text-button bulk-download-button" type="button" title="Download all selected files" hidden disabled>Download</button>
+            <button id="archive-download-button" class="text-button archive-download-button" type="button" title="Download selected images as ZIP archives" hidden disabled>ZIP</button>
           </div>
         </div>
         <label class="search-box">
-          <span class="visually-hidden">Filter images</span>
-          <input id="filter-input" type="search" placeholder="Filter by URL, alt text, or type…" autocomplete="off">
+          <span class="visually-hidden">Filter media</span>
+          <input id="filter-input" type="search" placeholder="Filter by URL, label, or type…" autocomplete="off">
         </label>
         <div class="filter-toolbar">
           <label class="option-row photos-only-toggle" title="Hide likely logos, icons, avatars, trackers, and other non-photo assets">
@@ -80,10 +80,19 @@
           </label>
           <button id="smart-filters-button" class="text-button filter-toggle-button" type="button" aria-expanded="false" aria-controls="smart-filter-panel">Filters</button>
           <button id="duplicates-button" class="text-button filter-toggle-button" type="button" aria-expanded="false" aria-controls="duplicate-panel">Duplicates</button>
-          <button id="live-capture-button" class="text-button live-capture-button" type="button" aria-pressed="false" title="Watch this gallery for images loaded while you scroll">Live capture</button>
+          <button id="live-capture-button" class="text-button live-capture-button" type="button" aria-pressed="false" title="Watch this page for media loaded while you scroll">Live capture</button>
+          <button id="instagram-collections-button" class="text-button instagram-collections-button" type="button" title="Collect the profile owner's active story and highlights" hidden>Stories &amp; highlights</button>
           <button id="sidebar-follow-button" class="text-button sidebar-follow-button" type="button" title="Allow the Sidebar to follow every active webpage" hidden>Enable auto-follow</button>
         </div>
         <div id="smart-filter-panel" class="smart-filter-panel" hidden>
+          <label class="compact-field">
+            <span>Type</span>
+            <select id="media-type-filter-select">
+              <option value="any">Images &amp; videos</option>
+              <option value="image">Images</option>
+              <option value="video">Videos</option>
+            </select>
+          </label>
           <label class="compact-field">
             <span>Min width</span>
             <input id="min-width-input" type="number" min="0" max="1000000" step="1" inputmode="numeric" value="0">
@@ -102,6 +111,12 @@
               <option value="avif">AVIF</option>
               <option value="gif">GIF</option>
               <option value="svg">SVG</option>
+              <option value="mp4">MP4</option>
+              <option value="webm">WebM</option>
+              <option value="ogv">Ogg video</option>
+              <option value="mov">MOV</option>
+              <option value="m4v">M4V</option>
+              <option value="mkv">MKV</option>
             </select>
           </label>
           <label class="compact-field">
@@ -132,12 +147,12 @@
       </section>
 
       <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
-      <main id="image-list" class="image-list" role="list" aria-label="Images found on this page"></main>
+      <main id="image-list" class="image-list" role="list" aria-label="Media found on this page"></main>
 
       <footer class="action-bar">
         <div class="action-copy">
           <strong id="selected-label">0 selected</strong>
-          <span id="action-detail">Choose images to download</span>
+          <span id="action-detail">Choose files to download</span>
         </div>
         <div class="action-buttons">
           <button id="archive-footer-button" class="secondary-button" type="button" disabled>Download ZIP</button>
@@ -148,6 +163,8 @@
 
     <script src="../shared/core.js"></script>
     <script src="../shared/collector.js"></script>
+    <script src="../shared/instagram.js"></script>
+    <script src="../shared/youtube.js"></script>
     <script src="../shared/filters.js"></script>
     <script src="../shared/templates.js"></script>
     <script src="../shared/duplicates.js"></script>

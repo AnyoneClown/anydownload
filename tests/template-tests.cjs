@@ -182,6 +182,29 @@ assert.equal(
   "download.png"
 );
 assert.equal(
+  Templates.render("{filename}", {
+    url: "https://media.example/watch?id=1",
+    mimeType: "video/webm",
+    mediaType: "video",
+    index: 3
+  }),
+  "watch.webm",
+  "A direct video MIME type must supply a safe extension for an extensionless URL"
+);
+assert.equal(
+  Templates.render("{filename}", {
+    url: "data:video/mp4;base64,AA==",
+    mediaType: "video",
+    index: 2
+  }),
+  "video-0002.mp4"
+);
+assert.equal(
+  Templates.render("{name}.png", { filename: "Trailer.MP4", mediaType: "video" }),
+  "Trailer.mp4",
+  "A template must not relabel MP4 bytes with an image extension"
+);
+assert.equal(
   Templates.render("{name}-{width}x{height}", { filename: "photo.avif", width: -1, height: NaN }),
   "photo-unknownxunknown.avif"
 );

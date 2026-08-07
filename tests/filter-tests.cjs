@@ -31,6 +31,7 @@ assert.ok(Object.isFrozen(Filters.DEFAULT_FILTERS));
 assert.deepEqual(Filters.normalizeFilters(), Filters.DEFAULT_FILTERS);
 
 assert.deepEqual(Filters.normalizeFilters({
+  mediaType: "VIDEO",
   photosOnly: "yes",
   minWidth: "299.6",
   minHeight: -12,
@@ -38,6 +39,7 @@ assert.deepEqual(Filters.normalizeFilters({
   orientation: "PORTRAIT",
   includeUnknown: "off"
 }), {
+  mediaType: "video",
   photosOnly: true,
   minWidth: 300,
   minHeight: 0,
@@ -46,6 +48,7 @@ assert.deepEqual(Filters.normalizeFilters({
   includeUnknown: false
 });
 assert.deepEqual(Filters.normalizeFilters({
+  mediaType: "audio",
   minWidth: Infinity,
   minHeight: "99999999",
   format: "executable",
@@ -53,6 +56,7 @@ assert.deepEqual(Filters.normalizeFilters({
   photosOnly: "maybe",
   includeUnknown: null
 }), {
+  mediaType: "any",
   photosOnly: false,
   minWidth: 0,
   minHeight: 1000000,
@@ -81,6 +85,10 @@ assert.equal(Filters.imageFileType({ url: "data:image/svg+xml,%3Csvg%3E" }), "sv
 assert.equal(Filters.imageFileType({ url: "data:image/png;base64,AA==" }), "png");
 assert.equal(Filters.imageFileType({ url: "https://cdn.test/no-extension", mimeType: "image/jpeg; charset=binary" }), "jpeg");
 assert.equal(Filters.imageFileType({ url: "https://cdn.test/animation.apng" }), "png");
+assert.equal(Filters.imageFileType({ url: "https://cdn.test/trailer.MP4?token=abc" }), "mp4");
+assert.equal(Filters.imageFileType({ url: "https://cdn.test/clip.mov" }), "mov");
+assert.equal(Filters.imageFileType({ url: "https://cdn.test/no-extension", mimeType: "video/webm" }), "webm");
+assert.equal(Filters.imageFileType({ url: "data:video/ogg;base64,AA==" }), "ogv");
 assert.equal(Filters.imageFileType({ url: "https://cdn.test/file.bmp" }), "unknown");
 assert.equal(Filters.imageFileType(null), "unknown");
 
@@ -117,6 +125,12 @@ assert.equal(Filters.isLikelyPhoto({ url: "https://site.test/art.svg", width: 12
 assert.equal(Filters.isLikelyPhoto({ url: "https://site.test/tiny.jpg", width: 120, height: 100 }), false);
 assert.equal(Filters.isLikelyPhoto({ url: "https://site.test/strip.jpg", width: 1600, height: 50 }), false);
 assert.equal(Filters.isLikelyPhoto({ url: "https://site.test/photo.jpg", width: 400, height: 300 }), true);
+assert.equal(Filters.isLikelyPhoto({
+  url: "https://site.test/feature.mp4",
+  mediaType: "video",
+  width: 1920,
+  height: 1080
+}), false, "Videos must not pass the Photos only heuristic");
 assert.equal(
   Filters.isLikelyPhoto({ url: "https://site.test/photo-with-unknown-size.jpg", width: 0, height: 0 }),
   true,
@@ -147,10 +161,24 @@ assert.equal(Filters.matchesSmartFilters(
   { photosOnly: true, includeUnknown: true }
 ), false);
 assert.equal(Filters.matchesSmartFilters(normalPhoto, { photosOnly: true }), true);
+const normalVideo = {
+  url: "https://gallery.test/clips/feature.mp4",
+  mediaType: "video",
+  mimeType: "video/mp4",
+  width: 1920,
+  height: 1080
+};
+assert.equal(Filters.matchesSmartFilters(normalVideo, { mediaType: "video" }), true);
+assert.equal(Filters.matchesSmartFilters(normalVideo, { mediaType: "image" }), false);
+assert.equal(Filters.matchesSmartFilters(normalPhoto, { mediaType: "video" }), false);
+assert.equal(Filters.matchesSmartFilters(normalVideo, { format: "mp4" }), true);
+assert.equal(Filters.matchesSmartFilters(normalVideo, { format: "webm" }), false);
+assert.equal(Filters.matchesSmartFilters(normalVideo, { photosOnly: true }), false);
 assert.equal(Filters.matchesSmartFilters(null, {}), false);
 
 assert.equal(Filters.hasActiveSmartFilters(), false);
 assert.equal(Filters.hasActiveSmartFilters({}), false);
+assert.equal(Filters.hasActiveSmartFilters({ mediaType: "video" }), true);
 assert.equal(Filters.hasActiveSmartFilters({ photosOnly: true }), true);
 assert.equal(Filters.hasActiveSmartFilters({ minWidth: 1 }), true);
 assert.equal(Filters.hasActiveSmartFilters({ minHeight: 1 }), true);

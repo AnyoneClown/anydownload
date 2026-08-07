@@ -23,6 +23,8 @@
   const ZIP_END_RECORD_BYTES = 22;
   const ZIP_ENTRY_OVERHEAD_BYTES = 76;
   const JOB_ID_PATTERN = /^[a-z0-9-]{8,80}$/i;
+  const VIDEO_FILE_EXTENSION = /\.(?:m4v|mkv|mov|mp4|ogg|ogv|webm)$/i;
+  const VIDEO_FILE_FORMATS = new Set(["m4v", "mkv", "mov", "mp4", "ogg", "ogv", "webm"]);
   const textEncoder = new TextEncoder();
 
   class ArchiveCancelledError extends Error {
@@ -41,6 +43,46 @@
 
   function validateJobId(value) {
     return typeof value === "string" && JOB_ID_PATTERN.test(value) ? value : "";
+  }
+
+  function archiveItemLooksLikeVideo(item) {
+    if (!item || typeof item !== "object") {
+      return false;
+    }
+    if (String(item.mediaType || "").toLowerCase() === "video") {
+      return true;
+    }
+    const rawUrl = String(item.url || "");
+    if (/^data:video\//i.test(rawUrl)) {
+      return true;
+    }
+    const mimeType = String(item.mimeType || item.type || "")
+      .split(";", 1)[0]
+      .trim()
+      .toLowerCase();
+    if (/^video\//.test(mimeType) || [
+      "application/mp4",
+      "application/ogg",
+      "application/webm",
+      "application/x-matroska"
+    ].includes(mimeType)) {
+      return true;
+    }
+    if (VIDEO_FILE_EXTENSION.test(String(item.filename || ""))) {
+      return true;
+    }
+    try {
+      const parsed = new URL(rawUrl);
+      if (VIDEO_FILE_EXTENSION.test(parsed.pathname)) {
+        return true;
+      }
+      const format = (parsed.searchParams.get("format") || parsed.searchParams.get("fm") || "")
+        .toLowerCase()
+        .replace(/^video\//, "");
+      return VIDEO_FILE_FORMATS.has(format);
+    } catch (_error) {
+      return false;
+    }
   }
 
   function validateArchiveRequest(payload, now) {
@@ -80,6 +122,9 @@
     payload.items.forEach((item, index) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) {
         throw new Error(`Image ${index + 1} has an invalid archive entry.`);
+      }
+      if (archiveItemLooksLikeVideo(item)) {
+        throw new Error(`Image ${index + 1}: ZIP archives support images only.`);
       }
       const result = core.validateDownloadUrl(item.url);
       if (!result.ok) {

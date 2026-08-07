@@ -1,7 +1,7 @@
 (function attachImageDownloaderCore(root) {
   "use strict";
 
-  const DEFAULT_FOLDER = "Website images";
+  const DEFAULT_FOLDER = "Website media";
   const MAX_BATCH_SIZE = 1500;
   const MAX_BATCH_TOTAL_URL_LENGTH = 2000000;
   const MAX_HTTP_URL_LENGTH = 16384;
@@ -24,6 +24,16 @@
     "tiff",
     "webp"
   ]);
+  const VIDEO_EXTENSIONS = new Set([
+    "m4v",
+    "mkv",
+    "mov",
+    "mp4",
+    "ogg",
+    "ogv",
+    "webm"
+  ]);
+  const MEDIA_EXTENSIONS = new Set([...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS]);
   const MIME_EXTENSIONS = {
     "image/apng": "apng",
     "image/avif": "avif",
@@ -34,7 +44,19 @@
     "image/svg+xml": "svg",
     "image/tiff": "tiff",
     "image/vnd.microsoft.icon": "ico",
-    "image/webp": "webp"
+    "image/webp": "webp",
+    "application/mp4": "mp4",
+    "application/ogg": "ogv",
+    "application/webm": "webm",
+    "application/x-matroska": "mkv",
+    "video/m4v": "m4v",
+    "video/mp4": "mp4",
+    "video/ogg": "ogv",
+    "video/quicktime": "mov",
+    "video/webm": "webm",
+    "video/x-m4v": "m4v",
+    "video/x-matroska": "mkv",
+    "video/x-quicktime": "mov"
   };
 
   function normalizeText(value) {
@@ -126,40 +148,51 @@
     }
   }
 
-  function imageExtensionFromMime(mime) {
+  function mediaExtensionFromMime(mime) {
     return MIME_EXTENSIONS[String(mime || "").toLowerCase()] || "";
   }
 
-  function recognizedExtension(filename) {
+  function recognizedExtension(filename, mediaType) {
     const match = String(filename || "").match(/\.([a-z0-9]{2,5})$/i);
     if (!match) {
       return "";
     }
     const extension = match[1].toLowerCase();
-    return IMAGE_EXTENSIONS.has(extension) ? extension : "";
+    const extensions = mediaType === "image"
+      ? IMAGE_EXTENSIONS
+      : mediaType === "video"
+        ? VIDEO_EXTENSIONS
+        : MEDIA_EXTENSIONS;
+    return extensions.has(extension) ? extension : "";
   }
 
-  function extensionFromDataUrl(url) {
+  function extensionFromDataUrl(url, mediaType) {
     const match = String(url || "").match(/^data:([^;,]+)/i);
-    return match ? imageExtensionFromMime(match[1]) : "";
+    const extension = match ? mediaExtensionFromMime(match[1]) : "";
+    if (!extension) {
+      return "";
+    }
+    const extensions = mediaType === "video" ? VIDEO_EXTENSIONS : IMAGE_EXTENSIONS;
+    return extensions.has(extension) ? extension : "";
   }
 
-  function queryFilename(urlObject) {
+  function queryFilename(urlObject, mediaType) {
     const keys = ["filename", "file", "name", "download"];
     for (const key of keys) {
       const candidate = urlObject.searchParams.get(key);
-      if (candidate && recognizedExtension(candidate)) {
+      if (candidate && recognizedExtension(candidate, mediaType)) {
         return candidate;
       }
     }
     return "";
   }
 
-  function queryImageExtension(urlObject) {
+  function queryMediaExtension(urlObject, mediaType) {
     const format = (urlObject.searchParams.get("format") || urlObject.searchParams.get("fm") || "")
-      .toLowerCase()
-      .replace(/^image\//, "");
-    return IMAGE_EXTENSIONS.has(format) ? format : "";
+      .toLowerCase();
+    const extension = mediaExtensionFromMime(format) || format.replace(/^(?:image|video)\//, "");
+    const extensions = mediaType === "video" ? VIDEO_EXTENSIONS : IMAGE_EXTENSIONS;
+    return extensions.has(extension) ? extension : "";
   }
 
   function sanitizeFilename(value, fallback) {
@@ -180,36 +213,43 @@
     return truncateWithoutSplittingSurrogate(candidate, 100).replace(/[. ]+$/g, "") || "image";
   }
 
-  function filenameForImage(url, index) {
+  function filenameForMedia(url, index, mediaType) {
+    const normalizedMediaType = String(mediaType || "").toLowerCase() === "video"
+      ? "video"
+      : "image";
     const sequence = String(Number(index) + 1).padStart(4, "0");
-    const fallbackBase = `image-${sequence}`;
+    const fallbackBase = `${normalizedMediaType}-${sequence}`;
     let rawName = "";
     let inferredExtension = "";
 
     if (String(url).startsWith("data:")) {
-      inferredExtension = extensionFromDataUrl(url);
+      inferredExtension = extensionFromDataUrl(url, normalizedMediaType);
     } else {
       try {
         const parsed = new URL(url);
         const pathParts = parsed.pathname.split("/").filter(Boolean);
         rawName = safeDecode(pathParts[pathParts.length - 1] || "");
-        rawName = queryFilename(parsed) || rawName;
-        inferredExtension = queryImageExtension(parsed);
+        rawName = queryFilename(parsed, normalizedMediaType) || rawName;
+        inferredExtension = queryMediaExtension(parsed, normalizedMediaType);
       } catch (_error) {
         rawName = "";
       }
     }
 
     rawName = rawName || fallbackBase;
-    if (!recognizedExtension(rawName) && inferredExtension) {
+    if (!recognizedExtension(rawName, normalizedMediaType) && inferredExtension) {
       rawName = `${rawName}.${inferredExtension}`;
-    } else if (!recognizedExtension(rawName)) {
+    } else if (!recognizedExtension(rawName, normalizedMediaType)) {
       // Do not preserve an executable or otherwise misleading extension merely
-      // because a page placed that URL in an image-related attribute.
+      // because a page placed that URL in a media-related attribute.
       rawName = rawName.replace(/\./g, "_");
     }
 
     return sanitizeFilename(rawName, fallbackBase);
+  }
+
+  function filenameForImage(url, index) {
+    return filenameForMedia(url, index, "image");
   }
 
   function uniquifyFilename(filename, usedNames) {
@@ -242,23 +282,23 @@
     return candidate;
   }
 
-  function validateDownloadUrl(value) {
+  function validateMediaUrl(value) {
     if (typeof value !== "string" || !value) {
-      return { ok: false, error: "Missing image URL." };
+      return { ok: false, error: "Missing media URL." };
     }
 
     if (value.startsWith("data:")) {
-      if (!/^data:image\/[a-z0-9.+-]+[;,]/i.test(value)) {
-        return { ok: false, error: "Only image data URLs are allowed." };
+      if (!/^data:(?:image|video)\/[a-z0-9.+-]+[;,]/i.test(value)) {
+        return { ok: false, error: "Only image or video data URLs are allowed." };
       }
       if (value.length > MAX_DATA_URL_LENGTH) {
-        return { ok: false, error: "This embedded image is too large to pass safely." };
+        return { ok: false, error: "This embedded media is too large to pass safely." };
       }
       return { ok: true, value };
     }
 
     if (value.length > MAX_HTTP_URL_LENGTH) {
-      return { ok: false, error: "The image URL is too long." };
+      return { ok: false, error: "The media URL is too long." };
     }
 
     try {
@@ -269,9 +309,11 @@
       parsed.hash = "";
       return { ok: true, value: parsed.href };
     } catch (_error) {
-      return { ok: false, error: "Invalid image URL." };
+      return { ok: false, error: "Invalid media URL." };
     }
   }
+
+  const validateDownloadUrl = validateMediaUrl;
 
   function shortStableHash(value) {
     let first = 2166136261;
@@ -292,7 +334,7 @@
     if (!result.ok) {
       return "";
     }
-    const prefix = /^data:image\//i.test(result.value) ? "data" : "url";
+    const prefix = /^data:(?:image|video)\//i.test(result.value) ? "data" : "url";
     return `${prefix}:${result.value.length}:${shortStableHash(result.value)}`;
   }
 
@@ -319,12 +361,14 @@
     MAX_BATCH_TOTAL_URL_LENGTH,
     buildDownloadPath,
     filenameForImage,
+    filenameForMedia,
     ignoreKeyForUrl,
     sanitizeFilename,
     sanitizePathSegment,
     siteKeyForUrl,
     uniquifyFilename,
     validateDownloadUrl,
+    validateMediaUrl,
     validateFolderPath
   });
 
