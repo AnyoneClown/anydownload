@@ -1,8 +1,8 @@
 {
   "name": "page-image-downloader-firefox",
-  "version": "1.0.1",
+  "version": "1.3.0",
   "private": true,
   "scripts": {
-    "test": "node tests/run-tests.cjs"
+    "test": "node tests/run-tests.cjs && node tests/collector-tests.cjs && node tests/background-tests.cjs && node tests/dimension-probe-tests.cjs"
   }
 }

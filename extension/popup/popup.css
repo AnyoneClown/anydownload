@@ -81,7 +81,7 @@ h1 {
 
 .icon-button,
 .text-button,
-.row-download-button {
+.row-action-button {
   border: 0;
   background: transparent;
   cursor: pointer;
@@ -114,6 +114,13 @@ h1 {
   justify-content: space-between;
   align-items: center;
   gap: 10px;
+}
+
+.summary-row > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .section-heading label {
@@ -188,7 +195,9 @@ h1 {
 
 .selection-actions {
   display: flex;
+  flex: none;
   gap: 2px;
+  align-items: center;
 }
 
 .text-button {
@@ -196,6 +205,16 @@ h1 {
   border-radius: 6px;
   color: var(--muted);
   font-size: 11.5px;
+}
+
+.ignored-view-button.active {
+  color: light-dark(#6d28d9, #c4b5fd);
+  background: var(--surface-muted);
+  font-weight: 700;
+}
+
+.danger-button {
+  color: var(--danger);
 }
 
 .search-box input {
@@ -258,6 +277,11 @@ h1 {
   border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
+.image-row.ignored {
+  grid-template-columns: 56px minmax(0, 1fr) auto;
+  padding-left: 43px;
+}
+
 .image-row:hover {
   background: var(--surface-raised);
 }
@@ -274,6 +298,7 @@ h1 {
   place-items: center;
   width: 56px;
   height: 44px;
+  padding: 0;
   border: 1px solid var(--border);
   border-radius: 6px;
   background:
@@ -283,6 +308,14 @@ h1 {
     linear-gradient(-45deg, transparent 75%, #ccc 75%) -5px 0 / 10px 10px,
     #eee;
   overflow: hidden;
+  cursor: zoom-in;
+}
+
+.thumbnail-frame:hover,
+.thumbnail-frame:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  outline-offset: 1px;
 }
 
 .thumbnail-frame img {
@@ -325,18 +358,31 @@ h1 {
   font-size: 10px;
 }
 
-.row-download-button {
+.row-actions {
+  display: grid;
+  gap: 4px;
+}
+
+.row-action-button {
   padding: 6px 8px;
   border: 1px solid var(--border);
   border-radius: 7px;
-  color: var(--accent);
   background: var(--surface);
   font-weight: 650;
   font-size: 11px;
 }
 
-.row-download-button:hover,
-.row-download-button:focus-visible {
+.row-action-button.download,
+.row-action-button.restore {
+  color: var(--accent);
+}
+
+.row-action-button.ignore {
+  color: var(--muted);
+}
+
+.row-action-button:hover,
+.row-action-button:focus-visible {
   border-color: var(--accent);
   background: var(--surface-muted);
 }

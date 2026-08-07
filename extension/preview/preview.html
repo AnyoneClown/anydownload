@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Image preview</title>
+    <link rel="stylesheet" href="preview.css">
+  </head>
+  <body>
+    <header class="preview-header">
+      <div class="title-copy">
+        <strong id="image-name">Image preview</strong>
+        <span id="image-meta">Loading…</span>
+      </div>
+      <a id="original-link" class="header-button" href="#" target="_blank" rel="noopener noreferrer" hidden>Open original</a>
+    </header>
+
+    <main id="preview-stage" class="preview-stage">
+      <button id="image-button" class="image-button" type="button" aria-label="Toggle actual image size" aria-pressed="false" disabled>
+        <img id="preview-image" alt="" referrerpolicy="no-referrer">
+      </button>
+      <div id="loading-message" class="state-message">Loading image…</div>
+      <div id="error-message" class="state-message error" role="alert" hidden></div>
+    </main>
+
+    <footer class="preview-footer">
+      Click the image, or focus it and press Enter or Space, to switch between fit-to-window and actual size.
+    </footer>
+
+    <script src="../shared/core.js"></script>
+    <script src="preview.js"></script>
+  </body>
+</html>

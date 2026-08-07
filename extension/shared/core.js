@@ -237,6 +237,38 @@
     }
   }
 
+  function shortStableHash(value) {
+    let first = 2166136261;
+    let second = 2654435761;
+    const text = String(value || "");
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.charCodeAt(index);
+      first ^= code;
+      first = Math.imul(first, 16777619);
+      second ^= code + index;
+      second = Math.imul(second, 2246822519);
+    }
+    return `${(first >>> 0).toString(16).padStart(8, "0")}${(second >>> 0).toString(16).padStart(8, "0")}`;
+  }
+
+  function ignoreKeyForUrl(value) {
+    const result = validateDownloadUrl(value);
+    if (!result.ok) {
+      return "";
+    }
+    const prefix = /^data:image\//i.test(result.value) ? "data" : "url";
+    return `${prefix}:${result.value.length}:${shortStableHash(result.value)}`;
+  }
+
+  function siteKeyForUrl(value) {
+    try {
+      const parsed = new URL(String(value || ""));
+      return ["http:", "https:"].includes(parsed.protocol) ? parsed.origin : "";
+    } catch (_error) {
+      return "";
+    }
+  }
+
   function buildDownloadPath(folder, filename) {
     const folderResult = validateFolderPath(folder);
     if (!folderResult.ok) {
@@ -251,8 +283,10 @@
     MAX_BATCH_TOTAL_URL_LENGTH,
     buildDownloadPath,
     filenameForImage,
+    ignoreKeyForUrl,
     sanitizeFilename,
     sanitizePathSegment,
+    siteKeyForUrl,
     uniquifyFilename,
     validateDownloadUrl,
     validateFolderPath

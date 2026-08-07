@@ -40,7 +40,9 @@
       <section class="controls" aria-label="Image controls">
         <div class="summary-row">
           <strong id="summary-label">0 images</strong>
-          <div class="selection-actions">
+          <div id="selection-actions" class="selection-actions">
+            <button id="ignored-button" class="text-button ignored-view-button" type="button" aria-pressed="false" disabled>Ignored (0)</button>
+            <button id="clear-ignored-button" class="text-button danger-button" type="button" hidden>Restore all</button>
             <button id="select-all-button" class="text-button" type="button">Select all</button>
             <button id="select-none-button" class="text-button" type="button">Clear</button>
           </div>
@@ -52,7 +54,7 @@
       </section>
 
       <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
-      <main id="image-list" class="image-list" aria-label="Images found on this page"></main>
+      <main id="image-list" class="image-list" role="list" aria-label="Images found on this page"></main>
 
       <footer class="action-bar">
         <div>
@@ -64,6 +66,7 @@
     </div>
 
     <script src="../shared/core.js"></script>
+    <script src="../shared/collector.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

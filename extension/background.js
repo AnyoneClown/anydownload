@@ -2,8 +2,291 @@
   "use strict";
 
   const Core = globalThis.ImageDownloaderCore;
+  const collectImagesFromPage = globalThis.ImageDownloaderCollector;
   const MAX_CONCURRENCY = 5;
+  const MAX_IGNORED_PER_SITE = 500;
+  const MAX_IGNORED_RULES = 5000;
+  const IGNORE_STORAGE_PREFIX = "ignoredImage:";
+  const MENU_IDS = Object.freeze({
+    root: "anydownload-image-actions",
+    download: "anydownload-download-image",
+    preview: "anydownload-preview-image",
+    ignore: "anydownload-ignore-image",
+    separator: "anydownload-image-separator",
+    open: "anydownload-open-popup"
+  });
   const retainedObjectUrls = new Map();
+  const badgeTimers = new Map();
+
+  function acknowledgeMenuCreation() {
+    // Reading lastError prevents duplicate-ID errors from becoming uncaught when
+    // a non-persistent background page wakes and the persisted menus still exist.
+    void browser.runtime.lastError;
+  }
+
+  function createContextMenus() {
+    if (!browser.menus || typeof browser.menus.create !== "function") {
+      return;
+    }
+    const common = { contexts: ["image"] };
+    const entries = [
+      { id: MENU_IDS.root, title: "AnyDownload", ...common },
+      {
+        id: MENU_IDS.download,
+        parentId: MENU_IDS.root,
+        title: "Download full-size image",
+        ...common
+      },
+      {
+        id: MENU_IDS.preview,
+        parentId: MENU_IDS.root,
+        title: "Preview full-size image",
+        ...common
+      },
+      {
+        id: MENU_IDS.ignore,
+        parentId: MENU_IDS.root,
+        title: "Ignore image on this site",
+        ...common
+      },
+      {
+        id: MENU_IDS.separator,
+        parentId: MENU_IDS.root,
+        type: "separator",
+        ...common
+      },
+      {
+        id: MENU_IDS.open,
+        parentId: MENU_IDS.root,
+        title: "Open image list…",
+        ...common
+      }
+    ];
+    for (const entry of entries) {
+      browser.menus.create(entry, acknowledgeMenuCreation);
+    }
+  }
+
+  async function rebuildContextMenus() {
+    if (!browser.menus || typeof browser.menus.removeAll !== "function") {
+      return;
+    }
+    await browser.menus.removeAll();
+    createContextMenus();
+  }
+
+  function showActionFeedback(tabId, success) {
+    if (!Number.isInteger(tabId) || !browser.action) {
+      return;
+    }
+    const previousTimer = badgeTimers.get(tabId);
+    if (previousTimer) {
+      clearTimeout(previousTimer);
+    }
+    Promise.all([
+      browser.action.setBadgeBackgroundColor({
+        tabId,
+        color: success ? "#087443" : "#b42318"
+      }),
+      browser.action.setBadgeText({ tabId, text: success ? "✓" : "!" })
+    ]).catch(() => undefined);
+    const timer = setTimeout(() => {
+      badgeTimers.delete(tabId);
+      browser.action.setBadgeText({ tabId, text: "" }).catch(() => undefined);
+    }, 2500);
+    badgeTimers.set(tabId, timer);
+  }
+
+  function normalizedImageUrl(value) {
+    const result = Core.validateDownloadUrl(value);
+    return result.ok ? result.value : "";
+  }
+
+  function safeContextImage(image) {
+    const url = normalizedImageUrl(image && image.url);
+    if (!url) {
+      return null;
+    }
+    return {
+      url,
+      previewUrl: normalizedImageUrl(image && image.previewUrl),
+      alt: String(image && image.alt || "").slice(0, 500),
+      width: Math.max(0, Number(image && image.width) || 0),
+      height: Math.max(0, Number(image && image.height) || 0),
+      kinds: Array.from(image && image.kinds || [])
+        .slice(0, 8)
+        .map((kind) => String(kind).slice(0, 50))
+    };
+  }
+
+  async function resolveContextImage(info, tab) {
+    const sourceUrl = normalizedImageUrl(info && info.srcUrl);
+    if (tab && Number.isInteger(tab.id) && typeof collectImagesFromPage === "function") {
+      const target = { tabId: tab.id };
+      if (Number.isInteger(info && info.frameId)) {
+        target.frameIds = [info.frameId];
+      }
+      try {
+        const injectionResults = await browser.scripting.executeScript({
+          target,
+          func: collectImagesFromPage,
+          args: [{
+            includeBackgrounds: false,
+            maxImages: Core.MAX_BATCH_SIZE,
+            maxElements: 10000,
+            maxDataUrlLength: 500000,
+            maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH,
+            targetElementId: Number.isInteger(info && info.targetElementId)
+              ? info.targetElementId
+              : null
+          }]
+        });
+        const discovered = injectionResults
+          .flatMap((injection) => injection && injection.result && Array.isArray(injection.result.images)
+            ? injection.result.images
+            : [])
+          .map(safeContextImage)
+          .filter(Boolean);
+        const exact = discovered.find((image) =>
+          sourceUrl && (image.url === sourceUrl || image.previewUrl === sourceUrl)
+        );
+        if (exact) {
+          return exact;
+        }
+        if (Number.isInteger(info && info.targetElementId) && discovered.length === 1) {
+          return discovered[0];
+        }
+      } catch (_error) {
+        // Fall back to Firefox's srcUrl when a protected page/frame blocks injection.
+      }
+    }
+    if (!sourceUrl) {
+      throw new Error("Firefox did not expose a downloadable URL for this image.");
+    }
+    return {
+      url: sourceUrl,
+      previewUrl: "",
+      alt: "",
+      width: 0,
+      height: 0,
+      kinds: ["Context image"]
+    };
+  }
+
+  function createPreviewId() {
+    if (crypto.randomUUID) {
+      return crypto.randomUUID();
+    }
+    const random = crypto.getRandomValues(new Uint32Array(2));
+    return `${Date.now().toString(36)}-${random[0].toString(36)}-${random[1].toString(36)}`;
+  }
+
+  async function openContextPreview(image, tab) {
+    const id = createPreviewId();
+    const key = `imagePreview:${id}`;
+    await browser.storage.session.set({
+      [key]: {
+        url: image.url,
+        name: Core.filenameForImage(image.url, 0),
+        alt: image.alt,
+        createdAt: Date.now()
+      }
+    });
+    const createProperties = {
+      active: true,
+      url: browser.runtime.getURL(`preview/preview.html?id=${encodeURIComponent(id)}`)
+    };
+    if (tab && Number.isInteger(tab.windowId)) {
+      createProperties.windowId = tab.windowId;
+    }
+    try {
+      await browser.tabs.create(createProperties);
+    } catch (error) {
+      await browser.storage.session.remove(key).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  function ignoreStoragePrefix(siteKey) {
+    return `${IGNORE_STORAGE_PREFIX}${encodeURIComponent(siteKey)}:`;
+  }
+
+  async function storeContextIgnoreRule(image, info, tab) {
+    const siteKey = Core.siteKeyForUrl(
+      info && (info.pageUrl || info.frameUrl) || tab && tab.url || ""
+    );
+    const imageKey = Core.ignoreKeyForUrl(image.url);
+    if (!siteKey || !imageKey) {
+      throw new Error("This image cannot be ignored on this page.");
+    }
+    const area = tab && tab.incognito ? browser.storage.session : browser.storage.local;
+    const storageKey = `${ignoreStoragePrefix(siteKey)}${imageKey}`;
+    await area.set({ [storageKey]: Date.now() });
+    const stored = await area.get(null);
+    const sitePrefix = ignoreStoragePrefix(siteKey);
+    const siteEntries = Object.entries(stored)
+      .filter(([key]) => key.startsWith(sitePrefix))
+      .sort((left, right) => (Number(left[1]) || 0) - (Number(right[1]) || 0));
+    const siteOverflow = siteEntries
+      .slice(0, Math.max(0, siteEntries.length - MAX_IGNORED_PER_SITE))
+      .map(([key]) => key);
+    if (siteOverflow.length) {
+      await area.remove(siteOverflow);
+      for (const key of siteOverflow) {
+        delete stored[key];
+      }
+    }
+    const allEntries = Object.entries(stored)
+      .filter(([key]) => key.startsWith(IGNORE_STORAGE_PREFIX))
+      .sort((left, right) => (Number(left[1]) || 0) - (Number(right[1]) || 0));
+    const globalOverflow = allEntries
+      .slice(0, Math.max(0, allEntries.length - MAX_IGNORED_RULES))
+      .map(([key]) => key);
+    if (globalOverflow.length) {
+      await area.remove(globalOverflow);
+    }
+  }
+
+  function defaultFolderForPage(info, tab) {
+    let hostname = "page";
+    try {
+      hostname = new URL(info && info.pageUrl || tab && tab.url || "").hostname || hostname;
+    } catch (_error) {
+      // The fallback segment is safe for browser-owned or otherwise unusual pages.
+    }
+    return `${Core.DEFAULT_FOLDER}/${Core.sanitizePathSegment(hostname, "page")}`;
+  }
+
+  async function downloadContextImage(image, info, tab) {
+    const stored = await browser.storage.local.get(["destinationFolder", "askForSingle"]);
+    const storedFolder = Core.validateFolderPath(stored.destinationFolder);
+    const folder = storedFolder.ok ? storedFolder.value : defaultFolderForPage(info, tab);
+    const result = await startBatch(validateBatch({
+      type: "DOWNLOAD_BATCH",
+      folder,
+      saveAs: Boolean(stored.askForSingle),
+      incognito: Boolean(tab && tab.incognito),
+      items: [{ url: image.url }]
+    }));
+    if (!result.ok) {
+      const firstError = result.errors && result.errors[0] && result.errors[0].error;
+      throw new Error(firstError || "Firefox could not start this download.");
+    }
+  }
+
+  async function handleImageMenuClick(info, tab) {
+    const image = await resolveContextImage(info, tab);
+    if (info.menuItemId === MENU_IDS.download) {
+      await downloadContextImage(image, info, tab);
+    } else if (info.menuItemId === MENU_IDS.preview) {
+      await openContextPreview(image, tab);
+    } else if (info.menuItemId === MENU_IDS.ignore) {
+      await storeContextIgnoreRule(image, info, tab);
+    } else {
+      return;
+    }
+    showActionFeedback(tab && tab.id, true);
+  }
 
   function finishRetainedDownload(downloadId) {
     const retained = retainedObjectUrls.get(downloadId);
@@ -180,6 +463,37 @@
       folder: batch.folder,
       errors: failures.slice(0, 10)
     };
+  }
+
+  browser.runtime.onInstalled.addListener(() =>
+    rebuildContextMenus().catch((error) => {
+      console.error("AnyDownload could not rebuild its image context menu.", error);
+    })
+  );
+
+  if (browser.menus && browser.menus.onClicked) {
+    browser.menus.onClicked.addListener((info, tab) => {
+      if (info.menuItemId === MENU_IDS.open) {
+        const options = tab && Number.isInteger(tab.windowId) ? { windowId: tab.windowId } : undefined;
+        try {
+          return browser.action.openPopup(options).catch((error) => {
+            console.error("AnyDownload could not open its popup.", error);
+            showActionFeedback(tab && tab.id, false);
+          });
+        } catch (error) {
+          console.error("AnyDownload could not open its popup.", error);
+          showActionFeedback(tab && tab.id, false);
+          return undefined;
+        }
+      }
+      if (![MENU_IDS.download, MENU_IDS.preview, MENU_IDS.ignore].includes(info.menuItemId)) {
+        return undefined;
+      }
+      return handleImageMenuClick(info, tab).catch((error) => {
+        console.error("AnyDownload image action failed.", error);
+        showActionFeedback(tab && tab.id, false);
+      });
+    });
   }
 
   browser.runtime.onMessage.addListener((message) => {
