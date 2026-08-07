@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Page Image Downloader</title>
+    <title>AnyDownload — Page images</title>
     <link rel="stylesheet" href="popup.css">
   </head>
   <body>
@@ -14,27 +14,34 @@
           <h1>Page images</h1>
           <p id="page-label">Scanning the current page…</p>
         </div>
-        <button id="rescan-button" class="icon-button" type="button" title="Scan the page again" aria-label="Scan the page again">↻</button>
+        <div class="header-actions">
+          <button id="open-window-button" class="open-window-button" type="button" title="Open in a resizable window" aria-label="Open in a resizable window" disabled>
+            <span aria-hidden="true">↗</span>
+            <span class="button-label">Open window</span>
+          </button>
+          <button id="rescan-button" class="icon-button" type="button" title="Scan the page again" aria-label="Scan the page again">↻</button>
+        </div>
       </header>
 
       <section class="folder-panel" aria-labelledby="folder-label">
-        <div class="section-heading">
-          <label id="folder-label" for="folder-input">Destination folder</label>
-          <span>inside Firefox Downloads</span>
+        <div class="folder-toolbar">
+          <label id="folder-label" for="folder-input">Destination folder<span class="visually-hidden"> inside Firefox Downloads</span></label>
+          <div class="folder-options">
+            <label class="option-row" title="Show a Save As dialog when downloading exactly one image">
+              <input id="ask-single-input" type="checkbox">
+              <span>Save As for one image</span>
+            </label>
+            <label class="option-row" title="Include CSS background images on the next scan">
+              <input id="backgrounds-input" type="checkbox" checked>
+              <span>CSS backgrounds</span>
+            </label>
+          </div>
         </div>
         <div class="folder-input-row">
           <span aria-hidden="true">Downloads /</span>
-          <input id="folder-input" type="text" value="Website images" maxlength="260" autocomplete="off" spellcheck="false">
+          <input id="folder-input" type="text" value="Website images" maxlength="260" autocomplete="off" spellcheck="false" aria-describedby="folder-help">
         </div>
-        <p id="folder-help" class="field-help">Nested folders are allowed, for example: Website images/example.com</p>
-        <label class="option-row">
-          <input id="ask-single-input" type="checkbox">
-          <span>Show a Save As dialog when downloading exactly one image</span>
-        </label>
-        <label class="option-row">
-          <input id="backgrounds-input" type="checkbox" checked>
-          <span>Include CSS background images on the next scan</span>
-        </label>
+        <p id="folder-help" class="field-help" role="status" aria-live="polite" hidden></p>
       </section>
 
       <section class="controls" aria-label="Image controls">

@@ -2,20 +2,20 @@
 
 This repository contains a working Manifest V3 Firefox extension. It scans the **currently loaded page**, prefers the best full-size source exposed for each image, lets you preview or ignore unwanted images, and downloads one image or a selected batch to a named folder below Firefox's configured Downloads directory.
 
-The manifest targets Firefox desktop 140+ and Firefox for Android 142+. Firefox for Android does not support the optional Save As dialog or extension context menus, so those controls are desktop-only where applicable.
+The manifest targets Firefox desktop 140+ and Firefox for Android 142+. Firefox desktop first opens a compact toolbar popup; its **Open window** button moves the same image manager into a separate resizable window. Firefox for Android falls back to an extension tab and does not support the optional Save As dialog or extension context menus.
 
 ## Try it in two minutes
 
 1. Open Firefox and enter `about:debugging` in the address bar.
 2. Choose **This Firefox** → **Load Temporary Add-on**.
 3. Select `extension/manifest.json` from this project.
-4. Open a normal website, select the extension's toolbar button, and wait for the image list.
+4. Open a normal website and select the extension's toolbar button. Use the compact popup directly, or choose **Open window** and drag any edge or corner of the separate manager window to make it larger.
 5. Click a thumbnail to preview it in a full browser tab, choose **Ignore** to hide an unwanted logo, or right-click a page image and open the **AnyDownload** submenu.
 6. Enter a relative destination such as `Website images/example.com`, select the images you want, and choose **Download selected**.
 
 The temporary extension is removed when Firefox restarts. Use the **Reload** button on `about:debugging` after changing source files. Mozilla documents this workflow in [Temporary installation in Firefox](https://extensionworkshop.com/documentation/develop/temporary-installation-in-firefox/).
 
-If you are upgrading an existing temporary installation, reload the add-on from `about:debugging` before reopening the toolbar popup. Version 1.3.0 adds image context-menu actions and lazy full-size dimension detection; version 1.2.0 added gallery-original and responsive-source resolution; version 1.1.0 added remembered per-site ignore rules and full-tab previews.
+If you are upgrading an existing temporary installation, reload the add-on from `about:debugging` before clicking its toolbar button again. Version 1.4.1 stabilizes the compact popup sizing and reduces the destination panel height; version 1.4.0 added an optional resizable manager window while keeping the compact toolbar popup; version 1.3.0 added image context-menu actions and lazy full-size dimension detection; version 1.2.0 added gallery-original and responsive-source resolution; version 1.1.0 added remembered per-site ignore rules and full-tab previews.
 
 ## Ignore and preview images
 
@@ -24,13 +24,13 @@ If you are upgrading an existing temporary installation, reload the add-on from 
 - Choose **Restore all** in the ignored view to remove every stored rule for the current website, including rules for images that are no longer on the current page.
 - Click any thumbnail—including one in the ignored view—to open a larger preview in a new Firefox tab. Click the preview to toggle between fit-to-window and actual size.
 
-Ignore rules are scoped to the top-level website origin and capped at 500 per website and 5,000 overall in each storage context; the oldest rules are pruned if that global limit is reached. Normal-window rules are remembered in local extension storage; private-window rules stay only in Firefox's in-memory extension session storage, and private folder edits are not written to persistent settings. Each rule is stored independently, and open popups synchronize rule changes through Firefox storage events. Preview details use in-memory session storage, are removed when the preview reads them, and are rejected after five minutes.
+Ignore rules are scoped to the top-level website origin and capped at 500 per website and 5,000 overall in each storage context; the oldest rules are pruned if that global limit is reached. Normal-window rules are remembered in local extension storage; private-window rules stay only in Firefox's in-memory extension session storage, and private folder edits are not written to persistent settings. Each rule is stored independently, and open manager windows synchronize rule changes through Firefox storage events. Preview details use in-memory session storage, are removed when the preview reads them, and are rejected after five minutes.
 
 ## Right-click actions and image dimensions
 
-On Firefox desktop, right-click an image on a normal webpage and open the **AnyDownload** submenu. It provides actions to download the resolved full-size image, preview it in a new tab, ignore it on the current website, or open the complete image-list popup. The context-menu click grants the existing temporary `activeTab` access, so resolving a gallery thumbnail does not require permanent access to every website.
+On Firefox desktop, right-click an image on a normal webpage and open the **AnyDownload** submenu. It provides actions to download the resolved full-size image, preview it in a new tab, ignore it on the current website, or open the complete image-manager window. The context-menu click grants the existing temporary `activeTab` access, so resolving a gallery thumbnail does not require permanent access to every website.
 
-The collector first uses trustworthy dimensions exposed beside an original URL, such as `data-image-width` and `data-image-height`. If an original has no dimension metadata, the popup keeps showing the inexpensive thumbnail and probes the full-size image only when that row becomes visible. At most three dimension probes run concurrently. This avoids loading every original in a large gallery merely because the popup opened.
+The collector first uses trustworthy dimensions exposed beside an original URL, such as `data-image-width` and `data-image-height`. If an original has no dimension metadata, the manager keeps showing the inexpensive thumbnail and probes the full-size image only when that row becomes visible. At most three dimension probes run concurrently. This avoids loading every original in a large gallery merely because the manager opened.
 
 ## The folder limitation that matters
 
@@ -44,7 +44,7 @@ Actual destination: <Firefox Downloads>/Website images/example.com/
 A regular WebExtension cannot choose `/Users/you/Pictures` once and then silently write hundreds of files there. You have three practical options:
 
 1. In Firefox **Settings → General → Files and Applications → Downloads**, make your preferred root directory the default; this extension then creates a subfolder below it.
-2. Enable **Show a Save As dialog when downloading exactly one image** for one-off downloads.
+2. Enable **Save As for one image** for one-off downloads.
 3. If arbitrary bulk destinations are essential, add a separately installed [native-messaging](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Native_messaging) application. The native helper performs filesystem writes; the extension sends it validated URLs and paths. This requires an OS-specific installer and a native-host manifest, so it is intentionally outside this browser-only version.
 
 The exact `filename` and `saveAs` rules are in Mozilla's [`downloads.download()` documentation](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/downloads/download).
@@ -52,8 +52,10 @@ The exact `filename` and `saveAs` rules are in Mozilla's [`downloads.download()`
 ## How the implementation works
 
 ```text
-Toolbar popup
-  └─ browser.scripting.executeScript() using temporary activeTab access
+Toolbar action
+  └─ compact popup scans the current source tab
+       └─ Open window asks the background to open/reuse a resizable manager
+       └─ browser.scripting.executeScript() using temporary activeTab access
        └─ collector runs inside the current page and returns image metadata
   └─ thumbnail click stores a one-time payload and opens a packaged preview tab
   └─ Ignore stores a site-scoped image key and removes it from selection
@@ -61,10 +63,10 @@ Toolbar popup
        └─ Firefox background event page sanitizes names and calls downloads.download()
 ```
 
-- `extension/manifest.json` declares the toolbar popup and five permissions: `activeTab`, `scripting`, `downloads`, `menus`, and `storage`.
+- `extension/manifest.json` declares `popup/popup.html` as the toolbar popup and five permissions: `activeTab`, `scripting`, `downloads`, `menus`, and `storage`. The same packaged page switches to responsive manager mode when the popup's **Open window** button asks the background to open it in a separate window.
 - `extension/shared/collector.js` contains the self-contained page collector injected by `extension/popup/popup.js`. For each `<img>`, it prefers explicit full/original attributes (including those on a nearby gallery link), a clearly linked image file, or the largest candidate in the active `srcset`/`<picture>` source before falling back to lazy and displayed sources. It also detects SVG `<image>` resources, video posters, image inputs, CSS image URLs, open shadow roots, and frames Firefox permits it to inspect.
-- When a gallery exposes both a thumbnail and an original, the popup renders the inexpensive thumbnail while **Preview**, **Save**, and bulk download use the original URL. Superseded thumbnail variants are not added as separate selected rows.
-- `extension/background.js` registers the native **AnyDownload** image submenu. It resolves the exact context-clicked element through Firefox's target-element ID, then reuses the same validated preview, ignore, and download paths as the popup.
+- When a gallery exposes both a thumbnail and an original, the manager renders the inexpensive thumbnail while **Preview**, **Save**, and bulk download use the original URL. Superseded thumbnail variants are not added as separate selected rows.
+- `extension/background.js` registers the native **AnyDownload** image submenu. It resolves the exact context-clicked element through Firefox's target-element ID, then reuses the same validated preview, ignore, and download paths as the manager.
 - `extension/preview/preview.html` is a packaged extension page used for full-tab previews, including embedded `data:image` resources that Firefox does not allow as direct tab URLs.
 - `extension/shared/core.js` validates relative folder paths, rejects unsafe URL schemes, creates filenames, strips traversal/illegal characters, handles Windows-reserved names, and resolves duplicate names.
 - `extension/background.js` validates the request again, keeps at most five download-start API calls in flight, and uses `conflictAction: "uniquify"` so existing files are not overwritten. Firefox controls the number of network transfers after accepting them.
@@ -111,7 +113,7 @@ The manifest declares `data_collection_permissions.required: ["none"]` because t
 - With `activeTab`, the top page and permitted/same-origin frames are scanned. Cross-origin frames may be omitted unless you add broader host permissions.
 - Page-created `blob:` URLs are skipped with a warning because Firefox does not let an extension background page download a Blob owned by the website. Ordinary HTTP(S) URLs and embedded `data:image` resources are supported.
 - Canvas pixels, inline SVG markup, closed shadow roots, browser-internal pages, the built-in PDF viewer, and protected Mozilla pages are not downloadable through this scanner.
-- A safety limit caps a scan/batch at 1,500 images and computed-style inspection at 10,000 elements. The popup renders at most 350 matching rows at once, while bulk selection still includes all discovered records.
+- A safety limit caps a scan/batch at 1,500 images and computed-style inspection at 10,000 elements. The manager renders at most 350 matching rows at once, while bulk selection still includes all discovered records.
 - Private-window downloads retain their private browsing context when the user has allowed the extension in private windows. Firefox Container-specific cookie stores are not requested in this minimal-permission version, so an authenticated image that exists only in a non-default Container may fail.
 - Full-tab previews make a new image request from a packaged extension page. A hotlink-protected, CORP-restricted, or Container-only image may fail there even when its popup thumbnail works; use **Open original** in the preview tab as the fallback.
 - Full-size dimension detection also makes a request when an unknown-size row becomes visible. If the server blocks extension-page image requests, the row reports that the full size is unavailable instead of displaying the thumbnail's dimensions as if they belonged to the original.
@@ -125,15 +127,17 @@ The manifest declares `data_collection_permissions.required: ["none"]` because t
 - Download the same batch twice and confirm Firefox adds unique suffixes instead of overwriting.
 - Try folder input such as `Summer/2026`, `../escape`, `/absolute/path`, `CON`, emoji, and trailing dots.
 - Test a logged-in image, an expired URL, offline mode, and a server returning 403/404.
-- Start a large batch and close the popup; downloads already handed to Firefox should continue.
-- Try `about:`, the built-in PDF viewer, and addons.mozilla.org; the popup should show a friendly restricted-page error.
+- Start a large batch and close the manager window; downloads already handed to Firefox should continue.
+- Try `about:`, the built-in PDF viewer, and addons.mozilla.org; the manager should show a friendly restricted-page error.
 - Put HTML-looking text in an image's `alt` attribute and verify it remains inert text.
-- Ignore a logo, reopen the popup on the same website, and confirm it stays hidden and unselected. Restore it from **Ignored (N)** and confirm it remains unselected.
+- Ignore a logo, reopen the manager on the same website, and confirm it stays hidden and unselected. Restore it from **Ignored (N)** and confirm it remains unselected.
 - Confirm that ignoring `logo.png?v=1` does not hide `logo.png?v=2` or a query-driven sibling such as `render?id=2`.
 - In a private window, ignore an image, restart Firefox, and confirm the private rule was not retained.
 - Click HTTP(S) and embedded-data thumbnails, verify each opens in a new preview tab, and toggle fit-to-window/actual size.
 - Right-click a gallery thumbnail and verify **AnyDownload → Download full-size image**, **Preview full-size image**, **Ignore image on this site**, and **Open image list…** all act on the original rather than the thumbnail.
 - Confirm a full-size row changes from **checking full size…** to its actual pixel dimensions when it becomes visible, while off-screen rows do not start eager probes.
+- Open the compact toolbar popup, choose **Open window**, resize the manager larger and smaller, then repeat from the toolbar popup and confirm the same manager window is focused with its current size while the clicked source tab is rescanned.
+- In the compact popup, test a long page title, folder path, image URL, and filename; header controls, row actions, and **Download selected** must remain inside the popup without horizontal scrolling.
 
 ## Suggested next features
 

@@ -187,8 +187,21 @@
     };
   }
 
+  function sourceTabIdFromUrl(urlValue) {
+    try {
+      const value = new URL(String(urlValue || "")).searchParams.get("sourceTabId");
+      if (!/^\d+$/.test(value || "")) {
+        return null;
+      }
+      const tabId = Number(value);
+      return Number.isSafeInteger(tabId) ? tabId : null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
   if (typeof module === "object" && module && module.exports) {
-    module.exports = { createDimensionProbeScheduler };
+    module.exports = { createDimensionProbeScheduler, sourceTabIdFromUrl };
     return;
   }
 
@@ -205,6 +218,12 @@
   const MAX_IGNORED_PER_SITE = 500;
   const MAX_IGNORED_RULES = 5000;
   const IGNORE_STORAGE_PREFIX = "ignoredImage:";
+  const launchSourceTabId = sourceTabIdFromUrl(globalScope.location && globalScope.location.href);
+  const managerWindowMode = Number.isInteger(launchSourceTabId);
+
+  if (managerWindowMode) {
+    document.documentElement.classList.add("manager-window");
+  }
 
   const state = {
     images: [],
@@ -216,7 +235,8 @@
     ignoredKeys: new Set(),
     showIgnored: false,
     siteKey: "",
-    windowId: null
+    windowId: null,
+    sourceTabId: launchSourceTabId
   };
 
   const elements = {};
@@ -259,6 +279,7 @@
       "ignored-button",
       "image-list",
       "notice",
+      "open-window-button",
       "page-label",
       "rescan-button",
       "select-all-button",
@@ -282,6 +303,46 @@
       return new URL(value).hostname || "this page";
     } catch (_error) {
       return "this page";
+    }
+  }
+
+  async function sourceTabForScan() {
+    if (Number.isInteger(state.sourceTabId)) {
+      return browser.tabs.get(state.sourceTabId);
+    }
+    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+    return tabs[0] || null;
+  }
+
+  function updateOpenWindowButton() {
+    const button = elements["open-window-button"];
+    if (!button) {
+      return;
+    }
+    button.hidden = managerWindowMode;
+    button.disabled = managerWindowMode || state.busy || !Number.isInteger(state.sourceTabId);
+  }
+
+  async function openManagerWindow() {
+    if (managerWindowMode || !Number.isInteger(state.sourceTabId)) {
+      setNotice("Wait for the current page scan before opening the large window.", "error");
+      return;
+    }
+
+    const button = elements["open-window-button"];
+    button.disabled = true;
+    try {
+      const result = await browser.runtime.sendMessage({
+        type: "OPEN_MANAGER_WINDOW",
+        sourceTabId: state.sourceTabId
+      });
+      if (!result || !result.ok) {
+        throw new Error((result && result.error) || "Firefox could not open the large window.");
+      }
+      globalScope.close();
+    } catch (error) {
+      setNotice(error && error.message ? error.message : String(error), "error");
+      button.disabled = false;
     }
   }
 
@@ -673,11 +734,15 @@
     if (!result.ok) {
       elements["folder-help"].textContent = result.error;
       elements["folder-help"].classList.add("error");
+      elements["folder-help"].hidden = false;
+      elements["folder-input"].setAttribute("aria-invalid", "true");
       return result;
     }
 
-    elements["folder-help"].textContent = `Will save to Downloads/${result.value}`;
+    elements["folder-help"].textContent = "";
     elements["folder-help"].classList.remove("error");
+    elements["folder-help"].hidden = true;
+    elements["folder-input"].removeAttribute("aria-invalid");
     return result;
   }
 
@@ -1109,6 +1174,7 @@
 
   async function scanPage() {
     state.busy = true;
+    updateOpenWindowButton();
     state.images = [];
     state.selected.clear();
     state.showIgnored = false;
@@ -1120,11 +1186,11 @@
     updateSummary();
 
     try {
-      const tabs = await browser.tabs.query({ active: true, currentWindow: true });
-      const tab = tabs[0];
+      const tab = await sourceTabForScan();
       if (!tab || typeof tab.id !== "number") {
         throw new Error("No active page was found.");
       }
+      state.sourceTabId = tab.id;
       state.incognito = Boolean(tab.incognito);
       state.windowId = Number.isInteger(tab.windowId) ? tab.windowId : null;
 
@@ -1193,12 +1259,13 @@
       state.windowId = null;
       elements["page-label"].textContent = "This page cannot be scanned";
       const message = error && error.message ? error.message : String(error);
-      setNotice(
-        `Firefox blocks scanning on internal pages, its PDF viewer, and protected Mozilla pages. Open a normal website and try again. (${message})`,
-        "error"
-      );
+      const guidance = Number.isInteger(state.sourceTabId)
+        ? "The source tab is unavailable, navigated, or no longer grants temporary access. Return to the page and click AnyDownload again."
+        : "Firefox blocks scanning on internal pages, its PDF viewer, and protected Mozilla pages. Open a normal website and try again.";
+      setNotice(`${guidance} (${message})`, "error");
     } finally {
       state.busy = false;
+      updateOpenWindowButton();
       renderImages();
     }
   }
@@ -1270,6 +1337,7 @@
   }
 
   function wireEvents() {
+    elements["open-window-button"].addEventListener("click", openManagerWindow);
     elements["rescan-button"].addEventListener("click", scanPage);
     elements["filter-input"].addEventListener("input", renderImages);
     elements["folder-input"].addEventListener("input", updateSummary);
@@ -1319,6 +1387,7 @@
 
   async function initialize() {
     cacheElements();
+    updateOpenWindowButton();
     wireEvents();
     browser.storage.onChanged.addListener(handleIgnoredStorageChanges);
     try {
@@ -1349,6 +1418,24 @@
     await scanPage();
   }
 
-  document.addEventListener("DOMContentLoaded", initialize, { once: true });
+  function handleInitializationError(error) {
+    console.error("AnyDownload popup initialization failed.", error);
+    state.busy = false;
+    const message = error && error.message ? error.message : String(error);
+    const pageLabel = document.getElementById("page-label");
+    const notice = document.getElementById("notice");
+    if (pageLabel) {
+      pageLabel.textContent = "AnyDownload could not start";
+    }
+    if (notice) {
+      notice.textContent = `Reload the extension and try again. (${message})`;
+      notice.className = "notice error";
+      notice.hidden = false;
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    initialize().catch(handleInitializationError);
+  }, { once: true });
   })();
 })(globalThis);

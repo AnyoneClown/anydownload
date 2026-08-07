@@ -1,7 +1,18 @@
 "use strict";
 
 const assert = require("assert").strict;
-const { createDimensionProbeScheduler } = require("../extension/popup/popup.js");
+const {
+  createDimensionProbeScheduler,
+  sourceTabIdFromUrl
+} = require("../extension/popup/popup.js");
+
+assert.equal(
+  sourceTabIdFromUrl("moz-extension://fixture/popup/popup.html?sourceTabId=73&launch=abc"),
+  73
+);
+assert.equal(sourceTabIdFromUrl("moz-extension://fixture/popup/popup.html?sourceTabId=-1"), null);
+assert.equal(sourceTabIdFromUrl("moz-extension://fixture/popup/popup.html?sourceTabId=1.5"), null);
+assert.equal(sourceTabIdFromUrl("not a URL"), null);
 
 function createHarness(options = {}) {
   const probes = [];

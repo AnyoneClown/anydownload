@@ -7,8 +7,12 @@ const Core = require("../extension/shared/core.js");
 
 const root = path.resolve(__dirname, "../extension");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
-const popupRelativePath = manifest.action && manifest.action.default_popup;
-assert.equal(typeof popupRelativePath, "string", "manifest.action.default_popup must be set");
+assert.equal(
+  manifest.action && manifest.action.default_popup,
+  "popup/popup.html",
+  "The toolbar action must open the compact popup"
+);
+const popupRelativePath = manifest.action.default_popup;
 const popupPath = path.resolve(root, popupRelativePath);
 assert.ok(
   popupPath.startsWith(`${root}${path.sep}`) && fs.existsSync(popupPath),
@@ -22,7 +26,7 @@ const previewHtml = fs.readFileSync(path.join(root, "preview/preview.html"), "ut
 const previewJs = fs.readFileSync(path.join(root, "preview/preview.js"), "utf8");
 
 assert.equal(manifest.manifest_version, 3);
-assert.equal(manifest.version, "1.3.0");
+assert.equal(manifest.version, "1.4.1");
 assert.equal(Core.MAX_BATCH_TOTAL_URL_LENGTH, 2000000);
 assert.deepEqual(manifest.permissions.sort(), ["activeTab", "downloads", "menus", "scripting", "storage"]);
 assert.deepEqual(manifest.background.scripts, ["shared/core.js", "shared/collector.js", "background.js"]);
@@ -56,8 +60,30 @@ for (const resourcePath of popupResourcePaths) {
     `Popup resource is missing: ${resourcePath}`
   );
 }
-assert.match(popupCss, /body\s*\{[^}]*width:\s*470px;[^}]*min-width:\s*470px;/s);
-assert.doesNotMatch(popupCss, /body\s*\{[^}]*width:\s*100vw;/s);
+assert.match(popupCss, /html,\s*body\s*\{[^}]*width:\s*470px;[^}]*height:\s*600px;[^}]*min-width:\s*0;[^}]*min-height:\s*0;/s);
+assert.doesNotMatch(popupCss, /html,\s*body\s*\{[^}]*max-(?:width|height):/s);
+assert.match(popupCss, /\.app-shell\s*\{[^}]*height:\s*600px;[^}]*min-height:\s*0;[^}]*overflow:\s*hidden;/s);
+assert.match(popupCss, /\.app-shell\s*\{[^}]*grid-template-rows:\s*auto auto auto auto minmax\(0,\s*1fr\) auto;/s);
+assert.match(popupCss, /\.app-shell\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s);
+assert.match(popupCss, /\.app-shell\s*>\s*\*\s*\{[^}]*min-width:\s*0;/s);
+assert.match(popupCss, /\.app-header\s*\{[^}]*grid-template-columns:\s*38px\s+minmax\(0,\s*1fr\)\s+auto;/s);
+assert.match(popupCss, /html\.manager-window,\s*html\.manager-window body\s*\{[^}]*width:\s*100%;[^}]*height:\s*100%;/s);
+assert.match(popupCss, /html\.manager-window \.app-shell\s*\{[^}]*height:\s*100vh;/s);
+assert.match(popupCss, /html:not\(\.manager-window\) \.summary-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s);
+assert.match(popupCss, /@media\s*\(max-width:\s*420px\)[\s\S]*\.open-window-button \.button-label\s*\{[^}]*display:\s*none;/s);
+assert.match(popupCss, /\.image-list\s*\{[^}]*overflow-x:\s*hidden;/s);
+assert.match(popupCss, /\.image-row\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*0;/s);
+assert.match(popupCss, /\.action-bar\s*\{[^}]*min-width:\s*0;/s);
+assert.match(popupHtml, /id="open-window-button"[^>]*title="Open in a resizable window"[^>]*aria-label="Open in a resizable window"[^>]*disabled/);
+assert.match(popupHtml, /class="button-label">Open window<\/span>/);
+assert.match(popupHtml, /id="folder-help"[^>]*role="status"[^>]*aria-live="polite"[^>]*hidden/);
+assert.match(popupHtml, /class="folder-toolbar"/);
+assert.match(popupHtml, /class="folder-options"/);
+assert.match(popupHtml, />Save As for one image<\/span>/);
+assert.match(popupHtml, />CSS backgrounds<\/span>/);
+assert.match(popupCss, /\.folder-panel\s*\{[^}]*padding:\s*7px 12px 8px;/s);
+assert.match(popupCss, /\.folder-toolbar\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;/s);
+assert.match(popupCss, /\.folder-options\s*\{[^}]*display:\s*flex;[^}]*flex:\s*1 1 auto;[^}]*flex-wrap:\s*wrap;/s);
 assert.match(popupHtml, /id="ignored-button"[^>]*aria-pressed="false"/);
 assert.match(popupHtml, /id="clear-ignored-button"/);
 assert.match(popupHtml, /src="\.\.\/shared\/collector\.js"/);
@@ -77,10 +103,26 @@ assert.match(popupJs, /renderedMetaNodes/);
 assert.match(popupJs, /dimensionProbeScheduler\.cancelQueued/);
 assert.match(popupJs, /isPaused:\s*\(\)\s*=>\s*state\.busy/);
 assert.match(popupJs, /rootMargin:\s*"0px"/);
+assert.match(popupJs, /sourceTabIdFromUrl/);
+assert.match(popupJs, /initialize\(\)\.catch\(handleInitializationError\)/);
+assert.match(popupJs, /AnyDownload popup initialization failed/);
+assert.match(popupJs, /elements\["folder-help"\]\.hidden = false/);
+assert.match(popupJs, /elements\["folder-help"\]\.hidden = true/);
+assert.match(popupJs, /setAttribute\("aria-invalid", "true"\)/);
+assert.match(popupJs, /browser\.tabs\.get\(state\.sourceTabId\)/);
+assert.match(popupJs, /classList\.add\("manager-window"\)/);
+assert.match(popupJs, /type:\s*"OPEN_MANAGER_WINDOW"/);
+assert.match(popupJs, /sourceTabId:\s*state\.sourceTabId/);
 assert.match(backgroundJs, /contexts:\s*\["image"\]/);
 assert.match(backgroundJs, /browser\.menus\.onClicked\.addListener/);
 assert.match(backgroundJs, /targetElementId/);
-assert.match(backgroundJs, /browser\.action\.openPopup/);
+assert.doesNotMatch(backgroundJs, /browser\.action\.onClicked\.addListener/);
+assert.match(backgroundJs, /message\.type === "OPEN_MANAGER_WINDOW"/);
+assert.match(backgroundJs, /browser\.tabs\.get\(message\.sourceTabId\)/);
+assert.match(backgroundJs, /browser\.windows\.create/);
+assert.match(backgroundJs, /type:\s*"popup"/);
+assert.match(backgroundJs, /sourceTabId/);
+assert.doesNotMatch(backgroundJs, /browser\.action\.openPopup/);
 assert.match(previewHtml, /id="image-button"[^>]*aria-pressed="false"/);
 assert.match(previewJs, /browser\.storage\.session/);
 

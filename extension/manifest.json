@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Page Image Downloader",
-  "version": "1.3.0",
-  "description": "Find full-size page images, inspect their dimensions, and manage them from the popup or context menu.",
+  "version": "1.4.1",
+  "description": "Find full-size page images in a compact popup or resizable window, with image context actions.",
   "permissions": [
     "activeTab",
     "downloads",
