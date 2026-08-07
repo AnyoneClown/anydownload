@@ -12,7 +12,7 @@
       : null
   );
 
-  const MAX_ARCHIVE_ITEMS = 500;
+  const MAX_ARCHIVE_ITEMS = 2000;
   const MAX_ARCHIVE_AGE_MS = 10 * 60 * 1000;
   const MAX_ARCHIVE_ENTRY_BYTES = 64 * 1024 * 1024;
   const MAX_ARCHIVE_PART_BYTES = 64 * 1024 * 1024;

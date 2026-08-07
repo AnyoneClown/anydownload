@@ -36,21 +36,21 @@ assert.equal(ArchivePage.validateJobId("unsafe/value"), "");
 assert.equal(ArchivePage.validateJobId("a".repeat(81)), "");
 
 const now = Date.now();
-const fiveHundredItems = Array.from({ length: 500 }, (_value, index) => ({
+const twoThousandItems = Array.from({ length: 2000 }, (_value, index) => ({
   url: `https://images.example/photo-${index}.jpg`
 }));
 const validated = ArchivePage.validateArchiveRequest({
   createdAt: now,
   folder: "Website images/gallery",
   incognito: false,
-  items: fiveHundredItems
+  items: twoThousandItems
 }, now);
-assert.equal(validated.items.length, 500);
-assert.equal(validated.items[499].originalIndex, 499);
+assert.equal(validated.items.length, 2000);
+assert.equal(validated.items[1999].originalIndex, 1999);
 assert.equal(validated.items[0].filename, "photo-0.jpg");
 assert.equal(validated.folder, "Website images/gallery");
 assert.equal(validated.incognito, false);
-assert.notEqual(validated.items, fiveHundredItems, "Validation must return a defensive item list");
+assert.notEqual(validated.items, twoThousandItems, "Validation must return a defensive item list");
 
 const customFilename = ArchivePage.validateArchiveRequest({
   createdAt: now,
@@ -90,9 +90,9 @@ assert.throws(
     createdAt: now,
     folder: "images",
     incognito: false,
-    items: fiveHundredItems.concat({ url: "https://images.example/overflow.jpg" })
+    items: twoThousandItems.concat({ url: "https://images.example/overflow.jpg" })
   }, now),
-  /at most 500/i
+  /at most 2000/i
 );
 assert.throws(
   () => ArchivePage.validateArchiveRequest({

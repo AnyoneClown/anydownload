@@ -713,14 +713,14 @@ function storageArea(initial = {}) {
   const oversizedArchive = await runtimeMessage({
     type: "DOWNLOAD_ARCHIVE",
     folder: "Archive tests/too-many",
-    items: Array.from({ length: 501 }, () => ({ url: partialGoodUrl }))
+    items: Array.from({ length: 2001 }, () => ({ url: partialGoodUrl }))
   });
   assert.equal(oversizedArchive.ok, false);
-  assert.equal(oversizedArchive.total, 501);
-  assert.equal(oversizedArchive.failed, 501);
+  assert.equal(oversizedArchive.total, 2001);
+  assert.equal(oversizedArchive.failed, 2001);
   assert.equal(oversizedArchive.folder, "Archive tests/too-many");
   assert.equal(oversizedArchive.filename, "too-many.zip");
-  assert.match(oversizedArchive.error, /at most 500 images/);
+  assert.match(oversizedArchive.error, /at most 2000 images/);
   assert.equal(fetchRequests.length, fetchesBeforeOversizedBatch);
 
   const interruptedUrl = "https://assets.example.test/interrupted/photo.jpg";

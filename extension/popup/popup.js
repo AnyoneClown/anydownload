@@ -2447,8 +2447,8 @@
       }
       return undefined;
     }
-    if (images.length > 500) {
-      setNotice("Choose at most 500 images for one ZIP archive.", "error");
+    if (images.length > 2000) {
+      setNotice("Choose at most 2,000 images for one ZIP archive.", "error");
       return undefined;
     }
 
