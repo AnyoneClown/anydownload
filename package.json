@@ -1,0 +1,8 @@
+{
+  "name": "page-image-downloader-firefox",
+  "version": "1.0.1",
+  "private": true,
+  "scripts": {
+    "test": "node tests/run-tests.cjs"
+  }
+}

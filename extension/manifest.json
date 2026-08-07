@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "Page Image Downloader",
+  "version": "1.0.1",
+  "description": "Find and download individual or multiple images from the current page into a Downloads subfolder.",
+  "permissions": [
+    "activeTab",
+    "downloads",
+    "scripting",
+    "storage"
+  ],
+  "action": {
+    "default_title": "Download page images",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/image-downloader.svg",
+      "32": "icons/image-downloader.svg"
+    }
+  },
+  "icons": {
+    "48": "icons/image-downloader.svg",
+    "96": "icons/image-downloader.svg"
+  },
+  "background": {
+    "scripts": [
+      "shared/core.js",
+      "background.js"
+    ]
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "page-image-downloader@local.invalid",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    },
+    "gecko_android": {
+      "strict_min_version": "142.0"
+    }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; img-src 'self' http: https: data: blob:; style-src 'self'; connect-src 'none'"
+  }
+}

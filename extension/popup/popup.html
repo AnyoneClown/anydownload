@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Page Image Downloader</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-header">
+        <img class="app-icon" src="../icons/image-downloader.svg" alt="">
+        <div>
+          <h1>Page images</h1>
+          <p id="page-label">Scanning the current page…</p>
+        </div>
+        <button id="rescan-button" class="icon-button" type="button" title="Scan the page again" aria-label="Scan the page again">↻</button>
+      </header>
+
+      <section class="folder-panel" aria-labelledby="folder-label">
+        <div class="section-heading">
+          <label id="folder-label" for="folder-input">Destination folder</label>
+          <span>inside Firefox Downloads</span>
+        </div>
+        <div class="folder-input-row">
+          <span aria-hidden="true">Downloads /</span>
+          <input id="folder-input" type="text" value="Website images" maxlength="260" autocomplete="off" spellcheck="false">
+        </div>
+        <p id="folder-help" class="field-help">Nested folders are allowed, for example: Website images/example.com</p>
+        <label class="option-row">
+          <input id="ask-single-input" type="checkbox">
+          <span>Show a Save As dialog when downloading exactly one image</span>
+        </label>
+        <label class="option-row">
+          <input id="backgrounds-input" type="checkbox" checked>
+          <span>Include CSS background images on the next scan</span>
+        </label>
+      </section>
+
+      <section class="controls" aria-label="Image controls">
+        <div class="summary-row">
+          <strong id="summary-label">0 images</strong>
+          <div class="selection-actions">
+            <button id="select-all-button" class="text-button" type="button">Select all</button>
+            <button id="select-none-button" class="text-button" type="button">Clear</button>
+          </div>
+        </div>
+        <label class="search-box">
+          <span class="visually-hidden">Filter images</span>
+          <input id="filter-input" type="search" placeholder="Filter by URL, alt text, or type…" autocomplete="off">
+        </label>
+      </section>
+
+      <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+      <main id="image-list" class="image-list" aria-label="Images found on this page"></main>
+
+      <footer class="action-bar">
+        <div>
+          <strong id="selected-label">0 selected</strong>
+          <span id="action-detail">Choose images to download</span>
+        </div>
+        <button id="download-button" class="primary-button" type="button" disabled>Download selected</button>
+      </footer>
+    </div>
+
+    <script src="../shared/core.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
