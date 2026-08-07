@@ -82,20 +82,177 @@ function meta(property, content) {
   };
 }
 
-function fakeDocument({ scripts = [], anchors = [], metas = [], title = "Instagram fixture" } = {}) {
+function fakeDomElement(tagName, {
+  attributes = {},
+  children = [],
+  width = 0,
+  height = 0,
+  properties = {}
+} = {}) {
+  const normalizedAttributes = Object.fromEntries(
+    Object.entries(attributes).map(([name, value]) => [String(name).toLowerCase(), String(value)])
+  );
+  const element = {
+    tagName: String(tagName || "div").toUpperCase(),
+    children: [],
+    parentElement: null,
+    naturalWidth: width,
+    naturalHeight: height,
+    videoWidth: width,
+    videoHeight: height,
+    clientWidth: width,
+    clientHeight: height,
+    offsetWidth: width,
+    offsetHeight: height,
+    width,
+    height,
+    hidden: false,
+    isConnected: true,
+    style: {},
+    getAttribute(name) {
+      return normalizedAttributes[String(name).toLowerCase()] ?? null;
+    },
+    hasAttribute(name) {
+      return Object.prototype.hasOwnProperty.call(normalizedAttributes, String(name).toLowerCase());
+    },
+    getBoundingClientRect() {
+      return { width, height, top: 0, left: 0, right: width, bottom: height };
+    },
+    getClientRects() {
+      return width > 0 && height > 0 ? [this.getBoundingClientRect()] : [];
+    },
+    contains(candidate) {
+      for (let current = candidate; current; current = current.parentElement) {
+        if (current === element) {
+          return true;
+        }
+      }
+      return false;
+    }
+  };
+
+  Object.assign(element, properties);
+  for (const [name, value] of Object.entries(normalizedAttributes)) {
+    if (["src", "href", "poster", "alt", "role"].includes(name) && element[name] === undefined) {
+      element[name] = value;
+    }
+  }
+  if (element.src && element.currentSrc === undefined) {
+    element.currentSrc = element.src;
+  }
+
+  function descendants() {
+    const result = [];
+    const queue = [...element.children];
+    while (queue.length) {
+      const child = queue.shift();
+      result.push(child);
+      queue.unshift(...(child.children || []));
+    }
+    return result;
+  }
+
+  function matchesSelector(candidate, selector) {
+    const normalized = String(selector || "").toLowerCase();
+    const tag = String(candidate.tagName || "").toLowerCase();
+    if (normalized.includes("[role=\"dialog\"]") || normalized.includes("[role='dialog']")) {
+      if (candidate.getAttribute("role") !== "dialog" && !normalized.match(/(?:article|main|img|video|a)(?:\b|\[)/)) {
+        return false;
+      }
+    }
+    if (/(?:^|[\s,>])article(?:\b|[.#[:])/.test(normalized) && tag === "article") {
+      return true;
+    }
+    if (/(?:^|[\s,>])main(?:\b|[.#[:])/.test(normalized) && tag === "main") {
+      return true;
+    }
+    if (/(?:^|[\s,>])ul(?:\b|[.#[:])/.test(normalized) && tag === "ul") {
+      return true;
+    }
+    if (/(?:^|[\s,>])img(?:\b|[.#[:])/.test(normalized) && tag === "img") {
+      return !normalized.includes("[src]") || candidate.hasAttribute("src") || Boolean(candidate.currentSrc);
+    }
+    if (/(?:^|[\s,>])video(?:\b|[.#[:])/.test(normalized) && tag === "video") {
+      return !normalized.includes("[src]") || candidate.hasAttribute("src") || Boolean(candidate.currentSrc);
+    }
+    if (/(?:^|[\s,>])a(?:\b|[.#[:])/.test(normalized) && tag === "a") {
+      if (!normalized.includes("[href]")) {
+        return true;
+      }
+      const href = candidate.getAttribute("href") || "";
+      const containsMatch = normalized.match(/href\*=["']([^"']+)["']/);
+      return Boolean(href) && (!containsMatch || href.includes(containsMatch[1]));
+    }
+    if (normalized.trim() === "[role=\"dialog\"]" || normalized.trim() === "[role='dialog']") {
+      return candidate.getAttribute("role") === "dialog";
+    }
+    if (normalized.trim() === "*") {
+      return true;
+    }
+    if (/(?:^|[\s>])\*\s*$/.test(normalized)) {
+      return true;
+    }
+    const attributeMatch = normalized.match(/^\[([a-z0-9_-]+)(?:=["']([^"']*)["'])?\]$/);
+    if (attributeMatch) {
+      const actual = candidate.getAttribute(attributeMatch[1]);
+      return actual !== null && (attributeMatch[2] === undefined || actual === attributeMatch[2]);
+    }
+    return false;
+  }
+
+  element.matches = function matches(selector) {
+    return String(selector).split(",").some((part) => matchesSelector(element, part));
+  };
+  element.closest = function closest(selector) {
+    for (let current = element; current; current = current.parentElement) {
+      if (typeof current.matches === "function" && current.matches(selector)) {
+        return current;
+      }
+    }
+    return null;
+  };
+  element.querySelectorAll = function querySelectorAll(selector) {
+    return descendants().filter((candidate) =>
+      String(selector).split(",").some((part) => matchesSelector(candidate, part))
+    );
+  };
+  element.querySelector = function querySelector(selector) {
+    return element.querySelectorAll(selector)[0] || null;
+  };
+
+  element.children = children;
+  for (const child of children) {
+    child.parentElement = element;
+  }
+  return element;
+}
+
+function fakeDocument({
+  scripts = [],
+  anchors = [],
+  metas = [],
+  elements = [],
+  title = "Instagram fixture"
+} = {}) {
+  const documentRoot = fakeDomElement("html", { children: elements });
   return {
     title,
+    documentElement: documentRoot,
+    body: documentRoot,
     querySelectorAll(selector) {
       if (selector === "script") {
         return scripts;
       }
       if (selector === "a[href]") {
-        return anchors;
+        return [...anchors, ...documentRoot.querySelectorAll(selector)];
       }
       if (selector === "meta[property], meta[name]") {
         return metas;
       }
-      return [];
+      return documentRoot.querySelectorAll(selector);
+    },
+    querySelector(selector) {
+      return this.querySelectorAll(selector)[0] || null;
     }
   };
 }
@@ -147,14 +304,22 @@ function htmlDocument({ scripts = [], anchors = [], metas = [] } = {}) {
 }
 
 async function withPage(url, page, callback, fetchImpl) {
+  const pageDocument = fakeDocument(page);
   const replacements = {
     location: { href: url },
-    document: fakeDocument(page),
+    document: pageDocument,
     window: null
   };
-  replacements.window = { self: null, top: null };
+  replacements.window = {
+    self: null,
+    top: null,
+    getComputedStyle(element) {
+      return element && element.style || {};
+    }
+  };
   replacements.window.self = replacements.window;
   replacements.window.top = replacements.window;
+  pageDocument.defaultView = replacements.window;
   if (fetchImpl !== undefined) {
     replacements.fetch = fetchImpl;
   }
@@ -189,6 +354,17 @@ async function scan(url, page, options = {}, fetchImpl) {
     maxPayloadLength: 2000000,
     ...options
   }), fetchImpl);
+}
+
+function instagramMediaIdFromShortcode(shortcode) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  let value = 0n;
+  for (const character of String(shortcode)) {
+    const digit = alphabet.indexOf(character);
+    assert.notEqual(digit, -1, `Invalid Instagram shortcode fixture character: ${character}`);
+    value = value * 64n + BigInt(digit);
+  }
+  return value.toString();
 }
 
 function imageNode(id, url, width = 1080, height = 1350) {
@@ -343,14 +519,15 @@ async function run() {
     assert.ok(requests.every((item) => item.init.credentials === "include"));
   }
 
-  // Route matching keeps the active post and rejects unrelated recommendations.
+  // A partial active-slide hydration does not suppress the exact API fallback;
+  // the full carousel replaces that incomplete view without related media.
   {
     let fetchCount = 0;
     const active = {
       shortcode: "POST123",
       owner: { username: "alice" },
       accessibility_caption: "Alice's post",
-      ...imageNode("1", "https://scontent.cdninstagram.com/post-large.jpg", 1440, 1800)
+      ...imageNode("1", "https://scontent.cdninstagram.com/post-visible.jpg", 1440, 1800)
     };
     const unrelated = {
       shortcode: "OTHER999",
@@ -363,19 +540,35 @@ async function run() {
       includeRelated: true,
       includeStories: true,
       includeHighlights: true
-    }, async () => {
+    }, async (url, init) => {
       fetchCount += 1;
-      throw new Error("Exact post routes must never fetch related collections.");
+      assert.equal(
+        new URL(url).pathname,
+        `/api/v1/media/${instagramMediaIdFromShortcode("POST123")}/info/`
+      );
+      assert.equal(init.credentials, "include");
+      return jsonResponse(url, { items: [{
+        code: "POST123",
+        owner: { username: "alice" },
+        carousel_media: [
+          {
+            ...imageNode("1", "https://scontent.cdninstagram.com/post-large.jpg", 1440, 1800),
+            accessibility_caption: "Alice's post"
+          },
+          imageNode("3", "https://scontent.cdninstagram.com/post-second.jpg")
+        ]
+      }, unrelated] });
     });
     assert.equal(result.handled, true);
-    assert.equal(result.images.length, 1);
+    assert.equal(result.images.length, 2);
     assert.equal(result.images[0].url, "https://scontent.cdninstagram.com/post-large.jpg");
     assert.equal(result.images[0].previewUrl, "https://scontent.cdninstagram.com/post-large.jpg?size=small");
     assert.equal(result.images[0].width, 1440);
     assert.equal(result.images[0].height, 1800);
     assert.equal(result.images[0].alt, "Alice's post");
     assert.equal(result.images[0].mediaType, "image");
-    assert.equal(fetchCount, 0);
+    assert.equal(result.images[1].url, "https://scontent.cdninstagram.com/post-second.jpg");
+    assert.equal(fetchCount, 1);
     assert.deepEqual(result.images[0].instagramCollections, [{
       type: "post",
       id: "POST123",
@@ -423,6 +616,368 @@ async function run() {
       "Instagram carousel 2/3 video",
       "Instagram carousel 3/3 image"
     ]);
+  }
+
+  // When the live SPA no longer exposes its post payload, the canonical exact
+  // post HTML is fetched with the current session and remains shortcode-scoped.
+  {
+    const shortcode = "HTML123";
+    const requests = [];
+    const target = {
+      code: shortcode,
+      user: { username: "alice" },
+      carousel_media: [
+        imageNode("html-1", "https://scontent.cdninstagram.com/html-1.jpg"),
+        videoNode(
+          "html-2",
+          "https://scontent.cdninstagram.com/html-2.mp4",
+          "https://scontent.cdninstagram.com/html-2-poster.jpg"
+        ),
+        imageNode("html-3", "https://scontent.cdninstagram.com/html-3.jpg")
+      ]
+    };
+    const unrelated = {
+      code: "OTHER999",
+      user: { username: "mallory" },
+      ...imageNode("html-other", "https://scontent.cdninstagram.com/html-other.jpg")
+    };
+    const result = await scan(
+      `https://www.instagram.com/p/${shortcode}/?img_index=2`,
+      {},
+      {},
+      async (url, init) => {
+        requests.push({ url, init });
+        if (new URL(url).pathname !== `/p/${shortcode}/`) {
+          return jsonResponse(url, { items: [] }, { ok: false });
+        }
+        return response(
+          `https://www.instagram.com/p/${shortcode}/`,
+          htmlDocument({ scripts: [{ value: {
+            data: { xig_polaris_media: target },
+            suggested: unrelated
+          } }] })
+        );
+      }
+    );
+    assert.equal(requests.length, 3);
+    const htmlRequest = requests[2];
+    assert.equal(new URL(htmlRequest.url).pathname, `/p/${shortcode}/`);
+    assert.equal(htmlRequest.init.method, "GET");
+    assert.equal(htmlRequest.init.credentials, "include");
+    assert.equal(htmlRequest.init.cache, "no-store");
+    assert.match(htmlRequest.init.headers.Accept, /text\/html/i);
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://scontent.cdninstagram.com/html-1.jpg",
+      "https://scontent.cdninstagram.com/html-2.mp4",
+      "https://scontent.cdninstagram.com/html-3.jpg"
+    ]);
+    assert.equal(result.images[1].mediaType, "video");
+    assert.ok(result.images.every((item) =>
+      item.instagramCollections.length === 1 &&
+      item.instagramCollections[0].type === "post" &&
+      item.instagramCollections[0].id === shortcode &&
+      item.instagramCollections[0].owner === "alice"
+    ));
+  }
+
+  // A fetched script must identify the requested post. A generic
+  // `shortcode_media` property is not sufficient evidence on its own.
+  {
+    const shortcode = "IDENTITY123";
+    let requestCount = 0;
+    const result = await scan(`https://www.instagram.com/p/${shortcode}/`, {}, {},
+      async (url) => {
+        requestCount += 1;
+        if (new URL(url).pathname === `/p/${shortcode}/`) {
+          return response(url, htmlDocument({ scripts: [{ value: {
+            shortcode_media: imageNode(
+              "identity-less",
+              "https://scontent.cdninstagram.com/identity-less.jpg"
+            )
+          } }] }));
+        }
+        return jsonResponse(url, { items: [] }, { ok: false });
+      });
+    assert.deepEqual(result.images, []);
+    assert.equal(requestCount, 3);
+  }
+
+  // If canonical HTML is unavailable, the shortcode is decoded without Number
+  // precision loss and the authenticated numeric media-info response supplies
+  // every exact carousel child.
+  {
+    const shortcode = "MEDIA_123";
+    const mediaId = instagramMediaIdFromShortcode(shortcode);
+    const requests = [];
+    const target = {
+      code: shortcode,
+      user: { username: "alice" },
+      carousel_media: [
+        imageNode("info-1", "https://scontent.cdninstagram.com/info-1.jpg"),
+        imageNode("info-2", "https://scontent.cdninstagram.com/info-2.jpg")
+      ]
+    };
+    const result = await scan(`https://www.instagram.com/p/${shortcode}/`, {}, {}, async (url, init) => {
+      requests.push({ url, init });
+      const parsed = new URL(url);
+      assert.equal(parsed.pathname, `/api/v1/media/${mediaId}/info/`);
+      assert.equal(init.method, "GET");
+      assert.equal(init.credentials, "include");
+      assert.equal(init.cache, "no-store");
+      assert.equal(init.headers["X-IG-App-ID"], "936619743392459");
+      assert.match(init.headers.Accept, /json/i);
+      return jsonResponse(url, {
+        items: [target, {
+          code: "OTHER999",
+          user: { username: "mallory" },
+          ...imageNode("info-other", "https://scontent.cdninstagram.com/info-other.jpg")
+        }]
+      });
+    });
+    assert.equal(requests.length, 1);
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://scontent.cdninstagram.com/info-1.jpg",
+      "https://scontent.cdninstagram.com/info-2.jpg"
+    ]);
+  }
+
+  // The observed opaque private-share permalink maps to its conventional
+  // 11-character media prefix. Both exact endpoints remain session-scoped and
+  // validate that canonical alias before accepting the full carousel.
+  {
+    const shortcode = "DVgyxbajZDTFJgFEu-CMuaiNuJSiQQhfJ_U8YY0";
+    const canonicalShortcode = "DVgyxbajZDT";
+    const canonicalMediaId = instagramMediaIdFromShortcode(canonicalShortcode);
+    const requests = [];
+    const result = await scan(`https://www.instagram.com/p/${shortcode}/?img_index=1`, {}, {},
+      async (url, init) => {
+        requests.push({ url, init });
+        const parsed = new URL(url);
+        if (requests.length === 1) {
+          assert.equal(parsed.pathname, `/api/v1/media/${canonicalMediaId}/info/`);
+          return jsonResponse(url, { items: [] }, { ok: false });
+        }
+        assert.equal(parsed.pathname, "/graphql/query/");
+        assert.equal(parsed.searchParams.get("doc_id"), "27852811784380813");
+        const variables = JSON.parse(parsed.searchParams.get("variables"));
+        assert.deepEqual(variables, {
+          shortcode: canonicalShortcode,
+          __relay_internal__pv__PolarisShortDramaEnabledrelayprovider: false,
+          __relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider: false
+        });
+        assert.equal(init.credentials, "include");
+        assert.equal(init.cache, "no-store");
+        assert.equal(init.headers["X-IG-App-ID"], "936619743392459");
+        return jsonResponse(url, {
+          data: {
+            xdt_api__v1__media__shortcode__web_info: {
+              items: [{
+                code: canonicalShortcode,
+                user: { username: "alice" },
+                carousel_media: [
+                  imageNode("query-1", "https://scontent.cdninstagram.com/query-1.jpg"),
+                  imageNode("query-2", "https://scontent.cdninstagram.com/query-2.jpg")
+                ]
+              }, {
+                code: "OTHER999",
+                ...imageNode("query-other", "https://scontent.cdninstagram.com/query-other.jpg")
+              }]
+            }
+          },
+          status: "ok"
+        });
+      });
+    assert.equal(requests.length, 2);
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://scontent.cdninstagram.com/query-1.jpg",
+      "https://scontent.cdninstagram.com/query-2.jpg"
+    ]);
+  }
+
+  // A redirected canonical response for another shortcode is never trusted.
+  // Subsequent bounded fallbacks may run, but unrelated media cannot leak into
+  // the exact-post result when all of them fail.
+  {
+    const requests = [];
+    const result = await scan("https://www.instagram.com/p/STRICT123/", {}, {}, async (url) => {
+      requests.push(url);
+      if (new URL(url).pathname === "/p/STRICT123/") {
+        return response(
+          "https://www.instagram.com/p/OTHER999/",
+          htmlDocument({ scripts: [{ value: { shortcode_media: {
+            shortcode: "STRICT123",
+            user: { username: "alice" },
+            ...imageNode("redirected", "https://scontent.cdninstagram.com/redirected.jpg")
+          } } }] })
+        );
+      }
+      return jsonResponse(url, { items: [] }, { ok: false });
+    });
+    assert.equal(result.handled, true);
+    assert.deepEqual(result.images, []);
+    assert.ok(requests.length >= 1 && requests.length <= 3, "Exact fallbacks must stay bounded");
+    assert.ok(result.warnings.some((warning) => /downloadable post media/i.test(warning)));
+  }
+
+  // React's current exact-viewer props can still supply the full carousel
+  // without any network fallback. Unrelated prefetched posts remain excluded.
+  {
+    let fetchCount = 0;
+    const runtimeNode = fakeDomElement("div");
+    runtimeNode["__reactProps$fixture"] = {
+      children: {
+        currentPost: {
+          code: "RUNTIME123",
+          user: { username: "alice" },
+          carousel_media: [
+            imageNode("runtime-1", "https://scontent.cdninstagram.com/runtime-1.jpg"),
+            imageNode("runtime-2", "https://scontent.cdninstagram.com/runtime-2.jpg")
+          ]
+        },
+        suggestedPost: {
+          code: "OTHER999",
+          user: { username: "mallory" },
+          ...imageNode("runtime-other", "https://scontent.cdninstagram.com/runtime-other.jpg")
+        }
+      }
+    };
+    const result = await scan("https://www.instagram.com/p/RUNTIME123/?img_index=2", {
+      elements: [runtimeNode]
+    }, {}, async () => {
+      fetchCount += 1;
+      throw new Error("Current exact-viewer runtime data must avoid fallback fetches.");
+    });
+    assert.equal(fetchCount, 0);
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://scontent.cdninstagram.com/runtime-1.jpg",
+      "https://scontent.cdninstagram.com/runtime-2.jpg"
+    ]);
+  }
+
+  // The final DOM fallback is restricted to the exact viewer. It keeps large
+  // post media while excluding avatars and large media in sibling articles.
+  {
+    const exactLink = fakeDomElement("a", {
+      attributes: { href: "/p/DOM123/" }
+    });
+    const avatar = fakeDomElement("img", {
+      attributes: {
+        src: "https://scontent.cdninstagram.com/avatar.jpg",
+        alt: "alice's profile picture"
+      },
+      width: 150,
+      height: 150
+    });
+    const first = fakeDomElement("img", {
+      attributes: { src: "https://scontent.cdninstagram.com/dom-1.jpg", alt: "Post photo" },
+      width: 1080,
+      height: 1350
+    });
+    const second = fakeDomElement("img", {
+      attributes: { src: "https://scontent.cdninstagram.com/dom-2.jpg", alt: "Post photo" },
+      width: 1080,
+      height: 1350
+    });
+    const exactArticle = fakeDomElement("article", {
+      attributes: { "data-shortcode": "DOM123" },
+      children: [exactLink, avatar, first, second]
+    });
+    const dialog = fakeDomElement("div", {
+      attributes: { role: "dialog", "aria-label": "Post viewer" },
+      children: [exactArticle]
+    });
+    const unrelatedArticle = fakeDomElement("article", {
+      children: [
+        fakeDomElement("a", { attributes: { href: "/p/OTHER999/" } }),
+        fakeDomElement("img", {
+          attributes: { src: "https://scontent.cdninstagram.com/dom-unrelated-1.jpg" },
+          width: 1440,
+          height: 1800
+        }),
+        fakeDomElement("img", {
+          attributes: { src: "https://scontent.cdninstagram.com/dom-unrelated-2.jpg" },
+          width: 1440,
+          height: 1800
+        }),
+        fakeDomElement("img", {
+          attributes: { src: "https://scontent.cdninstagram.com/dom-unrelated-3.jpg" },
+          width: 1440,
+          height: 1800
+        })
+      ]
+    });
+    const result = await scan("https://www.instagram.com/p/DOM123/", {
+      elements: [fakeDomElement("main", { children: [unrelatedArticle] }), dialog]
+    }, {}, async (url) => response(url, "Forbidden", { ok: false }));
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://scontent.cdninstagram.com/dom-1.jpg",
+      "https://scontent.cdninstagram.com/dom-2.jpg"
+    ]);
+  }
+
+  // A mixed dialog can contain recommendation tracks. Candidate-level route
+  // evidence keeps the exact track even when the unrelated track has more media.
+  {
+    const exactTrack = fakeDomElement("ul", {
+      children: [
+        fakeDomElement("a", { attributes: { href: "/p/MIXED123/" } }),
+        fakeDomElement("img", {
+          attributes: { src: "https://scontent.cdninstagram.com/mixed-exact.jpg" },
+          width: 1080,
+          height: 1350
+        })
+      ]
+    });
+    const otherTrack = fakeDomElement("ul", {
+      children: [
+        fakeDomElement("a", { attributes: { href: "/p/OTHER999/" } }),
+        ...[1, 2, 3].map((index) => fakeDomElement("img", {
+          attributes: { src: `https://scontent.cdninstagram.com/mixed-other-${index}.jpg` },
+          width: 1440,
+          height: 1800
+        }))
+      ]
+    });
+    const result = await scan("https://www.instagram.com/p/MIXED123/", {
+      elements: [fakeDomElement("div", {
+        attributes: { role: "dialog" },
+        children: [exactTrack, otherTrack]
+      })]
+    }, {}, async (url) => jsonResponse(url, { items: [] }, { ok: false }));
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://scontent.cdninstagram.com/mixed-exact.jpg"
+    ]);
+  }
+
+  // When two media-bearing articles have no exact-route evidence, the DOM
+  // fallback refuses to guess based on media count and expose a recommendation.
+  {
+    const firstArticle = fakeDomElement("article", {
+      children: [fakeDomElement("img", {
+        attributes: { src: "https://scontent.cdninstagram.com/unmarked-current.jpg" },
+        width: 1080,
+        height: 1350
+      })]
+    });
+    const largerSibling = fakeDomElement("article", {
+      children: [
+        fakeDomElement("img", {
+          attributes: { src: "https://scontent.cdninstagram.com/unmarked-other-1.jpg" },
+          width: 1440,
+          height: 1800
+        }),
+        fakeDomElement("img", {
+          attributes: { src: "https://scontent.cdninstagram.com/unmarked-other-2.jpg" },
+          width: 1440,
+          height: 1800
+        })
+      ]
+    });
+    const result = await scan("https://www.instagram.com/p/UNMARKED1/", {
+      elements: [fakeDomElement("main", { children: [firstArticle, largerSibling] })]
+    }, {}, async (url) => jsonResponse(url, { items: [] }, { ok: false }));
+    assert.deepEqual(result.images, []);
+    assert.ok(result.warnings.some((warning) => /downloadable post media/i.test(warning)));
   }
 
   // Modern web-info payloads expose reel items through image_versions2 and
@@ -551,6 +1106,7 @@ async function run() {
       scripts: [script({
         "@context": "https://schema.org",
         "@type": "VideoObject",
+        url: "https://www.instagram.com/reel/LDJSON1/",
         contentUrl: "https://scontent.cdninstagram.com/ld-video.mp4",
         thumbnailUrl: "https://scontent.cdninstagram.com/ld-poster.jpg",
         width: 1080,
@@ -717,12 +1273,14 @@ async function run() {
     assert.ok(result.warnings.some((warning) => /unavailable/i.test(warning)));
   }
 
-  // Username-prefixed post links are still exact post scopes and never fetch.
+  // Username-prefixed post links are still exact post scopes and never fetch
+  // related collections when their structured single-item type is complete.
   {
     let fetchCount = 0;
     const result = await scan("https://www.instagram.com/alice/p/OWNERPOST/", {
       scripts: [script({ shortcode_media: {
         shortcode: "OWNERPOST",
+        media_type: 1,
         owner: { username: "alice" },
         ...imageNode("701", "https://scontent.cdninstagram.com/current-post.jpg")
       } })]

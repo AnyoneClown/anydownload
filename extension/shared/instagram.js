@@ -105,7 +105,11 @@
     const MAX_SCRIPTS_PER_DOCUMENT = 256;
     const MAX_RELATED_LINKS = 128;
     const FETCH_TIMEOUT_MS = 12000;
+    const EXACT_FETCH_TIMEOUT_MS = 5000;
     const INSTAGRAM_WEB_APP_ID = "936619743392459";
+    // Instagram rotates persisted GraphQL operation IDs. This is a bounded
+    // fallback after the canonical post document and media-info endpoint.
+    const INSTAGRAM_POST_QUERY_DOC_ID = "27852811784380813";
     const MAX_COLLECTION_MEMBERSHIPS = 16;
     const warnings = new Set();
     const found = new Map();
@@ -124,6 +128,7 @@
     let documentLimitReached = false;
     let unsupportedVideoCount = 0;
     let inaccessibleRelatedCount = 0;
+    let exactStructuredPostComplete = false;
 
     function safeText(value, maximum) {
       let text = "";
@@ -295,6 +300,48 @@
       pageUrl = "";
     }
     const route = parseRoute(pageUrl);
+    const routeShortcodeAliases = new Set();
+    let queryShortcode = safeText(route.shortcode, 80).trim();
+    if (route.kind === "post" || route.kind === "reel") {
+      routeShortcodeAliases.add(queryShortcode);
+      // New private/share permalinks may append an opaque capability suffix to
+      // the conventional 11-character media shortcode. Instagram's structured
+      // response and first-party query still identify that post by the prefix.
+      if (queryShortcode.length === 39 && /^[a-z0-9_-]{39}$/i.test(queryShortcode)) {
+        queryShortcode = queryShortcode.slice(0, 11);
+        routeShortcodeAliases.add(queryShortcode);
+      }
+    }
+    function exactShortcodeMatches(value) {
+      return routeShortcodeAliases.has(safeText(value, 80).trim());
+    }
+    function mediaIdFromShortcode(shortcode) {
+      const value = safeText(shortcode, 80).trim();
+      // Conventional Instagram shortcodes encode the numeric media pk in a
+      // base64url alphabet. Newer opaque share codes can be much longer and
+      // must use the shortcode/HTML fallbacks instead.
+      if (!value || value.length > 16 || typeof BigInt !== "function") {
+        return "";
+      }
+      const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+      let mediaId = BigInt(0);
+      try {
+        for (const character of value) {
+          const digit = alphabet.indexOf(character);
+          if (digit < 0) {
+            return "";
+          }
+          mediaId = mediaId * BigInt(64) + BigInt(digit);
+        }
+      } catch (_error) {
+        return "";
+      }
+      const normalized = mediaId.toString();
+      return /^\d{1,30}$/.test(normalized) ? normalized : "";
+    }
+    const routeMediaId = (route.kind === "post" || route.kind === "reel")
+      ? mediaIdFromShortcode(queryShortcode)
+      : "";
     let pageTitle = "Instagram";
     try {
       pageTitle = safeText(document && document.title, 300) || "Instagram";
@@ -790,6 +837,13 @@
       found.set(url, record);
     }
 
+    function clearIncompleteExactRecords() {
+      found.clear();
+      totalPayloadLength = 0;
+      itemLimitReached = false;
+      payloadLimitReached = false;
+    }
+
     function addMediaObject(
       object,
       baseUrl,
@@ -876,6 +930,33 @@
         .map((edge) => safeProperty(edge, "node"))
         .filter((item) => item && typeof item === "object");
       return childEdges;
+    }
+
+    function exactContainerIsComplete(object) {
+      const children = childMedia(object);
+      const sidecar = safeProperty(object, "edge_sidecar_to_children");
+      const declaredCount = positiveNumber(
+        safeProperty(object, "carousel_media_count") ||
+          safeProperty(object, "carouselMediaCount") || safeProperty(sidecar, "count")
+      );
+      if (children.length) {
+        return !declaredCount || children.length >= declaredCount;
+      }
+      const mediaType = Number(safeProperty(object, "media_type"));
+      const typename = safeText(
+        safeProperty(object, "__typename") || safeProperty(object, "typename") ||
+          safeProperty(object, "@type"),
+        100
+      ).toLowerCase();
+      const declaresCarousel = mediaType === 8 || declaredCount > 1 ||
+        Boolean(sidecar) || Array.isArray(safeProperty(object, "carousel_media")) ||
+        Array.isArray(safeProperty(object, "carouselMedia")) ||
+        /(?:sidecar|carousel)/.test(typename);
+      if (declaresCarousel) {
+        return false;
+      }
+      return mediaType === 1 || mediaType === 2 ||
+        /(?:image|video)/.test(typename) && hasMediaShape(object);
     }
 
     function addMediaContainer(
@@ -978,7 +1059,7 @@
         const candidateRoute = parseRoute(candidate);
         if ((expectedRoute.kind === "post" || expectedRoute.kind === "reel") &&
           (candidateRoute.kind === "post" || candidateRoute.kind === "reel") &&
-          candidateRoute.shortcode === expectedRoute.shortcode) {
+          exactShortcodeMatches(candidateRoute.shortcode)) {
           return true;
         }
         if (expectedRoute.kind === "story" && candidateRoute.kind === "story" &&
@@ -1002,16 +1083,12 @@
       );
     }
 
-    function postMatches(object, parentKey, sourceRoute, baseUrl, trustedLdRoot) {
+    function postMatches(object, parentKey, sourceRoute, baseUrl) {
       const identifier = objectIdentifier(object);
       if (identifier) {
-        return identifier === sourceRoute.shortcode;
+        return exactShortcodeMatches(identifier);
       }
-      if (["shortcode_media", "xdt_shortcode_media"].includes(parentKey) && hasMediaShape(object)) {
-        return true;
-      }
-      return objectUrlMatches(object, sourceRoute, baseUrl) ||
-        (trustedLdRoot && hasMediaShape(object));
+      return objectUrlMatches(object, sourceRoute, baseUrl);
     }
 
     function reelOwnerMatches(object, sourceRoute) {
@@ -1110,7 +1187,7 @@
         let kind = sourceRoute.kind;
         let forceItems = false;
         if (sourceRoute.kind === "post" || sourceRoute.kind === "reel") {
-          matched = postMatches(object, parentKey, sourceRoute, baseUrl, trustedLdRoot && isRoot);
+          matched = postMatches(object, parentKey, sourceRoute, baseUrl);
           kind = sourceRoute.kind;
           forceItems = ["items", "media"].includes(parentKey) && Array.isArray(safeProperty(object, "items"));
         } else if (sourceRoute.kind === "story") {
@@ -1142,7 +1219,19 @@
           if (owner) {
             owners.add(owner);
           }
+          const completeExactContainer = (sourceRoute.kind === "post" ||
+            sourceRoute.kind === "reel") && exactShortcodeMatches(sourceRoute.shortcode) &&
+            exactContainerIsComplete(object);
+          if (completeExactContainer && !exactStructuredPostComplete) {
+            clearIncompleteExactRecords();
+          }
+          const countBefore = found.size;
           addMediaContainer(object, baseUrl, kind, forceItems, sourceRoute);
+          if ((sourceRoute.kind === "post" || sourceRoute.kind === "reel") &&
+            exactShortcodeMatches(sourceRoute.shortcode) && found.size > countBefore) {
+            exactStructuredPostComplete = exactStructuredPostComplete ||
+              completeExactContainer;
+          }
         }
         if (depth >= MAX_JSON_DEPTH) {
           return;
@@ -1338,10 +1427,13 @@
         return;
       }
       const canonical = meta.get("og:url");
+      if ((sourceRoute.kind === "post" || sourceRoute.kind === "reel") && !canonical) {
+        return;
+      }
       if (canonical) {
         const canonicalRoute = parseRoute(canonical);
         const samePost = (sourceRoute.kind === "post" || sourceRoute.kind === "reel") &&
-          canonicalRoute.shortcode === sourceRoute.shortcode;
+          exactShortcodeMatches(canonicalRoute.shortcode);
         const sameStory = sourceRoute.kind === "story" &&
           canonicalRoute.kind === "story" && canonicalRoute.username === sourceRoute.username;
         const sameHighlight = sourceRoute.kind === "highlight" &&
@@ -1594,9 +1686,16 @@
       return { ok: true, text, bytes };
     }
 
-    async function fetchRelatedDocument(entry) {
+    async function fetchHtmlDocument(entry, reportAsRelated, rawTimeoutMs) {
+      const timeoutMs = boundedInteger(rawTimeoutMs, FETCH_TIMEOUT_MS, 1000, FETCH_TIMEOUT_MS);
+      const shouldReportAsRelated = reportAsRelated !== false;
+      const noteUnavailable = () => {
+        if (shouldReportAsRelated) {
+          inaccessibleRelatedCount += 1;
+        }
+      };
       if (typeof fetch !== "function") {
-        inaccessibleRelatedCount += 1;
+        noteUnavailable();
         return null;
       }
       let controller = null;
@@ -1604,7 +1703,7 @@
       try {
         controller = typeof AbortController === "function" ? new AbortController() : null;
         if (controller && typeof setTimeout === "function") {
-          timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+          timer = setTimeout(() => controller.abort(), timeoutMs);
         }
         const response = await fetch(entry.url, {
           method: "GET",
@@ -1615,12 +1714,12 @@
           headers: { Accept: "text/html,application/xhtml+xml" }
         });
         if (!response || !response.ok) {
-          inaccessibleRelatedCount += 1;
+          noteUnavailable();
           return null;
         }
         const finalUrl = instagramHttpUrl(response.url || entry.url, entry.url);
         if (!finalUrl) {
-          inaccessibleRelatedCount += 1;
+          noteUnavailable();
           return null;
         }
         const contentType = safeText(
@@ -1628,7 +1727,7 @@
           200
         ).toLowerCase();
         if (contentType && !/(?:text\/html|application\/xhtml\+xml)/.test(contentType)) {
-          inaccessibleRelatedCount += 1;
+          noteUnavailable();
           return null;
         }
         const body = await readResponseText(response);
@@ -1639,7 +1738,7 @@
         totalDocumentBytes += body.bytes || byteLength(body.text);
         return { url: finalUrl, text: body.text };
       } catch (_error) {
-        inaccessibleRelatedCount += 1;
+        noteUnavailable();
         return null;
       } finally {
         if (timer !== null && typeof clearTimeout === "function") {
@@ -1648,7 +1747,14 @@
       }
     }
 
-    async function fetchInstagramJson(rawUrl, purpose) {
+    async function fetchInstagramJson(rawUrl, purpose, reportAsRelated, rawTimeoutMs) {
+      const timeoutMs = boundedInteger(rawTimeoutMs, FETCH_TIMEOUT_MS, 1000, FETCH_TIMEOUT_MS);
+      const shouldReportAsRelated = reportAsRelated !== false;
+      const noteUnavailable = () => {
+        if (shouldReportAsRelated) {
+          inaccessibleRelatedCount += 1;
+        }
+      };
       const url = instagramHttpUrl(rawUrl, route.pageUrl);
       if (!url || visitedDocuments.has(url)) {
         return null;
@@ -1658,7 +1764,7 @@
         return null;
       }
       if (typeof fetch !== "function") {
-        inaccessibleRelatedCount += 1;
+        noteUnavailable();
         return null;
       }
       visitedDocuments.add(url);
@@ -1668,7 +1774,7 @@
       try {
         controller = typeof AbortController === "function" ? new AbortController() : null;
         if (controller && typeof setTimeout === "function") {
-          timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+          timer = setTimeout(() => controller.abort(), timeoutMs);
         }
         const response = await fetch(url, {
           method: "GET",
@@ -1682,12 +1788,12 @@
           }
         });
         if (!response || !response.ok) {
-          inaccessibleRelatedCount += 1;
+          noteUnavailable();
           return null;
         }
         const finalUrl = instagramHttpUrl(response.url || url, url);
         if (!finalUrl) {
-          inaccessibleRelatedCount += 1;
+          noteUnavailable();
           return null;
         }
         const contentType = safeText(
@@ -1695,7 +1801,7 @@
           200
         ).toLowerCase();
         if (contentType && !/(?:application|text)\/[^;]*json/.test(contentType)) {
-          inaccessibleRelatedCount += 1;
+          noteUnavailable();
           return null;
         }
         const body = await readResponseText(response);
@@ -1711,16 +1817,560 @@
             value: JSON.parse(body.text)
           };
         } catch (_error) {
-          inaccessibleRelatedCount += 1;
+          noteUnavailable();
           return null;
         }
       } catch (_error) {
-        inaccessibleRelatedCount += 1;
+        noteUnavailable();
         return null;
       } finally {
         if (timer !== null && typeof clearTimeout === "function") {
           clearTimeout(timer);
         }
+      }
+    }
+
+    function exactItemMatches(object) {
+      if (!object || typeof object !== "object") {
+        return false;
+      }
+      const identifier = objectIdentifier(object);
+      if (identifier) {
+        return exactShortcodeMatches(identifier);
+      }
+      if (routeMediaId) {
+        const mediaPk = safeText(
+          safeProperty(object, "pk") || safeProperty(object, "media_id") ||
+            safeProperty(object, "mediaId") || safeProperty(object, "id"),
+          100
+        ).trim().replace(/_\d+$/, "");
+        if (mediaPk === routeMediaId) {
+          return true;
+        }
+      }
+      return objectUrlMatches(object, route, route.pageUrl);
+    }
+
+    function addExactItem(object, baseUrl) {
+      if (!exactItemMatches(object)) {
+        return false;
+      }
+      const completeExactContainer = exactContainerIsComplete(object);
+      if (completeExactContainer && !exactStructuredPostComplete) {
+        clearIncompleteExactRecords();
+      }
+      const before = found.size;
+      addMediaContainer(object, baseUrl, route.kind, false, route);
+      if (found.size > before) {
+        exactStructuredPostComplete = exactStructuredPostComplete ||
+          completeExactContainer;
+      }
+      return found.size > before;
+    }
+
+    function processExactPayload(value, baseUrl) {
+      if (!value || typeof value !== "object") {
+        return 0;
+      }
+      const before = found.size;
+      const data = safeProperty(value, "data");
+      const graph = safeProperty(value, "graphql");
+      const groups = [
+        safeProperty(value, "items"),
+        safeProperty(data, "items"),
+        safeProperty(safeProperty(data, "xdt_api__v1__media__shortcode__web_info"), "items"),
+        safeProperty(safeProperty(data, "xdt_api__v1__media__media_id_web_info"), "items")
+      ];
+      for (const group of groups) {
+        for (const item of objectList(group)) {
+          addExactItem(item, baseUrl);
+        }
+      }
+      addExactItem(safeProperty(graph, "shortcode_media"), baseUrl);
+      addExactItem(safeProperty(data, "xdt_shortcode_media"), baseUrl);
+      return found.size - before;
+    }
+
+    function canonicalExactPostUrl() {
+      try {
+        const exact = new URL(route.pageUrl);
+        exact.search = "";
+        exact.hash = "";
+        return exact.href;
+      } catch (_error) {
+        return route.pageUrl;
+      }
+    }
+
+    async function collectExactPostNetworkFallback() {
+      if (exactStructuredPostComplete || !["post", "reel"].includes(route.kind)) {
+        return;
+      }
+
+      if (routeMediaId) {
+        const mediaInfo = new URL(
+          `/api/v1/media/${encodeURIComponent(routeMediaId)}/info/`,
+          route.pageUrl
+        );
+        const fetched = await fetchInstagramJson(
+          mediaInfo.href,
+          "exact-media-info",
+          false,
+          EXACT_FETCH_TIMEOUT_MS
+        );
+        if (fetched) {
+          processExactPayload(fetched.value, fetched.url);
+        }
+      }
+      if (exactStructuredPostComplete) {
+        return;
+      }
+
+      const graphQuery = new URL("/graphql/query/", route.pageUrl);
+      graphQuery.searchParams.set("doc_id", INSTAGRAM_POST_QUERY_DOC_ID);
+      graphQuery.searchParams.set("variables", JSON.stringify({
+        shortcode: queryShortcode,
+        __relay_internal__pv__PolarisShortDramaEnabledrelayprovider: false,
+        __relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider: false
+      }));
+      const fetched = await fetchInstagramJson(
+        graphQuery.href,
+        "exact-post-query",
+        false,
+        EXACT_FETCH_TIMEOUT_MS
+      );
+      if (fetched) {
+        processExactPayload(fetched.value, fetched.url);
+      }
+      if (exactStructuredPostComplete) {
+        return;
+      }
+
+      const exactUrl = canonicalExactPostUrl();
+      if (!visitedDocuments.has(exactUrl) && fetchedDocumentCount < settings.maxDocuments) {
+        visitedDocuments.add(exactUrl);
+        fetchedDocumentCount += 1;
+        const exactDocument = await fetchHtmlDocument(
+          { url: exactUrl },
+          false,
+          EXACT_FETCH_TIMEOUT_MS
+        );
+        if (exactDocument) {
+          const finalRoute = parseRoute(exactDocument.url);
+          if (["post", "reel"].includes(finalRoute.kind) &&
+            exactShortcodeMatches(finalRoute.shortcode)) {
+            const added = processScripts(
+              scriptsFromHtml(exactDocument.text),
+              route,
+              exactDocument.url
+            );
+            if (!added) {
+              addMetaFallback(
+                metaMapFromHtml(exactDocument.text),
+                route,
+                exactDocument.url,
+                route.kind
+              );
+            }
+          }
+        }
+      }
+    }
+
+    function exactRuntimeRoots() {
+      const roots = [];
+      const seen = new Set();
+      const add = (node) => {
+        if (node && !seen.has(node) && roots.length < 128) {
+          seen.add(node);
+          roots.push(node);
+        }
+      };
+      try {
+        add(document.body);
+        add(document.documentElement);
+        const all = document.querySelectorAll("*");
+        const maximum = Math.min(Number(all && all.length) || 0, 128);
+        for (let index = 0; index < maximum; index += 1) {
+          add(all[index]);
+        }
+      } catch (_error) {
+        // Synthetic or partially loaded documents may omit these roots.
+      }
+      for (const selector of ["[role=\"dialog\"]", "main", "article", "body"]) {
+        let nodes = [];
+        try {
+          nodes = Array.from(document.querySelectorAll(selector)).slice(0, 16);
+        } catch (_error) {
+          nodes = [];
+        }
+        for (const node of nodes) {
+          add(node);
+          let media = [];
+          try {
+            media = Array.from(node.querySelectorAll("img, video")).slice(0, 64);
+          } catch (_error) {
+            media = [];
+          }
+          for (const item of media) {
+            add(item);
+            let parent = safeProperty(item, "parentElement");
+            for (let depth = 0; parent && depth < 8; depth += 1) {
+              add(parent);
+              parent = safeProperty(parent, "parentElement");
+            }
+          }
+        }
+      }
+      return roots;
+    }
+
+    function processExactRuntimeData() {
+      if (exactStructuredPostComplete || !["post", "reel"].includes(route.kind)) {
+        return;
+      }
+      const values = [];
+      const seenValues = typeof WeakSet === "function" ? new WeakSet() : null;
+      for (const node of exactRuntimeRoots()) {
+        let pageNode = node;
+        try {
+          const unwrapped = safeProperty(node, "wrappedJSObject");
+          if (unwrapped && typeof unwrapped === "object") {
+            pageNode = unwrapped;
+          }
+        } catch (_error) {
+          pageNode = node;
+        }
+        let keys = [];
+        try {
+          keys = Object.getOwnPropertyNames(pageNode).slice(0, 512);
+        } catch (_error) {
+          keys = [];
+        }
+        for (const key of keys) {
+          if (!/^__react(?:Fiber|Props)\$.{1,100}$/i.test(key)) {
+            continue;
+          }
+          const value = safeProperty(pageNode, key);
+          if (!value || typeof value !== "object" || seenValues && seenValues.has(value)) {
+            continue;
+          }
+          if (seenValues) {
+            seenValues.add(value);
+          }
+          values.push(value);
+          if (values.length >= 32) {
+            break;
+          }
+        }
+        if (values.length >= 32) {
+          break;
+        }
+      }
+
+      const visited = typeof WeakSet === "function" ? new WeakSet() : null;
+      let visitedCount = 0;
+      function walk(value, depth) {
+        if (exactStructuredPostComplete || !value || typeof value !== "object" || depth > 32 ||
+          visitedCount >= 40000) {
+          return;
+        }
+        if (visited) {
+          if (visited.has(value)) {
+            return;
+          }
+          visited.add(value);
+        }
+        visitedCount += 1;
+        if (exactItemMatches(value) && addExactItem(value, route.pageUrl)) {
+          return;
+        }
+        let entries = [];
+        try {
+          entries = Array.isArray(value)
+            ? value.slice(0, 2048).map((item, index) => [String(index), item])
+            : Object.entries(value).slice(0, 512);
+        } catch (_error) {
+          entries = [];
+        }
+        for (const [, child] of entries) {
+          walk(child, depth + 1);
+          if (exactStructuredPostComplete) {
+            break;
+          }
+        }
+      }
+      for (const value of values) {
+        walk(value, 0);
+        if (exactStructuredPostComplete) {
+          break;
+        }
+      }
+    }
+
+    function domAttribute(node, name) {
+      try {
+        return safeText(node && node.getAttribute && node.getAttribute(name), 16384);
+      } catch (_error) {
+        return "";
+      }
+    }
+
+    function domMediaDetails(node) {
+      const tag = safeText(
+        safeProperty(node, "localName") || safeProperty(node, "tagName"),
+        20
+      ).toLowerCase();
+      const mediaType = tag === "video" ? "video" : tag === "img" ? "image" : "";
+      if (!mediaType) {
+        return null;
+      }
+      let rawUrl = safeText(
+        safeProperty(node, "currentSrc") || safeProperty(node, "src") ||
+          domAttribute(node, "src"),
+        16384
+      );
+      if (!rawUrl && mediaType === "image") {
+        const srcset = domAttribute(node, "srcset");
+        const candidates = srcset.split(",").map((entry) => entry.trim().split(/\s+/)[0])
+          .filter(Boolean);
+        rawUrl = candidates[candidates.length - 1] || "";
+      }
+      const url = mediaHttpUrl(rawUrl, route.pageUrl, mediaType);
+      if (!url || /(?:t51\.2885-19|profile_pic|[\/_]s150x150[\/_])/i.test(url)) {
+        return null;
+      }
+      const alt = safeText(safeProperty(node, "alt") || domAttribute(node, "alt"), 500);
+      if (/profile (?:photo|picture)/i.test(alt)) {
+        return null;
+      }
+      let box = null;
+      try {
+        box = node.getBoundingClientRect && node.getBoundingClientRect();
+      } catch (_error) {
+        box = null;
+      }
+      const width = positiveNumber(
+        safeProperty(node, mediaType === "video" ? "videoWidth" : "naturalWidth") ||
+          safeProperty(node, "width") || domAttribute(node, "width") || safeProperty(box, "width")
+      );
+      const height = positiveNumber(
+        safeProperty(node, mediaType === "video" ? "videoHeight" : "naturalHeight") ||
+          safeProperty(node, "height") || domAttribute(node, "height") || safeProperty(box, "height")
+      );
+      const renderedWidth = positiveNumber(safeProperty(box, "width"));
+      const renderedHeight = positiveNumber(safeProperty(box, "height"));
+      const intrinsicallyLarge = width >= 480 && height >= 240 || width >= 240 && height >= 480;
+      const visiblyLarge = renderedWidth >= 280 && renderedHeight >= 180 ||
+        renderedWidth >= 180 && renderedHeight >= 280;
+      if (!intrinsicallyLarge && !visiblyLarge) {
+        return null;
+      }
+      const poster = mediaType === "video"
+        ? mediaHttpUrl(
+          safeProperty(node, "poster") || domAttribute(node, "poster"),
+          route.pageUrl,
+          "image"
+        )
+        : "";
+      return {
+        url,
+        previewUrl: poster,
+        alt,
+        width: width || renderedWidth,
+        height: height || renderedHeight,
+        mediaType,
+        score: Math.max(width * height, renderedWidth * renderedHeight)
+      };
+    }
+
+    function domMediaIn(root) {
+      let nodes = [];
+      try {
+        nodes = Array.from(root.querySelectorAll("img, video")).slice(0, 256);
+      } catch (_error) {
+        nodes = [];
+      }
+      const records = [];
+      const seenUrls = new Set();
+      const posters = new Set();
+      for (const node of nodes) {
+        const tag = safeText(safeProperty(node, "localName") || safeProperty(node, "tagName"), 20)
+          .toLowerCase();
+        if (tag !== "video") {
+          continue;
+        }
+        const poster = mediaHttpUrl(
+          safeProperty(node, "poster") || domAttribute(node, "poster"),
+          route.pageUrl,
+          "image"
+        );
+        if (poster) {
+          posters.add(poster);
+        }
+      }
+      for (const node of nodes) {
+        const details = domMediaDetails(node);
+        if (!details || seenUrls.has(details.url) ||
+          details.mediaType === "image" && posters.has(details.url)) {
+          continue;
+        }
+        seenUrls.add(details.url);
+        records.push(details);
+      }
+      return records;
+    }
+
+    function rootExactRouteStatus(root) {
+      let sawExactPost = false;
+      let sawOtherPost = false;
+      for (const name of ["data-shortcode", "data-media-shortcode"]) {
+        const shortcode = domAttribute(root, name);
+        if (exactShortcodeMatches(shortcode)) {
+          sawExactPost = true;
+        } else {
+          sawOtherPost = sawOtherPost || Boolean(shortcode);
+        }
+      }
+      let anchors = [];
+      try {
+        anchors = Array.from(root.querySelectorAll("a[href]")).slice(0, 128);
+      } catch (_error) {
+        anchors = [];
+      }
+      for (const anchor of anchors) {
+        const href = domAttribute(anchor, "href") || safeText(safeProperty(anchor, "href"), 16384);
+        let linked = { kind: "unsupported" };
+        try {
+          linked = parseRoute(href ? new URL(href, route.pageUrl).href : "");
+        } catch (_error) {
+          linked = { kind: "unsupported" };
+        }
+        if ((linked.kind === "post" || linked.kind === "reel") &&
+          exactShortcodeMatches(linked.shortcode)) {
+          sawExactPost = true;
+        } else if (linked.kind === "post" || linked.kind === "reel") {
+          sawOtherPost = true;
+        }
+      }
+      if (sawExactPost && sawOtherPost) {
+        return 2;
+      }
+      if (sawExactPost) {
+        return 1;
+      }
+      return sawOtherPost ? -1 : 0;
+    }
+
+    function processExactViewerDom() {
+      if (exactStructuredPostComplete || !["post", "reel"].includes(route.kind)) {
+        return;
+      }
+      const selectorGroups = [
+        "[role=\"dialog\"] article",
+        "[role=\"dialog\"]",
+        "main article",
+        "main",
+        "article"
+      ];
+      let best = null;
+      for (const selector of selectorGroups) {
+        let roots = [];
+        try {
+          roots = Array.from(document.querySelectorAll(selector)).slice(0, 32);
+        } catch (_error) {
+          roots = [];
+        }
+        const candidates = [];
+        let ambiguousNeutralRoot = false;
+        for (const root of roots) {
+          const rootRouteStatus = rootExactRouteStatus(root);
+          let tracks = [];
+          try {
+            tracks = Array.from(root.querySelectorAll("ul")).slice(0, 64);
+          } catch (_error) {
+            tracks = [];
+          }
+          const rootCandidates = [];
+          for (const candidate of tracks) {
+            let routeStatus = rootExactRouteStatus(candidate);
+            if (routeStatus === 0 && rootRouteStatus !== 2) {
+              routeStatus = rootRouteStatus;
+            }
+            if (routeStatus === 2 || (rootRouteStatus === 2 && routeStatus === 0)) {
+              continue;
+            }
+            const records = domMediaIn(candidate);
+            if (!records.length) {
+              continue;
+            }
+            const maxArea = Math.max(...records.map((item) => item.score || 0));
+            const score = records.length * 1000000000000 + maxArea;
+            rootCandidates.push({ records, score, routeStatus });
+          }
+          if (!rootCandidates.length && rootRouteStatus !== 2) {
+            const records = domMediaIn(root);
+            if (records.length) {
+              const maxArea = Math.max(...records.map((item) => item.score || 0));
+              rootCandidates.push({
+                records,
+                score: records.length * 1000000000000 + maxArea,
+                routeStatus: rootRouteStatus
+              });
+            }
+          }
+          if (rootRouteStatus === 0 && rootCandidates.length !== 1) {
+            ambiguousNeutralRoot = ambiguousNeutralRoot || rootCandidates.length > 1;
+            continue;
+          }
+          if (rootRouteStatus === 2) {
+            candidates.push(...rootCandidates);
+            continue;
+          }
+          let bestForRoot = null;
+          for (const candidate of rootCandidates) {
+            if (!bestForRoot || candidate.score > bestForRoot.score) {
+              bestForRoot = candidate;
+            }
+          }
+          if (bestForRoot) {
+            candidates.push(bestForRoot);
+          }
+        }
+        const hasExactScope = candidates.some((item) => item.routeStatus === 1);
+        const neutralCandidates = candidates.filter((item) => item.routeStatus === 0);
+        if (!hasExactScope && (ambiguousNeutralRoot || neutralCandidates.length > 1)) {
+          return;
+        }
+        let scoped = hasExactScope
+          ? candidates.filter((item) => item.routeStatus === 1)
+          : neutralCandidates;
+        for (const candidate of scoped) {
+          if (!best || candidate.score > best.score) {
+            best = candidate;
+          }
+        }
+        if (scoped.length) {
+          break;
+        }
+      }
+      if (!best) {
+        return;
+      }
+      const membership = collectionMembershipFor({}, route, route.kind, "");
+      const total = best.records.length;
+      for (let index = 0; index < total; index += 1) {
+        const item = best.records[index];
+        const label = total > 1 ? `carousel ${index + 1}/${total}` : route.kind;
+        addRecord(item.url, {
+          previewUrl: item.previewUrl,
+          alt: item.alt,
+          width: item.width,
+          height: item.height,
+          mediaType: item.mediaType,
+          instagramCollections: membership ? [membership] : [],
+          kinds: [`Instagram ${label} ${item.mediaType}`]
+        });
       }
     }
 
@@ -1858,6 +2508,15 @@
 
     processCurrentDocument();
 
+    if (route.kind === "post" || route.kind === "reel") {
+      // SPA post modals do not replace the profile document's original
+      // scripts. Recover the exact React item when exposed, otherwise request
+      // only this canonical shortcode with the active Instagram session.
+      processExactRuntimeData();
+      await collectExactPostNetworkFallback();
+      processExactViewerDom();
+    }
+
     if (route.kind === "profile") {
       const pk = await discoverProfilePk();
       await collectProfileFeed(pk);
@@ -1879,7 +2538,7 @@
       }
       visitedDocuments.add(entry.url);
       fetchedDocumentCount += 1;
-      const fetched = await fetchRelatedDocument(entry);
+      const fetched = await fetchHtmlDocument(entry, true);
       if (!fetched) {
         continue;
       }

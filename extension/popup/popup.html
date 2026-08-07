@@ -73,10 +73,6 @@
           <input id="filter-input" type="search" placeholder="Filter by URL, label, or type…" autocomplete="off">
         </label>
         <div class="filter-toolbar">
-          <label class="option-row photos-only-toggle" title="Hide likely logos, icons, avatars, trackers, and other non-photo assets">
-            <input id="photos-only-input" type="checkbox">
-            <span>Photos only</span>
-          </label>
           <button id="smart-filters-button" class="text-button filter-toggle-button" type="button" aria-expanded="false" aria-controls="smart-filter-panel">Filters</button>
           <button id="instagram-collections-button" class="text-button instagram-collections-button" type="button" title="Collect the profile owner's active story and highlights" hidden>Stories &amp; highlights</button>
           <button id="sidebar-follow-button" class="text-button sidebar-follow-button" type="button" title="Allow the Sidebar to follow every active webpage" hidden>Enable auto-follow</button>
@@ -90,6 +86,10 @@
               <option value="video">Videos</option>
             </select>
           </label>
+          <label class="option-row photos-only-toggle" title="Hide likely logos, icons, avatars, trackers, and other non-photo assets">
+            <input id="photos-only-input" type="checkbox">
+            <span>Photos only</span>
+          </label>
           <label id="instagram-collection-filter-field" class="compact-field" hidden>
             <span>Instagram collection</span>
             <select id="instagram-collection-filter-select">
@@ -98,14 +98,6 @@
               <option value="story">Current story only</option>
               <option value="highlights">All highlights</option>
             </select>
-          </label>
-          <label class="compact-field">
-            <span>Min width</span>
-            <input id="min-width-input" type="number" min="0" max="1000000" step="1" inputmode="numeric" value="0">
-          </label>
-          <label class="compact-field">
-            <span>Min height</span>
-            <input id="min-height-input" type="number" min="0" max="1000000" step="1" inputmode="numeric" value="0">
           </label>
           <label class="compact-field">
             <span>Format</span>
@@ -124,19 +116,6 @@
               <option value="m4v">M4V</option>
               <option value="mkv">MKV</option>
             </select>
-          </label>
-          <label class="compact-field">
-            <span>Orientation</span>
-            <select id="orientation-filter-select">
-              <option value="any">Any</option>
-              <option value="landscape">Landscape</option>
-              <option value="portrait">Portrait</option>
-              <option value="square">Square</option>
-            </select>
-          </label>
-          <label class="option-row unknown-size-toggle" title="Keep originals whose full dimensions have not been detected yet">
-            <input id="include-unknown-input" type="checkbox" checked>
-            <span>Include unknown sizes</span>
           </label>
           <button id="reset-filters-button" class="text-button" type="button">Reset</button>
         </div>

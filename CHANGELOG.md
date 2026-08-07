@@ -14,13 +14,16 @@ All notable changes to AnyDownload are documented here.
 - Automatic live updates now start after every successful manager scan. Sidebar handoffs stop the previous watcher, scan the newly active or navigated page, and start a watcher for that new source without a separate capture action.
 - The profile-only **Stories & highlights** action uses the current signed-in or private-window Instagram session, preserves already collected profile posts, and warns that requesting story data may register as a view.
 - Exact Instagram post and reel routes now collect only the selected post, expand its complete carousel regardless of `img_index`, and never fetch related profile posts, stories, or highlights.
+- Exact Instagram posts opened through profile-page SPA navigation now recover the shortcode-scoped post with the active browser session when the original document has no matching hydration data.
 - Instagram profile, story, and highlight access remains bounded by item, document, response-size, and combined-URL limits; private or restricted media is returned only when it is available to the current browser session.
 - Exact media URLs continue to share one manager identity across frames and live rescans, while distinct URLs remain separate records.
+- **Photos only** now lives inside the expandable **Filters** panel.
 
 ### Removed
 
 - Manual manager reload and live-capture controls; live updates are always enabled after a successful scan.
 - Heuristic image duplicate analysis, its Duplicates panel, keep-best selection, and hide-extra-copies controls.
+- Minimum-width, minimum-height, orientation, and unknown-size filter controls.
 
 ## [1.9.0] - 2026-08-07
 

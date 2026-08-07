@@ -191,7 +191,6 @@ assert.match(popupHtml, /id="archive-download-button"[^>]*title="Download select
 assert.match(popupHtml, /id="archive-footer-button"[^>]*disabled>Download ZIP<\/button>/);
 assert.match(popupHtml, /id="sidebar-follow-button"[^>]*hidden>Enable auto-follow<\/button>/);
 assert.match(popupHtml, /id="sidebar-button"[^>]*title="Open Firefox Sidebar"[^>]*aria-label="Open Firefox Sidebar"/);
-assert.match(popupHtml, /id="photos-only-input"[^>]*type="checkbox"/);
 assert.match(popupHtml, /id="instagram-collections-button"[^>]*hidden>Stories &amp; highlights<\/button>/);
 assert.match(popupHtml, /id="instagram-collection-filter-select"/);
 for (const collectionFilter of ["all", "posts", "story", "highlights"]) {
@@ -203,16 +202,39 @@ for (const collectionFilter of ["all", "posts", "story", "highlights"]) {
 }
 assert.match(popupHtml, /id="smart-filter-panel"[^>]*hidden/);
 assert.match(popupHtml, /id="smart-filters-button"[^>]*aria-expanded="false"[^>]*aria-controls="smart-filter-panel"/);
-assert.match(popupHtml, /id="min-width-input"[^>]*type="number"[^>]*min="0"/);
-assert.match(popupHtml, /id="min-height-input"[^>]*type="number"[^>]*min="0"/);
+assert.equal(
+  (popupHtml.match(/id=["']photos-only-input["']/g) || []).length,
+  1,
+  "Photos only must be exposed exactly once"
+);
+assert.match(
+  popupHtml,
+  /<div id="smart-filter-panel"[^>]*hidden>[\s\S]*?<input id="photos-only-input"[^>]*type="checkbox"[\s\S]*?<\/div>/,
+  "Photos only must live inside the collapsible Filters panel"
+);
 assert.match(popupHtml, /id="media-type-filter-select"/);
 for (const format of ["mp4", "webm", "ogv", "mov", "m4v", "mkv"]) {
   assert.match(popupHtml, new RegExp(`<option value=["']${format}["']`));
 }
 assert.match(popupHtml, /id="format-filter-select"/);
-assert.match(popupHtml, /id="orientation-filter-select"/);
-assert.match(popupHtml, /id="include-unknown-input"[^>]*type="checkbox"[^>]*checked/);
 assert.match(popupHtml, /id="reset-filters-button"/);
+for (const removedSmartFilterId of [
+  "min-width-input",
+  "min-height-input",
+  "orientation-filter-select",
+  "include-unknown-input"
+]) {
+  assert.doesNotMatch(
+    popupHtml,
+    new RegExp(`id=["']${removedSmartFilterId}["']`),
+    `${removedSmartFilterId} must not remain in the Filters panel`
+  );
+  assert.doesNotMatch(
+    popupJs,
+    new RegExp(`elements\\["${removedSmartFilterId}"\\]`),
+    `${removedSmartFilterId} must not remain wired in popup.js`
+  );
+}
 assert.match(popupJs, /browser\.tabs\.create\(createProperties\)/);
 assert.match(popupJs, /browser\.storage\.session\.set\(\{ \[key\]: payload \}\)/);
 assert.doesNotMatch(popupJs, /areaName\s*=\s*"local"/);

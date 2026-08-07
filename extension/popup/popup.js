@@ -669,16 +669,12 @@
       "history-button",
       "ignored-button",
       "image-list",
-      "include-unknown-input",
       "instagram-collection-filter-field",
       "instagram-collection-filter-select",
       "instagram-collections-button",
       "media-type-filter-select",
-      "min-height-input",
-      "min-width-input",
       "notice",
       "open-window-button",
-      "orientation-filter-select",
       "page-label",
       "photos-only-input",
       "queue-badge",
@@ -1567,12 +1563,8 @@
   function smartFiltersFromControls() {
     return Filters.normalizeFilters({
       photosOnly: elements["photos-only-input"].checked,
-      minWidth: elements["min-width-input"].value,
-      minHeight: elements["min-height-input"].value,
       mediaType: elements["media-type-filter-select"].value,
-      format: elements["format-filter-select"].value,
-      orientation: elements["orientation-filter-select"].value,
-      includeUnknown: elements["include-unknown-input"].checked
+      format: elements["format-filter-select"].value
     });
   }
 
@@ -1580,23 +1572,15 @@
     const normalized = Filters.normalizeFilters(filters);
     state.smartFilters = normalized;
     elements["photos-only-input"].checked = normalized.photosOnly;
-    elements["min-width-input"].value = String(normalized.minWidth);
-    elements["min-height-input"].value = String(normalized.minHeight);
     elements["media-type-filter-select"].value = normalized.mediaType;
     elements["format-filter-select"].value = normalized.format;
-    elements["orientation-filter-select"].value = normalized.orientation;
-    elements["include-unknown-input"].checked = normalized.includeUnknown;
   }
 
   function smartFilterCount(filters) {
     const normalized = Filters.normalizeFilters(filters);
     return Number(normalized.photosOnly) +
-      Number(normalized.minWidth > 0) +
-      Number(normalized.minHeight > 0) +
       Number(normalized.mediaType !== "any") +
-      Number(normalized.format !== "any") +
-      Number(normalized.orientation !== "any") +
-      Number(!normalized.includeUnknown);
+      Number(normalized.format !== "any");
   }
 
   function updateSmartFilterButton() {
@@ -3512,12 +3496,8 @@
     });
     elements["photos-only-input"].addEventListener("change", handleSmartFilterChange);
     for (const id of [
-      "min-width-input",
-      "min-height-input",
       "media-type-filter-select",
-      "format-filter-select",
-      "orientation-filter-select",
-      "include-unknown-input"
+      "format-filter-select"
     ]) {
       elements[id].addEventListener("change", handleSmartFilterChange);
     }

@@ -475,11 +475,13 @@ html:not(.responsive-surface) .selection-actions {
 }
 
 .photos-only-toggle {
-  min-height: 25px;
-  padding: 3px 7px;
+  min-height: 29px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--text);
-  background: var(--surface-raised);
+  background: var(--surface);
+  white-space: normal;
 }
 
 .filter-toggle-button,
@@ -547,12 +549,6 @@ html:not(.responsive-surface) .selection-actions {
   border-color: var(--accent);
 }
 
-.unknown-size-toggle {
-  grid-column: 1 / span 3;
-  align-self: center;
-  white-space: normal;
-}
-
 .smart-filter-panel > .text-button {
   justify-self: end;
 }
@@ -560,10 +556,6 @@ html:not(.responsive-surface) .selection-actions {
 @media (max-width: 560px) {
   html.responsive-surface .smart-filter-panel {
     grid-template-columns: repeat(2, minmax(90px, 1fr));
-  }
-
-  html.responsive-surface .unknown-size-toggle {
-    grid-column: 1;
   }
 
   html.sidebar-panel .summary-row {

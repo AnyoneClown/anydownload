@@ -41,11 +41,7 @@ assert.deepEqual(Filters.normalizeFilters({
 }), {
   mediaType: "video",
   photosOnly: true,
-  minWidth: 300,
-  minHeight: 0,
-  format: "jpeg",
-  orientation: "portrait",
-  includeUnknown: false
+  format: "jpeg"
 });
 assert.deepEqual(Filters.normalizeFilters({
   mediaType: "audio",
@@ -58,25 +54,30 @@ assert.deepEqual(Filters.normalizeFilters({
 }), {
   mediaType: "any",
   photosOnly: false,
-  minWidth: 0,
-  minHeight: 1000000,
-  format: "any",
-  orientation: "any",
-  includeUnknown: true
+  format: "any"
 });
 
 const hostileFilters = {};
-Object.defineProperty(hostileFilters, "minWidth", {
-  get() {
-    throw new Error("hostile getter");
-  }
-});
+for (const legacyFilter of ["minWidth", "minHeight", "orientation", "includeUnknown"]) {
+  Object.defineProperty(hostileFilters, legacyFilter, {
+    get() {
+      throw new Error(`The removed ${legacyFilter} filter must not be read`);
+    }
+  });
+}
 assert.doesNotThrow(() => Filters.normalizeFilters(hostileFilters));
-assert.equal(Filters.normalizeFilters(hostileFilters).minWidth, 0);
+assert.deepEqual(Filters.normalizeFilters(hostileFilters), Filters.DEFAULT_FILTERS);
 assert.doesNotThrow(() => Filters.normalizeFilters({ minWidth: Symbol("unsafe") }));
-assert.equal(Filters.normalizeFilters({
-  minHeight: { valueOf() { throw new Error("unsafe coercion"); } }
-}).minHeight, 0);
+assert.deepEqual(
+  Filters.normalizeFilters({
+    minWidth: Symbol("unsafe"),
+    minHeight: { valueOf() { throw new Error("unsafe coercion"); } },
+    orientation: "portrait",
+    includeUnknown: false
+  }),
+  Filters.DEFAULT_FILTERS,
+  "Removed dimension, orientation, and unknown-size settings must be ignored"
+);
 
 assert.equal(Filters.imageFileType({ url: "https://cdn.test/photo.JPG?size=large" }), "jpeg");
 assert.equal(Filters.imageFileType({ url: "https://cdn.test/render?id=2&format=webp" }), "webp");
@@ -138,27 +139,20 @@ assert.equal(
 );
 
 assert.equal(Filters.matchesSmartFilters(normalPhoto, {}), true);
-assert.equal(Filters.matchesSmartFilters(normalPhoto, { minWidth: 2000 }), false);
-assert.equal(Filters.matchesSmartFilters(normalPhoto, { minWidth: 1900, minHeight: 1000 }), true);
 assert.equal(Filters.matchesSmartFilters(normalPhoto, { format: "webp" }), true);
 assert.equal(Filters.matchesSmartFilters(normalPhoto, { format: "jpeg" }), false);
-assert.equal(Filters.matchesSmartFilters(normalPhoto, { orientation: "landscape" }), true);
-assert.equal(Filters.matchesSmartFilters(normalPhoto, { orientation: "portrait" }), false);
-assert.equal(Filters.matchesSmartFilters({ ...normalPhoto, width: 900, height: 1200 }, { orientation: "portrait" }), true);
-assert.equal(Filters.matchesSmartFilters({ ...normalPhoto, width: 900, height: 900 }, { orientation: "square" }), true);
-assert.equal(Filters.matchesSmartFilters({ ...normalPhoto, width: 901, height: 900 }, { orientation: "square" }), false);
 
 const unknownSize = { url: "https://gallery.test/full/photo-2.jpg", width: 0, height: 0 };
-assert.equal(Filters.matchesSmartFilters(unknownSize, { minWidth: 2000, includeUnknown: true }), true);
-assert.equal(Filters.matchesSmartFilters(unknownSize, { orientation: "portrait", includeUnknown: true }), true);
-assert.equal(Filters.matchesSmartFilters(unknownSize, { includeUnknown: false }), false);
-assert.equal(Filters.matchesSmartFilters(
-  { url: "https://gallery.test/photo.jpg", width: 100, height: 0 },
-  { minWidth: 500, includeUnknown: true }
-), false);
+assert.equal(Filters.matchesSmartFilters(unknownSize, { includeUnknown: false }), true);
+assert.equal(Filters.matchesSmartFilters(normalPhoto, {
+  minWidth: 999999,
+  minHeight: 999999,
+  orientation: "portrait",
+  includeUnknown: false
+}), true, "Removed filter criteria must not affect matching");
 assert.equal(Filters.matchesSmartFilters(
   { url: "https://site.test/logo.png", width: 0, height: 0 },
-  { photosOnly: true, includeUnknown: true }
+  { photosOnly: true }
 ), false);
 assert.equal(Filters.matchesSmartFilters(normalPhoto, { photosOnly: true }), true);
 const normalVideo = {
@@ -180,11 +174,13 @@ assert.equal(Filters.hasActiveSmartFilters(), false);
 assert.equal(Filters.hasActiveSmartFilters({}), false);
 assert.equal(Filters.hasActiveSmartFilters({ mediaType: "video" }), true);
 assert.equal(Filters.hasActiveSmartFilters({ photosOnly: true }), true);
-assert.equal(Filters.hasActiveSmartFilters({ minWidth: 1 }), true);
-assert.equal(Filters.hasActiveSmartFilters({ minHeight: 1 }), true);
 assert.equal(Filters.hasActiveSmartFilters({ format: "png" }), true);
-assert.equal(Filters.hasActiveSmartFilters({ orientation: "square" }), true);
-assert.equal(Filters.hasActiveSmartFilters({ includeUnknown: false }), true);
+assert.equal(Filters.hasActiveSmartFilters({
+  minWidth: 1,
+  minHeight: 1,
+  orientation: "square",
+  includeUnknown: false
+}), false);
 assert.equal(Filters.hasActiveSmartFilters({ format: "invalid", minWidth: -5 }), false);
 
 console.log("All smart-filter checks passed.");
