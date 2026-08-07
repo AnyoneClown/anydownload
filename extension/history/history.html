@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AnyDownload — Downloads</title>
+    <link rel="stylesheet" href="history.css">
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="page-header">
+        <img class="app-icon" src="../icons/image-downloader.svg" alt="">
+        <div class="header-copy">
+          <p class="eyebrow">AnyDownload</p>
+          <h1>Downloads</h1>
+          <p id="dashboard-subtitle" class="subtitle">Loading queue and statistics…</p>
+        </div>
+        <div class="header-actions">
+          <button id="open-folder-button" class="secondary-button" type="button">Open Downloads folder</button>
+          <button id="refresh-button" class="icon-button" type="button" aria-label="Refresh downloads" title="Refresh downloads">↻</button>
+        </div>
+      </header>
+
+      <section class="stats-grid" aria-label="Download statistics">
+        <article class="stat-card">
+          <span>Completed</span>
+          <strong id="completed-stat">0</strong>
+          <small id="completed-detail">0 completed · 0 failed · 0 cancelled today</small>
+        </article>
+        <article class="stat-card">
+          <span>Downloaded</span>
+          <strong id="bytes-stat">0 B</strong>
+          <small id="bytes-detail">0 B today</small>
+        </article>
+        <article class="stat-card">
+          <span>Success rate</span>
+          <strong id="success-stat">—</strong>
+          <small id="success-detail">No finished files today · 0 failed · 0 cancelled lifetime</small>
+        </article>
+        <article class="stat-card">
+          <span>In queue</span>
+          <strong id="queue-stat">0</strong>
+          <small id="queue-detail">Nothing active</small>
+        </article>
+      </section>
+
+      <section class="card queue-card" aria-labelledby="queue-heading">
+        <div class="section-heading">
+          <div>
+            <p class="section-label">Current activity</p>
+            <h2 id="queue-heading">Download queue</h2>
+          </div>
+          <div class="queue-actions">
+            <button id="pause-all-button" class="quiet-button" type="button">Pause all</button>
+            <button id="resume-all-button" class="quiet-button" type="button">Resume all</button>
+            <button id="cancel-pending-button" class="danger-button" type="button">Cancel pending</button>
+          </div>
+        </div>
+        <progress id="queue-progress" max="1" value="0" aria-labelledby="queue-heading" aria-describedby="queue-description"></progress>
+        <p id="queue-description" class="muted" role="status" aria-live="polite">No downloads are queued.</p>
+      </section>
+
+      <section class="card history-card" aria-labelledby="history-heading">
+        <div class="section-heading history-heading-row">
+          <div>
+            <p class="section-label">Recent activity</p>
+            <h2 id="history-heading">Queue and history</h2>
+          </div>
+          <div class="history-tools">
+            <label>
+              <span class="visually-hidden">Filter download history</span>
+              <select id="status-filter">
+                <option value="all">All statuses</option>
+                <option value="active">Active</option>
+                <option value="complete">Completed</option>
+                <option value="failed">Failed</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </label>
+            <button id="retry-failed-button" class="quiet-button" type="button" hidden>Retry failed</button>
+            <button id="clear-completed-button" class="quiet-button" type="button">Clear completed</button>
+          </div>
+        </div>
+
+        <div id="error-banner" class="error-banner" role="alert" hidden></div>
+        <p id="history-empty" class="empty-state">No downloads have been recorded yet.</p>
+        <div id="job-list" class="job-list" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <script src="history.js"></script>
+  </body>
+</html>

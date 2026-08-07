@@ -1,6 +1,6 @@
 # AnyDownload — Page Image Downloader for Firefox
 
-This repository contains a working Manifest V3 Firefox extension. It scans the **currently loaded page**, prefers the best full-size source exposed for each image, lets you preview or ignore unwanted images, narrows the list with smart photo filters, and downloads one image, a selected batch, or locally built ZIP archives to a named folder below Firefox's configured Downloads directory.
+This repository contains a working Manifest V3 Firefox extension. It scans the **currently loaded page**, prefers the best full-size source exposed for each image, lets you preview or ignore unwanted images, narrows the list with smart photo and duplicate filters, applies safe filename templates, and downloads one image, a queued batch, or locally built ZIP archives to a named folder below Firefox's configured Downloads directory. A dedicated Downloads page shows live queue controls, recent batch history, and downloaded-file statistics.
 
 The manifest targets Firefox desktop 140+ and Firefox for Android 142+. Firefox desktop first opens a compact toolbar popup; its **Open window** button moves the same image manager into a separate resizable window, and its sidebar button opens the persistent Firefox Sidebar. The manager and sidebar can watch an infinite-scroll gallery while you keep using the page, and the sidebar can automatically follow active-tab changes after one explicit permission grant. Firefox for Android falls back to an extension tab and does not support the sidebar, optional Save As dialog, or extension context menus.
 
@@ -10,14 +10,15 @@ The manifest targets Firefox desktop 140+ and Firefox for Android 142+. Firefox 
 2. Choose **This Firefox** → **Load Temporary Add-on**.
 3. Select `extension/manifest.json` from this project.
 4. Open a normal website and select the extension's toolbar button. Use the compact popup directly, choose **Open window** for a resizable manager, or choose the sidebar button to keep the manager beside the page.
-5. Turn on **Photos only**, or expand **Filters** to set minimum dimensions, file format, orientation, and whether unknown dimensions remain eligible.
-6. Click a thumbnail to preview it in a full browser tab, choose **Ignore** to hide an unwanted logo, or right-click a page image and open the **AnyDownload** submenu.
-7. On a lazy or infinite-scroll gallery, choose **Live capture**. In the resizable manager or sidebar you can keep scrolling the webpage while capture remains open.
-8. Enter a relative destination such as `Website images/example.com`, select the images you want, and choose **Download N**, **Download selected**, or **Download ZIP**.
+5. Turn on **Photos only**, expand **Filters** for precise rules, or open **Duplicates** to keep the best likely copy selected.
+6. Expand **Filename template** to keep the source name or combine page, host, index, dimension, and date tokens; the live example shows the resulting safe filename.
+7. Click a thumbnail to preview it in a full browser tab, choose **Ignore** to hide an unwanted logo, or right-click a page image and open the **AnyDownload** submenu.
+8. On a lazy or infinite-scroll gallery, choose **Live capture**. In the resizable manager or sidebar you can keep scrolling the webpage while capture remains open.
+9. Enter a relative destination such as `Website images/example.com`, select the images you want, and choose **Download N**, **Download selected**, or **Download ZIP**. Use the download-arrow button in the header to inspect the queue, history, progress, and statistics.
 
 The temporary extension is removed when Firefox restarts. Use the **Reload** button on `about:debugging` after changing source files. Mozilla documents this workflow in [Temporary installation in Firefox](https://extensionworkshop.com/documentation/develop/temporary-installation-in-firefox/).
 
-If you are upgrading an existing temporary installation, reload the add-on from `about:debugging` before clicking its toolbar button again. Version 1.6.1 makes 400+ image ZIP jobs resilient by moving them to a visible progress page and splitting large results into bounded archive parts; see [Version history](#version-history) for earlier milestones.
+If you are upgrading an existing temporary installation, reload the add-on from `about:debugging` before clicking its toolbar button again. Version 1.7.0 adds filename templates, likely-duplicate cleanup, and a durable ordinary-download queue with history and statistics; see [Version history](#version-history) for earlier milestones.
 
 ## Ignore and preview images
 
@@ -44,6 +45,33 @@ The collector first uses trustworthy dimensions exposed beside an original URL, 
 - **Include unknown sizes** keeps full-size sources eligible while their dimensions are unavailable. It is enabled by default so an original is not discarded merely because only its thumbnail had dimension metadata.
 
 Smart-filter settings are remembered. Applying a filter removes nonmatching items from the current selection; **Select matches only** then checks only the visible eligible images. The compact action beside the selection controls always reports the actionable count as **Download N**, while the footer keeps the larger **Download selected** action. Both start the same validated bulk-download path, and neither includes ignored or filtered-out images.
+
+## Filename templates and duplicate cleanup
+
+Expand **Filename template** above the image list to control names for ordinary downloads and ZIP entries. The default `{filename}` keeps the safe source filename. Templates can combine literal text with these tokens:
+
+- `{filename}` — the source filename including its extension.
+- `{name}` and `{ext}` — the source filename stem and extension separately.
+- `{index}` — the image's one-based position in the selected batch.
+- `{hostname}` and `{page-title}` — the source page host and title.
+- `{width}` and `{height}` — known full-size dimensions, or `unknown` when unresolved.
+- `{date}` — the user's local batch date in `YYYY-MM-DD` form.
+
+The extension validates templates before enabling a download, preserves the image extension, sanitizes browser-unsafe path characters, limits the final filename length, and adds numeric suffixes when two rendered names collide. The example beside the control updates immediately; a missing or unknown token is shown as an error instead of silently producing malformed names.
+
+Exact repeated URLs are collapsed into one row while the page is scanned. Open **Duplicates** to review the remaining exact thumbnail/full-size relationships and conservative likely variants. AnyDownload considers one-to-one preview/original links and corroborated resized URL or filename/dimension patterns; it does not hash or upload image pixels. The panel labels exact and likely groups separately, with its evidence available from each badge. **Keep best selected** leaves the strongest eligible candidate—normally the known full-size or largest record—selected in each group. **Hide extra copies** removes recommended extras from the current list and bulk actions without creating permanent ignore rules, so turning it off restores them.
+
+## Download queue, history, and statistics
+
+Ordinary single and bulk downloads enter a bounded background queue instead of requiring the popup to remain open while every Firefox download is started. Select the download-arrow button in the manager header to open the full **Downloads** dashboard. It provides:
+
+- live per-file and per-batch state, byte progress when Firefox exposes totals, and an active-queue badge in the manager;
+- pause, resume, and cancel controls for individual files, complete batches, or all pending work;
+- retry controls for individual interrupted or cancelled files, bulk retry for failed work, and a way to clear completed batches;
+- recent batch history with destination, filenames, errors, and actions that reveal completed files in Firefox; and
+- today and lifetime completed-file counts, downloaded bytes, failure/cancellation counts, and success rate.
+
+Normal-window queue state and counters are stored in local extension storage and reconciled with Firefox's Downloads API when the background restarts. Private-window jobs use Firefox's in-memory session storage, are not copied into persistent storage, and disappear when Firefox closes. Queue controls affect ordinary downloads; the visible Archive Progress tab continues to own each bounded ZIP job.
 
 ## ZIP archives
 
@@ -95,11 +123,14 @@ Toolbar action
        └─ browser.scripting.executeScript() using temporary activeTab access
        └─ collector runs inside the current page and returns image metadata
             └─ smart filters decide which discovered records stay eligible
+            └─ duplicate analysis recommends the strongest variant in likely-copy groups
             └─ live fingerprint changes trigger selection-preserving rescans
   └─ thumbnail click stores a one-time payload and opens a packaged preview tab
   └─ Ignore stores a site-scoped image key and removes it from selection
   └─ Download N / Download selected sends a validated DOWNLOAD_BATCH message
-       └─ Firefox background event page sanitizes names and calls downloads.download()
+       └─ filename template renders safe, unique names for the selected batch
+       └─ durable background queue starts bounded downloads.download() work
+            └─ Downloads dashboard shows progress, controls, history, and statistics
   └─ ZIP N / Download ZIP requests only the selected image origins
        └─ stores a validated one-time job and opens Archive Progress
             └─ visible page fetches originals sequentially
@@ -111,13 +142,17 @@ Toolbar action
 - `extension/shared/collector.js` contains the self-contained page collector injected by `extension/popup/popup.js`. For each `<img>`, it prefers explicit full/original attributes (including those on a nearby gallery link), a clearly linked image file, or the largest candidate in the active `srcset`/`<picture>` source before falling back to lazy and displayed sources. It also detects SVG `<image>` resources, video posters, image inputs, CSS image URLs, open shadow roots, and frames Firefox permits it to inspect.
 - When a gallery exposes both a thumbnail and an original, the manager renders the inexpensive thumbnail while **Preview**, **Save**, and bulk download use the original URL. Superseded thumbnail variants are not added as separate selected rows.
 - `extension/shared/filters.js` normalizes the persisted Smart Filters state, infers image format from safe URL/file hints, applies dimension and orientation rules, and implements the conservative **Photos only** heuristic. Filtering remains local to the extension.
+- `extension/shared/templates.js` validates the supported filename-token grammar, renders batch metadata, preserves image extensions, sanitizes the result, and resolves case-insensitive filename collisions.
+- `extension/shared/duplicates.js` groups exact records and corroborated likely variants, then scores source quality and known dimensions to recommend which extra records to deselect. It never fetches image pixels.
+- `extension/shared/download-queue.js` owns the bounded, serializable queue model, status transitions, retries, completed-job history, daily/lifetime counters, and recovery of work that was in flight when a background context stopped.
 - `extension/shared/archive.js` is a dependency-free stored-ZIP writer with CRC32, UTF-8 filenames, safe entry-name validation, and classic ZIP size limits. It does not contact a remote service.
 - `extension/archive/archive.html` is a visible, cancellable progress surface for ZIP jobs. It consumes a one-time request from session storage, fetches originals sequentially, releases each completed part, and polls Firefox's download state as a fallback if a completion event is missed.
+- `extension/history/history.html` is the responsive Downloads dashboard. It polls a small queue snapshot while work is active, exposes per-task and batch controls, and can reveal completed files through Firefox's Downloads API.
 - `extension/popup/popup.js` owns all three UI modes. Live capture periodically injects a lightweight fingerprint function into the pinned source tab and performs a full collector scan only after relevant page changes or a periodic safety interval. Its merge step retains known dimensions and checked/unchecked state while selecting new eligible records.
 - `extension/background.js` registers the native **AnyDownload** image submenu. It resolves the exact context-clicked element through Firefox's target-element ID, then reuses the same validated preview, ignore, and download paths as the manager.
 - `extension/preview/preview.html` is a packaged extension page used for full-tab previews, including embedded `data:image` resources that Firefox does not allow as direct tab URLs.
 - `extension/shared/core.js` validates relative folder paths, rejects unsafe URL schemes, creates filenames, strips traversal/illegal characters, handles Windows-reserved names, and resolves duplicate names.
-- `extension/background.js` validates ordinary batch requests, keeps at most five normal download-start API calls in flight, and uses `conflictAction: "uniquify"` so existing files are not overwritten. Firefox controls the number of network transfers after accepting them.
+- `extension/background.js` validates ordinary batch requests, persists them in the appropriate normal/private queue, reconciles Firefox download events into history and statistics, starts work at bounded concurrency, and uses `conflictAction: "uniquify"` so existing files are not overwritten.
 - Embedded `data:image` resources are converted to extension-owned Blob URLs. The background page retains each Blob until Firefox reports that download complete or interrupted.
 - `extension/popup/popup.html` never interpolates page content with `innerHTML`; it uses DOM nodes and `textContent`. Thumbnails use `referrerpolicy="no-referrer"` and load only as their rows approach the visible list.
 
@@ -125,6 +160,7 @@ The `activeTab` permission is granted only after the user invokes the toolbar ac
 
 ## Version history
 
+- **1.7.0** — Adds safe filename templates with page/image metadata tokens, conservative duplicate grouping with keep-best selection, and a durable ordinary-download queue with pause/resume/cancel/retry controls, recent batch history, and today/lifetime statistics.
 - **1.6.1** — Moves ZIP creation out of a long-lived background message into a visible Archive Progress tab, adds progress and cancellation, splits large jobs into bounded 64 MiB parts, and polls download completion defensively. This fixes extension-context loss seen with 400+ images.
 - **1.6.0** — Makes the Firefox Sidebar follow active tabs and completed navigations after an optional permission grant, and adds local multi-image ZIP downloads with partial-failure reports.
 - **1.5.0** — Adds the top-level **Download N** bulk action, persisted Smart Filters and **Photos only**, selection-preserving Live Gallery Capture, and a responsive Firefox Sidebar.
@@ -171,6 +207,8 @@ The manifest declares `data_collection_permissions.required: ["none"]` because t
 - The compact popup and manager deliberately stop live capture when their source tab closes or navigates. With optional auto-follow access, the Sidebar moves to the active loaded page automatically; it does not silently keep the previous page's live watcher running.
 - The compact toolbar popup's live mode runs only while that popup remains open; Firefox closes it when the webpage regains focus. Use the resizable manager or Firefox Sidebar for capture that must continue while you scroll. The Sidebar is a desktop feature and is hidden on Firefox for Android.
 - **Photos only** uses filenames, URL/element hints, and known dimensions. It can misclassify unusually named photos or photo-like logos; use the individual checkboxes, **Ignore**, or the more explicit filters to correct the selection.
+- Duplicate cleanup is deliberately conservative and metadata-based. Two visually identical files with unrelated URLs/names may remain separate, while unusual CDN variants with matching evidence can still need a manual selection check. Hiding an extra copy is temporary; use **Ignore** for a persistent site rule.
+- Filename templates produce one safe filename segment, not nested folders. Unknown dimensions render as `unknown`, generated names retain an image extension, unsafe characters are replaced, and long/colliding names are shortened or suffixed.
 - Dimension and orientation filters can evaluate only known original dimensions. **Include unknown sizes** keeps unresolved originals eligible; turning it off excludes them rather than eagerly downloading every original merely to inspect it.
 - Format filtering is inferred from the image URL and exposed metadata, not from a preflight fetch of every response. An extensionless endpoint can therefore remain unknown even if the server eventually returns a supported image.
 - The collector can use only sources that the loaded page exposes. It prefers explicit original/full-size attributes and the largest candidate in the active responsive set, but it does not guess arbitrary URL rewrites or fetch every linked detail page to invent a larger asset.
@@ -179,11 +217,13 @@ The manifest declares `data_collection_permissions.required: ["none"]` because t
 - Page-created `blob:` URLs are skipped with a warning because Firefox does not let an extension background page download a Blob owned by the website. Ordinary HTTP(S) URLs and embedded `data:image` resources are supported.
 - Canvas pixels, inline SVG markup, closed shadow roots, browser-internal pages, the built-in PDF viewer, and protected Mozilla pages are not downloadable through this scanner.
 - A safety limit caps a scan/batch at 1,500 images and computed-style inspection at 10,000 elements. The manager renders at most 350 matching rows at once, while bulk selection still includes all discovered records.
+- The ordinary-download queue retains at most 100 detailed batches, 1,500 task records, and 100 compact history summaries per storage context. Clearing completed work keeps its compact summary, and the oldest finished details are pruned automatically when room is needed for a new batch. Firefox may not expose a useful total byte count for every server response, so those rows show state without a percentage until more metadata arrives.
 - Private-window downloads retain their private browsing context when the user has allowed the extension in private windows. Firefox Container-specific cookie stores are not requested in this minimal-permission version, so an authenticated image that exists only in a non-default Container may fail.
+- Dashboard counters currently describe ordinary queued downloads. ZIP parts are visible in Firefox's native Downloads list and Archive Progress, but individual files inside a locally generated ZIP are not counted as separate browser downloads.
 - Full-tab previews make a new image request from a packaged extension page. A hotlink-protected, CORP-restricted, or Container-only image may fail there even when its popup thumbnail works; use **Open original** in the preview tab as the fallback.
 - Full-size dimension detection also makes a request when an unknown-size row becomes visible. If the server blocks extension-page image requests, the row reports that the full size is unavailable instead of displaying the thumbnail's dimensions as if they belonged to the original.
 - HTTP(S) URLs are taken from image-related page elements, but the extension does not pre-fetch every response to verify its MIME type. Suspicious filename extensions are neutralized, and files are never opened automatically.
-- A successful API call means Firefox started a download. Network failures that happen later appear in Firefox's Downloads panel.
+- A successful queue response means the batch was accepted. Its final network outcome, error, and retry controls appear on the Downloads dashboard and in Firefox's native Downloads list.
 
 ## Manual test checklist
 
@@ -192,12 +232,17 @@ The manifest declares `data_collection_permissions.required: ["none"]` because t
 - Click **Select all** and confirm the top action appears as **Download N**, its count tracks individual checkbox changes, and it starts the same batch as the footer **Download selected** button. Clear the selection and confirm the top action disappears; enter an unsafe folder and confirm both download actions are disabled.
 - Turn on **Photos only** on a page containing normal photos, logos, avatars, SVG icons, and tiny pixels. Confirm obvious non-photo assets leave the eligible selection, then turn the filter off and select any exceptions manually.
 - Test minimum width/height, each supported format, landscape/portrait/square, and **Include unknown sizes** both ways. Confirm **Select matches only** affects only filtered rows, nonmatching rows cannot remain silently selected, **Reset** restores defaults, and the settings survive closing/reopening the manager.
+- Test `{filename}`, `{name}-{index}.{ext}`, `{hostname}-{page-title}-{date}-{width}x{height}.{ext}`, duplicate rendered names, a missing token, and unsafe punctuation. Confirm the live example matches ordinary and ZIP filenames, extensions survive, invalid templates block downloads, and collisions receive stable numeric suffixes.
+- Confirm exact repeated URLs collapse into one row, then open **Duplicates** on thumbnail/original pairs, CDN resize variants, numeric filename IDs or years, shared fallback previews, and unrelated images that share a generic filename. Confirm exact and likely evidence is labeled, **Keep best selected** retains the strongest Smart-Filter-eligible candidate, unrelated images remain separate, and **Hide extra copies** can be turned off without creating ignore rules.
 - Start **Live capture** on an infinite-scroll test gallery. Uncheck one known image, leave another checked, scroll until new images appear, and confirm both known states are preserved while new eligible images are selected. Verify ignored and filter-rejected additions remain unselected.
 - Start live capture from the compact popup and confirm it toggles there without opening a window. Then move it explicitly with **Open window**, stop/restart it there, close or navigate the source tab, and confirm capture stops with useful guidance instead of scanning another page.
 - Open the Firefox Sidebar from the toolbar button and from Firefox's sidebar menu. Choose **Enable auto-follow**, accept the optional permission, switch active tabs, and navigate the active tab; confirm each completed normal page is scanned automatically and the old live watcher is stopped. Remove the permission in Firefox and confirm the sidebar explains how to enable it again.
 - Select local embedded and cross-origin images, choose **Download ZIP**, approve the selected origins, and confirm Archive Progress opens and saves an archive containing unique filenames. Include one failing URL and confirm the successful images plus `anydownload-errors.txt` remain in the ZIP; deny the permission once and confirm no fetch or download starts.
 - Run a 400–500 image ZIP job whose total exceeds 64 MiB. Confirm Archive Progress remains responsive, progress reaches the full selection, numbered `part-001`, `part-002`, … archives are saved sequentially, and no “Receiving end does not exist” message appears. Cancel a second run and confirm its unfinished part is discarded while already completed parts remain.
 - Download the same batch twice and confirm Firefox adds unique suffixes instead of overwriting.
+- Start a batch larger than the queue concurrency, close the popup, and open the Downloads dashboard. Pause and resume a file and the whole queue, cancel pending work, retry an interrupted item, clear completed batches, and confirm the header badge follows active/queued/paused totals.
+- While that batch runs, confirm known byte totals advance, completed and downloaded-byte statistics update once per finished attempt, daily and lifetime totals remain distinct, and reloading the temporary extension reconciles surviving Firefox downloads without double-counting them.
+- Repeat a small batch in a private window. Confirm the private dashboard is labeled accordingly and its URLs, queue history, and counters do not appear in the normal dashboard or survive a Firefox restart.
 - Try folder input such as `Summer/2026`, `../escape`, `/absolute/path`, `CON`, emoji, and trailing dots.
 - Test a logged-in image, an expired URL, offline mode, and a server returning 403/404.
 - Start a large batch and close the manager window; downloads already handed to Firefox should continue.
@@ -214,8 +259,9 @@ The manifest declares `data_collection_permissions.required: ["none"]` because t
 
 ## Suggested next features
 
-- Add a download queue/history panel with per-file progress, retry-failed, and cancel-pending controls.
-- Add filename templates and optional grouping tokens such as page title, hostname, discovery index, dimensions, or capture time.
 - Add per-site profiles that remember the destination subfolder, smart filters, CSS-background setting, and preferred live-capture behavior.
+- Add reusable filename-template presets and an optional subfolder token mode with explicit path-segment validation.
+- Add opt-in content-hash duplicate detection for fetched files when URL/metadata evidence is insufficient.
+- Add export/import for queue history and statistics without exporting private-session records.
 - Add a pick-on-page mode that highlights the image under the pointer and lets the user download, ignore, or add it to the current selection without searching the list.
 - Add a native-messaging companion only if arbitrary OS folder selection is a hard requirement.

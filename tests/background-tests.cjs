@@ -541,7 +541,10 @@ function storageArea(initial = {}) {
     folder: "Archive tests/gallery",
     incognito: true,
     items: [
-      ...archiveUrls.map((url) => ({ url })),
+      ...archiveUrls.map((url, index) => ({
+        url,
+        ...(index < 2 ? { filename: "Summer/Gallery?.JPG" } : {})
+      })),
       { url: "data:image/png;base64,AQID" }
     ]
   });
@@ -568,7 +571,7 @@ function storageArea(initial = {}) {
   assert.ok(zipCalls[0].options.date instanceof Date);
   assert.deepEqual(
     Array.from(zipCalls[0].entries, (entry) => entry.name),
-    ["photo.jpg", "photo-2.jpg", "third.webp", "four.png", "image-0005.png"]
+    ["Summer_Gallery_.JPG", "Summer_Gallery_-2.JPG", "third.webp", "four.png", "image-0005.png"]
   );
   assert.deepEqual(
     Array.from(zipCalls[0].entries[zipCalls[0].entries.length - 1].data),
@@ -625,6 +628,21 @@ function storageArea(initial = {}) {
   const errorReport = Buffer.from(zipCalls[1].entries[1].data).toString("utf8");
   assert.match(errorReport, /Image 2 \(denied\.jpg\): Image request failed with HTTP 403 Forbidden\./);
   assert.match(errorReport, /Image 3 \(large\.jpg\): Image is larger than the 64 MiB per-file archive limit\./);
+
+  const longArchiveBasename = "x".repeat(100);
+  const longNameArchive = await runtimeMessage({
+    type: "DOWNLOAD_ARCHIVE",
+    folder: `Archive tests/${longArchiveBasename}`,
+    items: [{ url: partialGoodUrl }]
+  });
+  const expectedLongArchiveFilename = `${"x".repeat(96)}.zip`;
+  assert.equal(longNameArchive.ok, true);
+  assert.equal(longNameArchive.filename, expectedLongArchiveFilename);
+  assert.equal(
+    downloadRequests[downloadRequests.length - 1].filename,
+    `Archive tests/${longArchiveBasename}/${expectedLongArchiveFilename}`,
+    "A 100-character folder basename must retain the .zip extension"
+  );
 
   const failedNetworkUrl = "https://assets.example.test/all-fail/network.jpg";
   const failedHttpUrl = "https://assets.example.test/all-fail/missing.jpg";

@@ -20,6 +20,9 @@
             <span class="button-label">Open window</span>
           </button>
           <button id="sidebar-button" class="icon-button sidebar-button" type="button" title="Open Firefox Sidebar" aria-label="Open Firefox Sidebar">◫</button>
+          <button id="history-button" class="icon-button history-button" type="button" title="Download queue and statistics" aria-label="Open download queue and statistics">
+            ⇩<span id="queue-badge" class="queue-badge" aria-hidden="true" hidden>0</span>
+          </button>
           <button id="rescan-button" class="icon-button" type="button" title="Scan the page again" aria-label="Scan the page again">↻</button>
         </div>
       </header>
@@ -43,6 +46,15 @@
           <input id="folder-input" type="text" value="Website images" maxlength="260" autocomplete="off" spellcheck="false" aria-describedby="folder-help">
         </div>
         <p id="folder-help" class="field-help" role="status" aria-live="polite" hidden></p>
+        <div class="filename-template-toolbar">
+          <button id="filename-template-button" class="text-button" type="button" aria-expanded="false" aria-controls="filename-template-panel">Filename template</button>
+          <span id="filename-template-preview" title="Filename preview">Example: image-0001.jpg</span>
+        </div>
+        <div id="filename-template-panel" class="filename-template-panel" hidden>
+          <label for="filename-template-input">Template</label>
+          <input id="filename-template-input" type="text" value="{filename}" maxlength="240" autocomplete="off" spellcheck="false" aria-describedby="filename-template-help">
+          <p id="filename-template-help" class="field-help" role="status" aria-live="polite">Tokens: {filename}, {name}, {ext}, {index}, {hostname}, {page-title}, {width}, {height}, {date}</p>
+        </div>
       </section>
 
       <section class="controls" aria-label="Image controls">
@@ -67,6 +79,7 @@
             <span>Photos only</span>
           </label>
           <button id="smart-filters-button" class="text-button filter-toggle-button" type="button" aria-expanded="false" aria-controls="smart-filter-panel">Filters</button>
+          <button id="duplicates-button" class="text-button filter-toggle-button" type="button" aria-expanded="false" aria-controls="duplicate-panel">Duplicates</button>
           <button id="live-capture-button" class="text-button live-capture-button" type="button" aria-pressed="false" title="Watch this gallery for images loaded while you scroll">Live capture</button>
           <button id="sidebar-follow-button" class="text-button sidebar-follow-button" type="button" title="Allow the Sidebar to follow every active webpage" hidden>Enable auto-follow</button>
         </div>
@@ -106,6 +119,16 @@
           </label>
           <button id="reset-filters-button" class="text-button" type="button">Reset</button>
         </div>
+        <div id="duplicate-panel" class="duplicate-panel" hidden>
+          <span id="duplicate-summary" role="status" aria-live="polite">No likely duplicates found.</span>
+          <div class="duplicate-actions">
+            <button id="deduplicate-button" class="text-button" type="button" disabled>Keep best selected</button>
+            <label class="option-row">
+              <input id="hide-duplicates-input" type="checkbox">
+              <span>Hide extra copies</span>
+            </label>
+          </div>
+        </div>
       </section>
 
       <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
@@ -126,6 +149,8 @@
     <script src="../shared/core.js"></script>
     <script src="../shared/collector.js"></script>
     <script src="../shared/filters.js"></script>
+    <script src="../shared/templates.js"></script>
+    <script src="../shared/duplicates.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

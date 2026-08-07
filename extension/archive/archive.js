@@ -89,7 +89,12 @@
       if (totalUrlLength > core.MAX_BATCH_TOTAL_URL_LENGTH) {
         throw new Error("The archive URL payload is too large.");
       }
-      items.push({ url: result.value, originalIndex: index });
+      const fallbackFilename = core.filenameForImage(result.value, index);
+      if (item.filename !== undefined && typeof item.filename !== "string") {
+        throw new Error(`Image ${index + 1} has an invalid filename.`);
+      }
+      const filename = core.sanitizeFilename(item.filename || fallbackFilename, fallbackFilename);
+      items.push({ url: result.value, filename, originalIndex: index });
     });
 
     return {
@@ -167,22 +172,39 @@
     }
     const lastSegment = folderResult.value.split("/").pop() || "images";
     const basename = core.sanitizePathSegment(lastSegment.replace(/\.zip$/i, ""), "images");
-    return core.sanitizeFilename(`${basename}.zip`, "images.zip");
+    return core.sanitizeFilename(`${truncateArchiveStem(basename, 4)}.zip`, "images.zip");
+  }
+
+  function truncateArchiveStem(value, reservedLength) {
+    const maximum = Math.max(1, 100 - Math.max(0, Number(reservedLength) || 0));
+    const text = String(value || "images");
+    if (text.length <= maximum) {
+      return text;
+    }
+    let truncated = text.slice(0, maximum);
+    if (/[\ud800-\udbff]$/.test(truncated)) {
+      truncated = truncated.slice(0, -1);
+    }
+    return truncated || "images";
   }
 
   function archivePartFilename(baseFilename, partNumber, multipart) {
     const core = requireCore();
-    const safeBase = core.sanitizeFilename(baseFilename, "images.zip");
+    const baseStem = core.sanitizePathSegment(
+      String(baseFilename || "").replace(/\.zip$/i, ""),
+      "images"
+    );
     if (!multipart) {
-      return safeBase;
+      return core.sanitizeFilename(`${truncateArchiveStem(baseStem, 4)}.zip`, "images.zip");
     }
     const number = Number(partNumber);
     if (!Number.isSafeInteger(number) || number < 1 || number > 999999) {
       throw new Error("Archive part numbers must be positive integers.");
     }
-    const stem = safeBase.replace(/\.zip$/i, "") || "images";
+    const suffix = `-part-${String(number).padStart(3, "0")}.zip`;
+    const stem = truncateArchiveStem(baseStem, suffix.length);
     return core.sanitizeFilename(
-      `${stem}-part-${String(number).padStart(3, "0")}.zip`,
+      `${stem}${suffix}`,
       `images-part-${String(number).padStart(3, "0")}.zip`
     );
   }
@@ -607,6 +629,7 @@
       imageBytes: 0,
       interruptedDownloads: 0,
       processed: 0,
+      savedParts: 0,
       total: 0,
       lastBytePaint: 0
     };
@@ -680,6 +703,7 @@
         );
         row.item.classList.add(terminal.state);
         if (terminal.state === "complete") {
+          state.savedParts += 1;
           row.status.textContent = `Saved ${formatBytes(blob.size)} to Downloads/${targetPath}`;
           const showButton = documentObject.createElement("button");
           showButton.className = "show-file-button";
@@ -736,7 +760,7 @@
       const candidates = request.items.map((item) => ({
         ...item,
         filename: requireCore().uniquifyFilename(
-          requireCore().filenameForImage(item.url, item.originalIndex),
+          item.filename || requireCore().filenameForImage(item.url, item.originalIndex),
           usedNames
         )
       }));
@@ -894,7 +918,7 @@
         elements["current-item"].textContent = "Cancelled";
         setStatus(
           "Archive cancelled",
-          state.fetched
+          state.savedParts
             ? "Previously completed archive parts remain in Downloads; the unfinished part was discarded."
             : "No unfinished archive was saved."
         );

@@ -362,14 +362,68 @@
     return Array.from(patterns).sort();
   }
 
+  function eligibleDuplicateCandidates(images, isIgnored, isEligible) {
+    const ignored = typeof isIgnored === "function" ? isIgnored : () => false;
+    const eligible = typeof isEligible === "function" ? isEligible : () => true;
+    return (Array.isArray(images) ? images : []).filter((image) => {
+      if (!image || typeof image !== "object") {
+        return false;
+      }
+      try {
+        return !ignored(image) && eligible(image);
+      } catch (_error) {
+        return false;
+      }
+    });
+  }
+
+  function downloadBatchNotice(result) {
+    const queuedValue = Number(result && result.queued);
+    if (!Number.isFinite(queuedValue)) {
+      return null;
+    }
+    const queued = Math.max(0, Math.floor(queuedValue));
+    const failed = Math.max(0, Math.floor(Number(result && result.failed) || 0));
+    const total = Math.max(queued + failed, Math.floor(Number(result && result.total) || 0));
+    const firstError = result && Array.isArray(result.errors) && result.errors[0] &&
+      typeof result.errors[0].error === "string"
+      ? result.errors[0].error
+      : "";
+    if (failed > 0) {
+      const problem = firstError ? ` First problem: ${firstError}` : "";
+      return {
+        type: "error",
+        message: `Added ${queued.toLocaleString()} of ${total.toLocaleString()} downloads to the queue. ${failed.toLocaleString()} could not be queued.${problem}`
+      };
+    }
+    return {
+      type: "success",
+      message: `Added ${queued.toLocaleString()} download${queued === 1 ? "" : "s"} to the queue. Open Downloads to monitor progress.`
+    };
+  }
+
+  function renderFilenameBatch(images, filenameForImage) {
+    if (typeof filenameForImage !== "function") {
+      throw new TypeError("filenameForImage must be a function.");
+    }
+    const usedNames = new Set();
+    return (Array.isArray(images) ? images : []).map((image, index) => ({
+      url: image && typeof image.url === "string" ? image.url : "",
+      filename: filenameForImage(image, index, usedNames)
+    }));
+  }
+
   if (typeof module === "object" && module && module.exports) {
     module.exports = {
       accumulateLiveImages,
       collectLiveGalleryFingerprint,
       createDimensionProbeScheduler,
+      downloadBatchNotice,
+      eligibleDuplicateCandidates,
       hostPermissionPatternsForImages,
       launchOptionsFromUrl,
       reconcileScanSelection,
+      renderFilenameBatch,
       sourceTabIdFromUrl
     };
     return;
@@ -381,6 +435,8 @@
   const Core = globalThis.ImageDownloaderCore;
   const collectImagesFromPage = globalThis.ImageDownloaderCollector;
   const Filters = globalThis.ImageDownloaderFilters;
+  const Templates = globalThis.ImageDownloaderTemplates;
+  const Duplicates = globalThis.ImageDownloaderDuplicates;
   const MAX_DISCOVERED_IMAGES = Core.MAX_BATCH_SIZE;
   const MAX_SCANNED_ELEMENTS = 10000;
   const MAX_RENDERED_ROWS = 350;
@@ -418,7 +474,15 @@
     hasStoredFolder: false,
     incognito: false,
     ignoredKeys: new Set(),
+    filenameTemplate: Templates.DEFAULT_TEMPLATE,
+    filenamePreviewByUrl: new Map(),
+    duplicateAnalysis: { groups: [], duplicateRecordCount: 0 },
+    duplicateByUrl: new Map(),
+    duplicateExtraUrls: new Set(),
+    hideDuplicates: false,
     liveCapture: false,
+    pageTitle: "",
+    pageUrl: "",
     showIgnored: false,
     siteKey: "",
     sidebarHasBroadAccess: false,
@@ -431,6 +495,7 @@
 
   const elements = {};
   const renderedMetaNodes = new Map();
+  const renderedNameNodes = new Map();
   const visibleDimensionRows = new Map();
   let thumbnailObserver = null;
   let dimensionObserver = null;
@@ -439,6 +504,9 @@
   let liveCaptureGeneration = 0;
   let liveFingerprint = "";
   let liveLastFullScanAt = 0;
+  let queueBadgeGeneration = 0;
+  let queueBadgePollingStopped = false;
+  let queueBadgeTimer = null;
   let renderGeneration = 0;
   let sidebarFollowGeneration = 0;
   let sidebarFollowTimer = null;
@@ -475,10 +543,21 @@
       "bulk-download-button",
       "clear-ignored-button",
       "download-button",
+      "deduplicate-button",
+      "duplicate-panel",
+      "duplicate-summary",
+      "duplicates-button",
       "filter-input",
+      "filename-template-button",
+      "filename-template-help",
+      "filename-template-input",
+      "filename-template-panel",
+      "filename-template-preview",
       "format-filter-select",
       "folder-help",
       "folder-input",
+      "history-button",
+      "hide-duplicates-input",
       "ignored-button",
       "image-list",
       "include-unknown-input",
@@ -490,6 +569,7 @@
       "orientation-filter-select",
       "page-label",
       "photos-only-input",
+      "queue-badge",
       "rescan-button",
       "reset-filters-button",
       "select-all-button",
@@ -510,6 +590,308 @@
     elements.notice.textContent = message || "";
     elements.notice.className = `notice${type ? ` ${type}` : ""}`;
     elements.notice.hidden = !message;
+  }
+
+  function filenameTemplateStatus() {
+    return Templates.validate(elements["filename-template-input"].value);
+  }
+
+  function filenameMetadata(image, index, date) {
+    return {
+      filename: Core.filenameForImage(image && image.url, index),
+      url: image && image.url,
+      pageUrl: state.pageUrl,
+      pageTitle: state.pageTitle,
+      width: image && image.width,
+      height: image && image.height,
+      mimeType: image && (image.mimeType || image.type),
+      index: index + 1,
+      date
+    };
+  }
+
+  function requireValidFilenameTemplate() {
+    const result = updateFilenameTemplateUi();
+    if (!result.ok) {
+      elements["filename-template-panel"].hidden = false;
+      elements["filename-template-button"].setAttribute("aria-expanded", "true");
+      elements["filename-template-input"].focus();
+      setNotice(result.error, "error");
+      updateSummary();
+      return null;
+    }
+
+    elements["filename-template-input"].value = result.value;
+    state.filenameTemplate = result.value;
+    return result;
+  }
+
+  function renderedDownloadItems(images, templateValue, jobDate) {
+    const template = Templates.validate(
+      templateValue === undefined ? elements["filename-template-input"].value : templateValue
+    );
+    if (!template.ok) {
+      throw new Error(template.error);
+    }
+    const batchDate = jobDate instanceof Date ? jobDate : new Date();
+    return renderFilenameBatch(images, (image, batchIndex, usedNames) => Templates.render(
+      template.value,
+      filenameMetadata(image, batchIndex, batchDate),
+      { usedNames }
+    ));
+  }
+
+  function rebuildFilenamePreviews(templateResult, jobDate) {
+    const result = templateResult || filenameTemplateStatus();
+    const date = jobDate instanceof Date ? jobDate : new Date();
+    const previews = new Map();
+    if (result.ok) {
+      const selected = selectedDownloadableImages();
+      const rendered = renderedDownloadItems(selected, result.value, date);
+      rendered.forEach((item, index) => previews.set(selected[index].url, item.filename));
+      for (const image of state.images) {
+        if (previews.has(image.url)) {
+          continue;
+        }
+        const preview = Templates.preview(
+          result.value,
+          filenameMetadata(image, 0, date)
+        );
+        previews.set(
+          image.url,
+          preview.ok ? preview.value : Core.filenameForImage(image.url, 0)
+        );
+      }
+    } else {
+      state.images.forEach((image, index) => {
+        previews.set(image.url, Core.filenameForImage(image.url, index));
+      });
+    }
+    state.filenamePreviewByUrl = previews;
+    return previews;
+  }
+
+  function updateFilenameTemplateUi() {
+    const result = filenameTemplateStatus();
+    const date = new Date();
+    const previews = rebuildFilenamePreviews(result, date);
+    const sample = selectedDownloadableImages()[0] ||
+      state.images.find((image) => !isImageIgnored(image)) || {
+      url: "https://example.invalid/image-0001.jpg",
+      width: 1920,
+      height: 1080
+    };
+    const mappedPreview = sample && previews.get(sample.url);
+    const preview = mappedPreview
+      ? { ok: true, value: mappedPreview, error: "" }
+      : Templates.preview(
+        elements["filename-template-input"].value,
+        filenameMetadata(sample, 0, date)
+      );
+    elements["filename-template-preview"].textContent = preview.ok
+      ? `Example: ${preview.value}`
+      : "Template needs attention";
+    elements["filename-template-preview"].title = preview.ok ? preview.value : preview.error;
+    elements["filename-template-input"].setAttribute("aria-invalid", String(!result.ok));
+    elements["filename-template-help"].classList.toggle("error", !result.ok);
+    elements["filename-template-help"].textContent = result.ok
+      ? "Tokens: {filename}, {name}, {ext}, {index}, {hostname}, {page-title}, {width}, {height}, {date}"
+      : result.error;
+    state.filenameTemplate = result.ok ? result.value : elements["filename-template-input"].value;
+    return result;
+  }
+
+  function refreshRenderedFilenamePreviews() {
+    updateFilenameTemplateUi();
+    for (const [url, records] of renderedNameNodes) {
+      const image = currentImageForUrl(url);
+      if (!image) {
+        renderedNameNodes.delete(url);
+        continue;
+      }
+      const filename = friendlyFilename(image);
+      for (const record of records) {
+        if (!record.label.isConnected) {
+          records.delete(record);
+          continue;
+        }
+        record.label.textContent = filename;
+        record.container.title = image.alt || filename;
+        record.checkbox.setAttribute("aria-label", `Select ${filename}`);
+        record.previewButton.setAttribute("aria-label", `Preview ${filename} in a new tab`);
+      }
+      if (!records.size) {
+        renderedNameNodes.delete(url);
+      }
+    }
+  }
+
+  async function openDownloadHistory() {
+    const createProperties = {
+      active: true,
+      url: browser.runtime.getURL("history/history.html")
+    };
+    if (Number.isInteger(state.sourceWindowId)) {
+      createProperties.windowId = state.sourceWindowId;
+    }
+    await browser.tabs.create(createProperties).catch((error) => {
+      setNotice(`Firefox could not open the download queue. (${error.message || error})`, "error");
+    });
+  }
+
+  async function refreshQueueBadge() {
+    const generation = ++queueBadgeGeneration;
+    try {
+      const response = await browser.runtime.sendMessage({
+        type: "GET_DOWNLOAD_DASHBOARD",
+        incognito: state.incognito
+      });
+      if (generation !== queueBadgeGeneration) {
+        return;
+      }
+      const summary = response && response.ok && response.snapshot && response.snapshot.summary;
+      const count = (value) => {
+        const number = Number(value);
+        return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
+      };
+      const active = summary && summary.active == null
+        ? count(summary.starting) + count(summary.inProgress || summary.in_progress)
+        : count(summary && summary.active);
+      const pending = summary
+        ? count(summary.queued) + active + count(summary.paused)
+        : 0;
+      elements["queue-badge"].textContent = pending > 99 ? "99+" : String(pending);
+      elements["queue-badge"].hidden = pending < 1;
+      const label = pending
+        ? `${pending.toLocaleString()} download${pending === 1 ? "" : "s"} queued or active`
+        : "Download queue and statistics";
+      elements["history-button"].title = label;
+      elements["history-button"].setAttribute(
+        "aria-label",
+        pending ? `Open download queue: ${label}` : "Open download queue and statistics"
+      );
+    } catch (_error) {
+      if (generation !== queueBadgeGeneration) {
+        return;
+      }
+      elements["queue-badge"].hidden = true;
+      elements["history-button"].title = "Download queue and statistics";
+      elements["history-button"].setAttribute("aria-label", "Open download queue and statistics");
+    }
+  }
+
+  function startQueueBadgePolling() {
+    if (queueBadgeTimer !== null) {
+      return;
+    }
+    const tick = async () => {
+      queueBadgeTimer = null;
+      await refreshQueueBadge();
+      if (!queueBadgePollingStopped) {
+        queueBadgeTimer = setTimeout(tick, 2500);
+      }
+    };
+    queueBadgeTimer = setTimeout(tick, 2500);
+    globalThis.addEventListener("pagehide", () => {
+      queueBadgePollingStopped = true;
+      if (queueBadgeTimer !== null) {
+        clearTimeout(queueBadgeTimer);
+        queueBadgeTimer = null;
+      }
+      queueBadgeGeneration += 1;
+    }, { once: true });
+  }
+
+  function setIncognitoContext(value) {
+    const nextValue = Boolean(value);
+    if (state.incognito === nextValue) {
+      return;
+    }
+    state.incognito = nextValue;
+    refreshQueueBadge();
+  }
+
+  function clearDuplicateAnalysis() {
+    state.duplicateAnalysis = { groups: [], duplicateRecordCount: 0 };
+    state.duplicateByUrl.clear();
+    state.duplicateExtraUrls.clear();
+    updateDuplicateUi();
+  }
+
+  function refreshDuplicateAnalysis() {
+    const candidates = eligibleDuplicateCandidates(
+      state.images,
+      isImageIgnored,
+      (image) => Filters.matchesSmartFilters(image, state.smartFilters)
+    );
+    const analysis = Duplicates.analyzeDuplicates(candidates);
+    const duplicateByUrl = new Map();
+    const duplicateExtraUrls = new Set();
+    for (const group of analysis.groups) {
+      for (const record of group.records) {
+        duplicateByUrl.set(record.url, {
+          group,
+          best: record === group.bestRecord
+        });
+      }
+      for (const record of group.recommendedRecordsToDeselect) {
+        duplicateExtraUrls.add(record.url);
+      }
+    }
+    state.duplicateAnalysis = analysis;
+    state.duplicateByUrl = duplicateByUrl;
+    state.duplicateExtraUrls = duplicateExtraUrls;
+    updateDuplicateUi();
+    return analysis;
+  }
+
+  function duplicateAnalysisSignature(analysis) {
+    return (analysis && Array.isArray(analysis.groups) ? analysis.groups : [])
+      .map((group) => `${group.bestIndex}:${(group.indexes || []).join(",")}`)
+      .join("|");
+  }
+
+  function updateDuplicateUi() {
+    const analysis = state.duplicateAnalysis || { groups: [], duplicateRecordCount: 0 };
+    const groups = analysis.groups.length;
+    const exactGroups = analysis.groups.filter((group) => group.kind === "exact").length;
+    const likelyGroups = groups - exactGroups;
+    const extras = analysis.duplicateRecordCount;
+    elements["duplicates-button"].textContent = extras
+      ? `Duplicates (${extras.toLocaleString()})`
+      : "Duplicates";
+    elements["duplicates-button"].classList.toggle("active", !elements["duplicate-panel"].hidden);
+    elements["duplicates-button"].setAttribute("aria-expanded", String(!elements["duplicate-panel"].hidden));
+    elements["duplicate-summary"].textContent = extras
+      ? `${groups.toLocaleString()} duplicate group${groups === 1 ? "" : "s"} · ${exactGroups.toLocaleString()} exact · ${likelyGroups.toLocaleString()} likely · ${extras.toLocaleString()} extra cop${extras === 1 ? "y" : "ies"}`
+      : "No likely duplicates found. Query IDs and signed URLs are kept distinct.";
+    elements["deduplicate-button"].disabled = state.busy || extras === 0;
+    elements["hide-duplicates-input"].disabled = extras === 0;
+    elements["hide-duplicates-input"].checked = state.hideDuplicates;
+  }
+
+  function keepBestDuplicatesSelected() {
+    const analysis = refreshDuplicateAnalysis();
+    let removed = 0;
+    for (const group of analysis.groups) {
+      const selectedInGroup = group.records.some((record) => state.selected.has(record.url));
+      if (!selectedInGroup) {
+        continue;
+      }
+      state.selected.add(group.bestRecord.url);
+      for (const record of group.recommendedRecordsToDeselect) {
+        if (state.selected.delete(record.url)) {
+          removed += 1;
+        }
+      }
+    }
+    setNotice(
+      removed
+        ? `Removed ${removed.toLocaleString()} duplicate cop${removed === 1 ? "y" : "ies"} from the selection and kept the best available version in each group.`
+        : "The current selection already keeps only the best available version from each duplicate group.",
+      "success"
+    );
+    renderImages();
   }
 
   function hostFromUrl(value) {
@@ -557,11 +939,15 @@
     state.images = [];
     state.selected.clear();
     state.scanWarnings = [];
+    state.pageTitle = "";
+    state.pageUrl = "";
+    clearDuplicateAnalysis();
     state.showIgnored = false;
     state.siteKey = "";
     state.ignoredKeys.clear();
     elements["image-list"].replaceChildren();
     elements["page-label"].textContent = label;
+    updateFilenameTemplateUi();
     setNotice(notice, noticeType);
     renderImages();
   }
@@ -768,8 +1154,11 @@
       }
     }
 
-    if (changed && !state.busy) {
-      renderImages();
+    if (changed) {
+      refreshDuplicateAnalysis();
+      if (!state.busy) {
+        renderImages();
+      }
     }
   }
 
@@ -855,6 +1244,7 @@
     }
     const privateNote = state.incognito ? " for this private session" : " on this website";
     setNotice(`Ignored ${friendlyFilename(image)}${privateNote}. Use the Ignored view to restore it.`);
+    refreshDuplicateAnalysis();
     renderImages();
     focusIgnoredToggle();
     try {
@@ -876,6 +1266,7 @@
       }
     }
     setNotice(`Restored ${friendlyFilename(image)}. It remains unselected.`);
+    refreshDuplicateAnalysis();
     renderImages();
     focusIgnoredToggle();
     try {
@@ -902,6 +1293,7 @@
     }
     state.ignoredKeys.clear();
     setNotice(`Restored all ignored-image rules for this website. Restored images remain unselected.`);
+    refreshDuplicateAnalysis();
     renderImages();
     focusIgnoredToggle();
     try {
@@ -1127,6 +1519,7 @@
     }
     updateSmartFilterButton();
     persistSmartFilters();
+    refreshDuplicateAnalysis();
     renderImages();
   }
 
@@ -1141,6 +1534,7 @@
           state.selected.delete(image.url);
         }
       }
+      refreshDuplicateAnalysis();
       renderImages();
     }, 50);
   }
@@ -1148,7 +1542,9 @@
   function filteredImages() {
     const query = elements["filter-input"].value.trim().toLocaleLowerCase();
     const inCurrentView = state.images.filter((image) =>
-      isImageIgnored(image) === state.showIgnored && imageMatchesSmartFilters(image)
+      isImageIgnored(image) === state.showIgnored &&
+      imageMatchesSmartFilters(image) &&
+      (!state.hideDuplicates || state.showIgnored || !state.duplicateExtraUrls.has(image.url))
     );
     if (!query) {
       return inCurrentView;
@@ -1163,13 +1559,14 @@
     return state.images.filter((image) =>
       state.selected.has(image.url) &&
       !isImageIgnored(image) &&
-      Filters.matchesSmartFilters(image, state.smartFilters)
+      Filters.matchesSmartFilters(image, state.smartFilters) &&
+      (!state.hideDuplicates || !state.duplicateExtraUrls.has(image.url))
     );
   }
 
   function friendlyFilename(image) {
     const index = Math.max(0, state.images.indexOf(image));
-    return Core.filenameForImage(image.url, index);
+    return state.filenamePreviewByUrl.get(image.url) || Core.filenameForImage(image.url, index);
   }
 
   function validPixelDimension(value) {
@@ -1241,8 +1638,17 @@
       return false;
     }
     const matchedBefore = Filters.matchesSmartFilters(image, state.smartFilters);
+    const duplicateSignatureBefore = duplicateAnalysisSignature(state.duplicateAnalysis);
     const applied = applyMeasuredDimensions(image, result.width, result.height);
     updateImageMetas(url);
+    if (applied) {
+      refreshDuplicateAnalysis();
+      refreshRenderedFilenamePreviews();
+      if (duplicateAnalysisSignature(state.duplicateAnalysis) !== duplicateSignatureBefore) {
+        renderImages();
+        return true;
+      }
+    }
     if (matchedBefore !== Filters.matchesSmartFilters(image, state.smartFilters)) {
       scheduleSmartFilterRefresh();
     }
@@ -1297,7 +1703,16 @@
           const current = currentImageForUrl(image.url);
           if (current && (!current.width || !current.height)) {
             const matchedBefore = Filters.matchesSmartFilters(current, state.smartFilters);
-            applyMeasuredDimensions(current, thumbnail.naturalWidth, thumbnail.naturalHeight);
+            const duplicateSignatureBefore = duplicateAnalysisSignature(state.duplicateAnalysis);
+            const applied = applyMeasuredDimensions(current, thumbnail.naturalWidth, thumbnail.naturalHeight);
+            if (applied) {
+              refreshDuplicateAnalysis();
+              refreshRenderedFilenamePreviews();
+              if (duplicateAnalysisSignature(state.duplicateAnalysis) !== duplicateSignatureBefore) {
+                renderImages();
+                return;
+              }
+            }
             if (matchedBefore !== Filters.matchesSmartFilters(current, state.smartFilters)) {
               scheduleSmartFilterRefresh();
             }
@@ -1325,8 +1740,9 @@
     const selected = selectedDownloadableImages().length;
     const visible = filteredImages();
     const hasFilter = Boolean(elements["filter-input"].value.trim()) ||
-      (!state.showIgnored && Filters.hasActiveSmartFilters(state.smartFilters));
+      (!state.showIgnored && (Filters.hasActiveSmartFilters(state.smartFilters) || state.hideDuplicates));
     const folder = folderStatus();
+    const template = filenameTemplateStatus();
     const viewTotal = state.showIgnored ? ignoredCount : availableCount;
     elements["summary-label"].textContent = hasFilter
       ? `${visible.length.toLocaleString()} of ${viewTotal.toLocaleString()} ${state.showIgnored ? "ignored" : "available"} shown`
@@ -1351,18 +1767,18 @@
     elements["bulk-download-button"].textContent = selected === 1
       ? "Download 1"
       : `Download ${selected.toLocaleString()}`;
-    elements["bulk-download-button"].disabled = state.busy || selected === 0 || !folder.ok;
-    elements["bulk-download-button"].title = folder.ok
+    elements["bulk-download-button"].disabled = state.busy || selected === 0 || !folder.ok || !template.ok;
+    elements["bulk-download-button"].title = folder.ok && template.ok
       ? "Download all selected images"
-      : folder.error || "Enter a valid destination folder";
+      : folder.error || template.error || "Enter valid download settings";
     elements["archive-download-button"].hidden = state.showIgnored || selected === 0;
     elements["archive-download-button"].textContent = selected === 1
       ? "ZIP 1"
       : `ZIP ${selected.toLocaleString()}`;
-    elements["archive-download-button"].disabled = state.busy || selected === 0 || !folder.ok;
-    elements["archive-download-button"].title = folder.ok
+    elements["archive-download-button"].disabled = state.busy || selected === 0 || !folder.ok || !template.ok;
+    elements["archive-download-button"].title = folder.ok && template.ok
       ? "Download all selected images as one ZIP archive"
-      : folder.error || "Enter a valid destination folder";
+      : folder.error || template.error || "Enter valid download settings";
     elements["selected-label"].textContent = state.showIgnored
       ? `${ignoredCount.toLocaleString()} ignored here`
       : `${selected.toLocaleString()} selected`;
@@ -1371,13 +1787,16 @@
         ? "Restore images to make them downloadable again"
         : `${storedIgnoredCount.toLocaleString()} rules saved for this site`
       : selected
-        ? `Ready for Downloads/${folder.ok ? folder.value : "…"}`
+        ? template.ok
+          ? `Ready for Downloads/${folder.ok ? folder.value : "…"}`
+          : template.error
         : "Choose images to download";
     elements["download-button"].textContent = selected === 1 ? "Download image" : "Download selected";
-    elements["download-button"].disabled = state.busy || selected === 0 || !folder.ok;
-    elements["archive-footer-button"].disabled = state.busy || selected === 0 || !folder.ok;
+    elements["download-button"].disabled = state.busy || selected === 0 || !folder.ok || !template.ok;
+    elements["archive-footer-button"].disabled = state.busy || selected === 0 || !folder.ok || !template.ok;
     elements["rescan-button"].disabled = state.busy;
     elements["live-capture-button"].disabled = state.busy && !state.liveCapture;
+    updateDuplicateUi();
     elements["image-list"].setAttribute(
       "aria-label",
       state.showIgnored ? "Ignored images found on this page" : "Images found on this page"
@@ -1387,7 +1806,8 @@
   function makeImageRow(image) {
     const ignored = isImageIgnored(image);
     const row = document.createElement("article");
-    row.className = `image-row${ignored ? " ignored" : ""}`;
+    const duplicateInfo = state.duplicateByUrl.get(image.url);
+    row.className = `image-row${ignored ? " ignored" : ""}${duplicateInfo && !duplicateInfo.best ? " duplicate-copy" : ""}`;
     row.setAttribute("role", "listitem");
 
     const checkbox = document.createElement("input");
@@ -1400,6 +1820,7 @@
       } else {
         state.selected.delete(image.url);
       }
+      refreshRenderedFilenamePreviews();
       updateSummary();
     });
 
@@ -1422,8 +1843,40 @@
     copy.className = "image-copy";
     const name = document.createElement("div");
     name.className = "image-name";
-    name.textContent = friendlyFilename(image);
-    name.title = image.alt || friendlyFilename(image);
+    const filenameLabel = document.createElement("span");
+    const initialFilename = friendlyFilename(image);
+    filenameLabel.textContent = initialFilename;
+    name.title = image.alt || initialFilename;
+    name.append(filenameLabel);
+    let nameRecords = renderedNameNodes.get(image.url);
+    if (!nameRecords) {
+      nameRecords = new Set();
+      renderedNameNodes.set(image.url, nameRecords);
+    }
+    nameRecords.add({
+      label: filenameLabel,
+      container: name,
+      checkbox,
+      previewButton: thumbnailFrame
+    });
+    if (duplicateInfo) {
+      const badge = document.createElement("span");
+      badge.className = "duplicate-badge";
+      const exact = duplicateInfo.group.kind === "exact";
+      badge.textContent = duplicateInfo.best
+        ? exact ? "Best exact copy" : "Best likely copy"
+        : exact ? "Exact copy" : "Likely duplicate";
+      const evidence = Array.from(new Set([
+        ...(duplicateInfo.group.reasons || []),
+        ...(duplicateInfo.group.corroboration || [])
+      ]))
+        .map((reason) => String(reason).replace(/-/g, " "))
+        .join(", ");
+      badge.title = duplicateInfo.best
+        ? `Best available version in this ${exact ? "exact" : "likely"} group of ${duplicateInfo.group.records.length}${evidence ? ` (${evidence})` : ""}`
+        : `${exact ? "Exact copy" : "Likely duplicate"}; keep the best version from the Duplicates panel${evidence ? ` (${evidence})` : ""}`;
+      name.append(badge);
+    }
     const url = document.createElement("div");
     url.className = "image-url";
     url.textContent = image.url;
@@ -1483,6 +1936,7 @@
   }
 
   function renderImages() {
+    updateFilenameTemplateUi();
     renderGeneration += 1;
     if (thumbnailObserver) {
       thumbnailObserver.disconnect();
@@ -1492,6 +1946,7 @@
     }
     visibleDimensionRows.clear();
     renderedMetaNodes.clear();
+    renderedNameNodes.clear();
     const cancelledUrls = dimensionProbeScheduler.cancelQueued(() => true);
     for (const url of cancelledUrls) {
       resetCancelledDimensionStatus(url);
@@ -1638,6 +2093,10 @@
       state.showIgnored = false;
       state.siteKey = "";
       state.ignoredKeys.clear();
+      state.pageTitle = "";
+      state.pageUrl = "";
+      clearDuplicateAnalysis();
+      updateFilenameTemplateUi();
       elements["image-list"].replaceChildren();
       elements["page-label"].textContent = "Scanning the current page…";
     }
@@ -1656,7 +2115,7 @@
         return false;
       }
       state.sourceTabId = tab.id;
-      state.incognito = Boolean(tab.incognito);
+      setIncognitoContext(tab.incognito);
       state.sourceWindowId = Number.isInteger(tab.windowId) ? tab.windowId : null;
 
       const args = [{
@@ -1748,8 +2207,12 @@
         (image) => !isImageIgnored(image) && Filters.matchesSmartFilters(image, state.smartFilters)
       );
       state.scanWarnings = merged.warnings;
+      state.pageTitle = merged.page.pageTitle || "";
+      state.pageUrl = merged.page.pageUrl || "";
+      refreshDuplicateAnalysis();
       const hostname = hostFromUrl(merged.page.pageUrl);
       elements["page-label"].textContent = merged.page.pageTitle || hostname;
+      updateFilenameTemplateUi();
 
       if (!state.hasStoredFolder) {
         const safeHost = Core.sanitizePathSegment(hostname, "page");
@@ -1780,6 +2243,9 @@
         state.siteKey = "";
         state.ignoredKeys.clear();
         state.sourceWindowId = null;
+        state.pageTitle = "";
+        state.pageUrl = "";
+        clearDuplicateAnalysis();
         elements["page-label"].textContent = "This page cannot be scanned";
       }
       const message = error && error.message ? error.message : String(error);
@@ -1823,40 +2289,51 @@
       updateSummary();
       return;
     }
+    const template = requireValidFilenameTemplate();
+    if (!template) {
+      return;
+    }
 
     state.busy = true;
-    setNotice(`Starting ${images.length.toLocaleString()} download${images.length === 1 ? "" : "s"}…`);
+    setNotice(`Adding ${images.length.toLocaleString()} download${images.length === 1 ? "" : "s"} to the queue…`);
     renderImages();
 
     try {
       const storedSettings = {
         askForSingle: elements["ask-single-input"].checked,
-        includeBackgrounds: elements["backgrounds-input"].checked
+        includeBackgrounds: elements["backgrounds-input"].checked,
+        filenameTemplate: template.value
       };
       if (!state.incognito) {
         storedSettings.destinationFolder = folder.value;
       }
       await browser.storage.local.set(storedSettings);
       await loadIgnoredKeys();
+      refreshDuplicateAnalysis();
       for (const image of state.images) {
         if (isImageIgnored(image)) {
           state.selected.delete(image.url);
         }
       }
       images = images.filter((image) =>
-        !isImageIgnored(image) && Filters.matchesSmartFilters(image, state.smartFilters)
+        !isImageIgnored(image) &&
+        Filters.matchesSmartFilters(image, state.smartFilters) &&
+        (!state.hideDuplicates || !state.duplicateExtraUrls.has(image.url))
       );
       if (!images.length) {
         setNotice("No non-ignored images are selected.", "error");
         return;
       }
       state.hasStoredFolder = true;
+      const downloadItems = renderedDownloadItems(images, template.value);
       const result = await browser.runtime.sendMessage({
         type: "DOWNLOAD_BATCH",
         folder: folder.value,
         saveAs: elements["ask-single-input"].checked && images.length === 1,
         incognito: state.incognito,
-        items: images.map((image) => ({ url: image.url }))
+        pageTitle: state.pageTitle,
+        pageUrl: state.pageUrl,
+        items: downloadItems
       });
 
       if (!result || !result.ok) {
@@ -1864,11 +2341,17 @@
         throw new Error((result && result.error) || firstError || "Firefox did not start the downloads.");
       }
 
-      const firstError = result.errors && result.errors[0] ? ` First problem: ${result.errors[0].error}` : "";
-      const message = result.failed
-        ? `Started ${result.started.toLocaleString()} of ${result.total.toLocaleString()} downloads. ${result.failed.toLocaleString()} could not be started.${firstError}`
-        : `Started ${result.started.toLocaleString()} download${result.started === 1 ? "" : "s"} in Downloads/${result.folder}.`;
-      setNotice(message, result.failed ? "error" : "success");
+      const queueNotice = downloadBatchNotice(result);
+      if (queueNotice) {
+        setNotice(queueNotice.message, queueNotice.type);
+      } else {
+        const firstError = result.errors && result.errors[0] ? ` First problem: ${result.errors[0].error}` : "";
+        const message = result.failed
+          ? `Started ${result.started.toLocaleString()} of ${result.total.toLocaleString()} downloads. ${result.failed.toLocaleString()} could not be started.${firstError}`
+          : `Started ${result.started.toLocaleString()} download${result.started === 1 ? "" : "s"} in Downloads/${result.folder}.`;
+        setNotice(message, result.failed ? "error" : "success");
+      }
+      refreshQueueBadge();
     } catch (error) {
       setNotice(error && error.message ? error.message : String(error), "error");
     } finally {
@@ -1881,7 +2364,7 @@
     return requestDownloads(selectedDownloadableImages());
   }
 
-  async function finishArchiveDownload(images, folder, permissionPromise) {
+  async function finishArchiveDownload(images, folder, permissionPromise, templateValue) {
     try {
       const granted = await permissionPromise;
       if (!granted) {
@@ -1893,26 +2376,31 @@
       );
       const storedSettings = {
         askForSingle: elements["ask-single-input"].checked,
-        includeBackgrounds: elements["backgrounds-input"].checked
+        includeBackgrounds: elements["backgrounds-input"].checked,
+        filenameTemplate: templateValue
       };
       if (!state.incognito) {
         storedSettings.destinationFolder = folder.value;
       }
       await browser.storage.local.set(storedSettings);
       await loadIgnoredKeys();
+      refreshDuplicateAnalysis();
       for (const image of state.images) {
         if (isImageIgnored(image)) {
           state.selected.delete(image.url);
         }
       }
       images = images.filter((image) =>
-        !isImageIgnored(image) && Filters.matchesSmartFilters(image, state.smartFilters)
+        !isImageIgnored(image) &&
+        Filters.matchesSmartFilters(image, state.smartFilters) &&
+        (!state.hideDuplicates || !state.duplicateExtraUrls.has(image.url))
       );
       if (!images.length) {
         throw new Error("No non-ignored images are selected.");
       }
 
       state.hasStoredFolder = true;
+      const archiveItems = renderedDownloadItems(images, templateValue);
       const jobId = createPreviewId();
       const storageKey = `archiveJobRequest:${jobId}`;
       await browser.storage.session.set({
@@ -1920,7 +2408,9 @@
           createdAt: Date.now(),
           folder: folder.value,
           incognito: state.incognito,
-          items: images.map((image) => ({ url: image.url }))
+          pageTitle: state.pageTitle,
+          pageUrl: state.pageUrl,
+          items: archiveItems
         }
       });
 
@@ -1968,6 +2458,10 @@
       updateSummary();
       return undefined;
     }
+    const template = requireValidFilenameTemplate();
+    if (!template) {
+      return undefined;
+    }
 
     const origins = hostPermissionPatternsForImages(images);
     let permissionPromise = Promise.resolve(true);
@@ -1993,7 +2487,7 @@
         : "Building the ZIP locally…"
     );
     renderImages();
-    return finishArchiveDownload(images, folder, permissionPromise);
+    return finishArchiveDownload(images, folder, permissionPromise, template.value);
   }
 
   function updateLiveCaptureButton() {
@@ -2176,6 +2670,9 @@
     }
     state.sourceTabId = Number.isInteger(tabId) ? tabId : null;
     state.sourceWindowId = tab && Number.isInteger(tab.windowId) ? tab.windowId : null;
+    if (tab) {
+      setIncognitoContext(tab.incognito);
+    }
     if (tab && !isNormalSidebarTab(tab)) {
       showProtectedSidebarPage(tab);
     } else {
@@ -2248,6 +2745,7 @@
       }
       state.sourceTabId = tab.id;
       state.sourceWindowId = tab.windowId;
+      setIncognitoContext(tab.incognito);
       if (!isNormalSidebarTab(tab)) {
         showProtectedSidebarPage(tab);
         return;
@@ -2301,6 +2799,7 @@
         return;
       }
       state.sourceWindowId = tab.windowId;
+      setIncognitoContext(tab.incognito);
       if (!isNormalSidebarTab(tab)) {
         showProtectedSidebarPage(tab);
       } else if (tab.status === "loading") {
@@ -2335,6 +2834,7 @@
     if (!Number.isInteger(state.sidebarWindowId) && Number.isInteger(tab.windowId)) {
       state.sidebarWindowId = tab.windowId;
     }
+    setIncognitoContext(tab.incognito);
     if (!isNormalSidebarTab(tab)) {
       beginSidebarTransition(tab.id, tab);
       return;
@@ -2480,12 +2980,32 @@
       liveCapture: state.liveCapture
     }));
     elements["sidebar-button"].addEventListener("click", openFirefoxSidebar);
+    elements["history-button"].addEventListener("click", openDownloadHistory);
     if (elements["sidebar-follow-button"]) {
       elements["sidebar-follow-button"].addEventListener("click", requestSidebarFollowPermission);
     }
     elements["rescan-button"].addEventListener("click", rescanFromButton);
     elements["filter-input"].addEventListener("input", renderImages);
     elements["folder-input"].addEventListener("input", updateSummary);
+    elements["filename-template-button"].addEventListener("click", () => {
+      const panel = elements["filename-template-panel"];
+      panel.hidden = !panel.hidden;
+      elements["filename-template-button"].setAttribute("aria-expanded", String(!panel.hidden));
+    });
+    elements["filename-template-input"].addEventListener("input", () => {
+      refreshRenderedFilenamePreviews();
+      updateSummary();
+    });
+    elements["filename-template-input"].addEventListener("change", async () => {
+      const result = updateFilenameTemplateUi();
+      if (result.ok) {
+        elements["filename-template-input"].value = result.value;
+        state.filenameTemplate = result.value;
+        await browser.storage.local.set({ filenameTemplate: result.value });
+      }
+      refreshRenderedFilenamePreviews();
+      updateSummary();
+    });
     elements["folder-input"].addEventListener("change", async () => {
       const folder = folderStatus();
       if (folder.ok) {
@@ -2519,6 +3039,17 @@
       elements["smart-filters-button"].setAttribute("aria-expanded", String(!panel.hidden));
       updateSmartFilterButton();
     });
+    elements["duplicates-button"].addEventListener("click", () => {
+      const panel = elements["duplicate-panel"];
+      panel.hidden = !panel.hidden;
+      refreshDuplicateAnalysis();
+      updateDuplicateUi();
+    });
+    elements["deduplicate-button"].addEventListener("click", keepBestDuplicatesSelected);
+    elements["hide-duplicates-input"].addEventListener("change", () => {
+      state.hideDuplicates = elements["hide-duplicates-input"].checked;
+      renderImages();
+    });
     elements["reset-filters-button"].addEventListener("click", () => {
       applySmartFiltersToControls(Filters.DEFAULT_FILTERS);
       handleSmartFilterChange();
@@ -2536,7 +3067,8 @@
     elements["select-none-button"].addEventListener("click", () => {
       if (
         elements["filter-input"].value.trim() ||
-        Filters.hasActiveSmartFilters(state.smartFilters)
+        Filters.hasActiveSmartFilters(state.smartFilters) ||
+        state.hideDuplicates
       ) {
         for (const image of filteredImages()) {
           state.selected.delete(image.url);
@@ -2587,6 +3119,9 @@
   async function initialize() {
     cacheElements();
     applySmartFiltersToControls(Filters.DEFAULT_FILTERS);
+    elements["filename-template-input"].value = Templates.DEFAULT_TEMPLATE;
+    updateFilenameTemplateUi();
+    updateDuplicateUi();
     elements["sidebar-button"].hidden = responsiveSurface ||
       !browser.sidebarAction ||
       typeof browser.sidebarAction.open !== "function";
@@ -2604,6 +3139,7 @@
         "destinationFolder",
         "askForSingle",
         "includeBackgrounds",
+        "filenameTemplate",
         "smartFilters"
       ]);
       if (stored.destinationFolder) {
@@ -2612,6 +3148,12 @@
       }
       elements["ask-single-input"].checked = Boolean(stored.askForSingle);
       elements["backgrounds-input"].checked = stored.includeBackgrounds !== false;
+      const storedTemplate = Templates.validate(stored.filenameTemplate);
+      elements["filename-template-input"].value = storedTemplate.ok
+        ? storedTemplate.value
+        : Templates.DEFAULT_TEMPLATE;
+      state.filenameTemplate = elements["filename-template-input"].value;
+      updateFilenameTemplateUi();
       applySmartFiltersToControls(stored.smartFilters);
       updateSmartFilterButton();
     } catch (_error) {
@@ -2629,10 +3171,14 @@
       // Platform detection only changes the optional Save As control.
     }
     if (sidebarMode) {
+      refreshQueueBadge();
+      startQueueBadgePolling();
       await scanCurrentSidebarTab();
       return;
     }
     const scanned = await scanPage();
+    refreshQueueBadge();
+    startQueueBadgePolling();
     if (scanned && launchOptions.liveCapture && managerWindowMode) {
       await startLiveCapture({ skipInitialScan: true });
     }

@@ -42,7 +42,24 @@
     return typeof text.normalize === "function" ? text.normalize("NFKC") : text;
   }
 
-  function sanitizePathSegment(value, fallback) {
+  function truncateWithoutSplittingSurrogate(value, maximum) {
+    const text = String(value || "");
+    if (text.length <= maximum) {
+      return text;
+    }
+    let truncated = text.slice(0, maximum);
+    const lastCodeUnit = truncated.charCodeAt(truncated.length - 1);
+    const nextCodeUnit = text.charCodeAt(truncated.length);
+    if (
+      lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff &&
+      nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff
+    ) {
+      truncated = truncated.slice(0, -1);
+    }
+    return truncated;
+  }
+
+  function cleanPathSegment(value) {
     let safe = normalizeText(value)
       .replace(BIDI_CONTROLS, "")
       .replace(UNSAFE_FILENAME_CHARACTERS, "_")
@@ -54,7 +71,12 @@
       safe = `_${safe}`;
     }
 
-    safe = safe.slice(0, 100).replace(/[. ]+$/g, "");
+    return safe;
+  }
+
+  function sanitizePathSegment(value, fallback) {
+    const safe = truncateWithoutSplittingSurrogate(cleanPathSegment(value), 100)
+      .replace(/[. ]+$/g, "");
     return safe || fallback || "";
   }
 
@@ -141,14 +163,21 @@
   }
 
   function sanitizeFilename(value, fallback) {
-    const safe = sanitizePathSegment(value, fallback || "image");
-    if (safe.length <= 180) {
-      return safe;
+    let safe = cleanPathSegment(value);
+    if (!safe) {
+      safe = cleanPathSegment(fallback || "image") || "image";
     }
 
-    const dot = safe.lastIndexOf(".");
-    const extension = dot > 0 && safe.length - dot <= 10 ? safe.slice(dot) : "";
-    return `${safe.slice(0, 180 - extension.length)}${extension}`;
+    const extensionName = recognizedExtension(safe);
+    const extension = extensionName
+      ? safe.slice(-(extensionName.length + 1))
+      : "";
+    const stem = extension ? safe.slice(0, -extension.length) : safe;
+    const maximumStemLength = Math.max(1, 100 - extension.length);
+    const truncatedStem = truncateWithoutSplittingSurrogate(stem, maximumStemLength)
+      .replace(/[. ]+$/g, "");
+    const candidate = `${truncatedStem || "image"}${extension}`;
+    return truncateWithoutSplittingSurrogate(candidate, 100).replace(/[. ]+$/g, "") || "image";
   }
 
   function filenameForImage(url, index) {
@@ -184,21 +213,28 @@
   }
 
   function uniquifyFilename(filename, usedNames) {
-    const lowerName = filename.toLocaleLowerCase("en-US");
+    const safeFilename = sanitizeFilename(filename, "image");
+    const lowerName = safeFilename.toLocaleLowerCase("en-US");
     if (!usedNames.has(lowerName)) {
       usedNames.add(lowerName);
-      return filename;
+      return safeFilename;
     }
 
-    const dot = filename.lastIndexOf(".");
-    const hasExtension = dot > 0 && filename.length - dot <= 10;
-    const stem = hasExtension ? filename.slice(0, dot) : filename;
-    const extension = hasExtension ? filename.slice(dot) : "";
+    const extensionName = recognizedExtension(safeFilename);
+    const extension = extensionName
+      ? safeFilename.slice(-(extensionName.length + 1))
+      : "";
+    const stem = extension ? safeFilename.slice(0, -extension.length) : safeFilename;
     let suffix = 2;
     let candidate = "";
 
     do {
-      candidate = `${stem}-${suffix}${extension}`;
+      const suffixText = `-${suffix}`;
+      const maximumStemLength = Math.max(1, 100 - suffixText.length - extension.length);
+      candidate = sanitizeFilename(
+        `${truncateWithoutSplittingSurrogate(stem, maximumStemLength)}${suffixText}${extension}`,
+        `image${suffixText}${extension}`
+      );
       suffix += 1;
     } while (usedNames.has(candidate.toLocaleLowerCase("en-US")));
 

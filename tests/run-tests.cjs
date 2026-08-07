@@ -53,15 +53,26 @@ const previewHtml = fs.readFileSync(path.join(root, "preview/preview.html"), "ut
 const previewJs = fs.readFileSync(path.join(root, "preview/preview.js"), "utf8");
 const sidebarHtml = fs.readFileSync(sidebarPath, "utf8");
 const sidebarJs = fs.readFileSync(path.join(root, "sidebar/sidebar.js"), "utf8");
+const historyPath = path.join(root, "history/history.html");
+const historyHtml = fs.readFileSync(historyPath, "utf8");
+const historyCss = fs.readFileSync(path.join(root, "history/history.css"), "utf8");
+const historyJs = fs.readFileSync(path.join(root, "history/history.js"), "utf8");
 
 assert.equal(manifest.manifest_version, 3);
-assert.equal(manifest.version, "1.6.1");
+assert.equal(manifest.version, "1.7.0");
 assert.equal(Core.MAX_BATCH_TOTAL_URL_LENGTH, 2000000);
 assert.deepEqual(manifest.permissions.sort(), ["activeTab", "downloads", "menus", "scripting", "storage"]);
 assert.deepEqual(manifest.optional_host_permissions, ["<all_urls>"]);
 assert.deepEqual(
   manifest.background.scripts,
-  ["shared/core.js", "shared/collector.js", "shared/archive.js", "background.js"]
+  [
+    "shared/core.js",
+    "shared/collector.js",
+    "shared/archive.js",
+    "shared/templates.js",
+    "shared/download-queue.js",
+    "background.js"
+  ]
 );
 assert.match(manifest.content_security_policy.extension_pages, /connect-src http: https: data: blob:/);
 assert.deepEqual(
@@ -76,7 +87,14 @@ const popupScriptSources = Array.from(
 );
 assert.deepEqual(
   popupScriptSources,
-  ["../shared/core.js", "../shared/collector.js", "../shared/filters.js", "popup.js"],
+  [
+    "../shared/core.js",
+    "../shared/collector.js",
+    "../shared/filters.js",
+    "../shared/templates.js",
+    "../shared/duplicates.js",
+    "popup.js"
+  ],
   "Popup scripts must load in dependency order"
 );
 const popupResourcePaths = [
@@ -109,6 +127,15 @@ assert.match(popupHtml, /class="button-label">Open window<\/span>/);
 assert.match(popupHtml, /id="folder-help"[^>]*role="status"[^>]*aria-live="polite"[^>]*hidden/);
 assert.match(popupHtml, /class="folder-toolbar"/);
 assert.match(popupHtml, /class="folder-options"/);
+assert.match(popupHtml, /id="history-button"[^>]*title="Download queue and statistics"/);
+assert.match(popupHtml, /id="queue-badge"[^>]*hidden/);
+assert.match(popupHtml, /id="filename-template-button"[^>]*aria-controls="filename-template-panel"/);
+assert.match(popupHtml, /id="filename-template-input"[^>]*value="\{filename\}"[^>]*maxlength="240"/);
+assert.match(popupHtml, /id="filename-template-help"[^>]*>[^<]*\{hostname\}[^<]*\{page-title\}[^<]*\{date\}/);
+assert.match(popupHtml, /id="duplicates-button"[^>]*aria-controls="duplicate-panel"/);
+assert.match(popupHtml, /id="duplicate-panel"[^>]*hidden/);
+assert.match(popupHtml, /id="deduplicate-button"[^>]*disabled>Keep best selected<\/button>/);
+assert.match(popupHtml, /id="hide-duplicates-input"[^>]*type="checkbox"/);
 assert.match(popupHtml, />Save As for one image<\/span>/);
 assert.match(popupHtml, />CSS backgrounds<\/span>/);
 assert.match(popupCss, /\.folder-panel\s*\{[^}]*padding:\s*7px 12px 8px;/s);
@@ -183,6 +210,11 @@ assert.doesNotMatch(
 assert.match(popupJs, /Filters\.matchesSmartFilters/);
 assert.match(popupJs, /Filters\.hasActiveSmartFilters/);
 assert.match(popupJs, /smartFilters:\s*Filters\.normalizeFilters\(\)/);
+assert.match(popupJs, /Templates\.validate\(elements\["filename-template-input"\]\.value\)/);
+assert.match(popupJs, /Templates\.render\(/);
+assert.match(popupJs, /Duplicates\.analyzeDuplicates\(candidates\)/);
+assert.match(popupJs, /runtime\.getURL\("history\/history\.html"\)/);
+assert.match(popupJs, /type:\s*"GET_DOWNLOAD_DASHBOARD"/);
 assert.match(popupJs, /elements\["bulk-download-button"\]\.addEventListener\("click", downloadSelectedImages\)/);
 assert.match(popupJs, /elements\["archive-download-button"\]\.addEventListener\("click", downloadSelectedArchive\)/);
 assert.match(popupJs, /elements\["archive-footer-button"\]\.addEventListener\("click", downloadSelectedArchive\)/);
@@ -197,7 +229,10 @@ assert.match(popupJs, /`archiveJobRequest:\$\{jobId\}`/);
 assert.match(popupJs, /archive\/archive\.html\?job=\$\{encodeURIComponent\(jobId\)\}/);
 assert.match(popupJs, /await browser\.storage\.session\.set\(\{/);
 assert.match(popupJs, /await browser\.tabs\.create\(createProperties\)/);
-assert.match(popupJs, /items:\s*images\.map\(\(image\) => \(\{ url: image\.url \}\)\)/);
+assert.match(popupJs, /const downloadItems = renderedDownloadItems\(images, template\.value\)/);
+assert.match(popupJs, /items:\s*downloadItems/);
+assert.match(popupJs, /const archiveItems = renderedDownloadItems\(images, templateValue\)/);
+assert.match(popupJs, /items:\s*archiveItems/);
 assert.match(popupJs, /collectLiveGalleryFingerprint/);
 assert.match(popupJs, /scanPage\(\{[\s\S]*preserveSelection:\s*true,[\s\S]*live:\s*true[\s\S]*\}\)/);
 assert.match(backgroundJs, /contexts:\s*\["image"\]/);
@@ -256,11 +291,47 @@ for (const resourcePath of sidebarScriptSources) {
 assert.match(sidebarJs, /browser\.runtime\.getURL\("popup\/popup\.html\?sidebar=1"\)/);
 assert.match(sidebarJs, /window\.location\.replace\(managerUrl\)/);
 
+assert.match(historyHtml, /^<!doctype html>/i, "Download dashboard must use standards mode");
+assert.match(historyHtml, /<title>AnyDownload — Downloads<\/title>/);
+assert.match(historyHtml, /id="completed-stat"/);
+assert.match(historyHtml, /id="bytes-stat"/);
+assert.match(historyHtml, /id="success-stat"/);
+assert.match(historyHtml, /id="queue-stat"/);
+assert.match(historyHtml, /id="pause-all-button"/);
+assert.match(historyHtml, /id="resume-all-button"/);
+assert.match(historyHtml, /id="cancel-pending-button"/);
+assert.match(historyHtml, /id="retry-failed-button"/);
+assert.match(historyHtml, /id="clear-completed-button"/);
+const historyScriptSources = Array.from(
+  historyHtml.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*><\/script>/gi),
+  (match) => match[1]
+);
+assert.deepEqual(historyScriptSources, ["history.js"]);
+const historyResourcePaths = [
+  ...historyScriptSources,
+  ...Array.from(
+    historyHtml.matchAll(/<(?:link|img)\b[^>]*(?:href|src)=["']([^"']+)["'][^>]*>/gi),
+    (match) => match[1]
+  )
+];
+for (const resourcePath of historyResourcePaths) {
+  assertLocalResource(path.dirname(historyPath), resourcePath, "Download dashboard resource");
+}
+assert.match(historyJs, /type:\s*"GET_DOWNLOAD_DASHBOARD"/);
+assert.match(historyJs, /type:\s*"DOWNLOAD_QUEUE_ACTION"/);
+assert.match(historyJs, /performDownloadsAction\(\s*"show",\s*\[task\.downloadId\]/s);
+assert.match(historyJs, /performDownloadsAction\(\s*"showDefaultFolder"/s);
+assert.match(historyCss, /\.stats-grid\s*\{[^}]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\);/s);
+assert.match(historyCss, /@media\s*\(max-width:\s*800px\)/);
+
 for (const relativePath of [
   "archive/archive.css",
   "archive/archive.html",
   "archive/archive.js",
   "background.js",
+  "history/history.css",
+  "history/history.html",
+  "history/history.js",
   "icons/image-downloader.svg",
   "popup/popup.css",
   "popup/popup.html",
@@ -272,6 +343,9 @@ for (const relativePath of [
   "shared/archive.js",
   "shared/collector.js",
   "shared/core.js",
+  "shared/download-queue.js",
+  "shared/duplicates.js",
+  "shared/templates.js",
   "sidebar/sidebar.html",
   "sidebar/sidebar.js"
 ]) {
@@ -300,6 +374,24 @@ assert.equal(
 assert.equal(Core.filenameForImage("data:image/png;base64,AA==", 2), "image-0003.png");
 assert.equal(Core.filenameForImage("https://example.com/payload.exe", 3), "payload_exe");
 assert.equal(Core.sanitizeFilename("../CON?.jpg", "image"), "_CON_.jpg");
+const longWebpName = `${"a".repeat(96)}.webp`;
+const preservedLongWebp = Core.filenameForImage(
+  `https://example.com/${longWebpName}`,
+  0
+);
+assert.ok(preservedLongWebp.length <= 100);
+assert.match(preservedLongWebp, /\.webp$/, "Long source names must retain their image extension");
+const surrogateBoundaryName = Core.sanitizeFilename(
+  `${"a".repeat(95)}😀${"b".repeat(20)}.jpg`,
+  "image.jpg"
+);
+assert.ok(surrogateBoundaryName.length <= 100);
+assert.match(surrogateBoundaryName, /\.jpg$/);
+assert.doesNotMatch(
+  surrogateBoundaryName,
+  /[\ud800-\udfff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/,
+  "Filename truncation must not leave an unpaired UTF-16 surrogate"
+);
 
 const used = new Set();
 assert.equal(Core.uniquifyFilename("photo.jpg", used), "photo.jpg");
@@ -337,12 +429,16 @@ assert.match(Core.ignoreKeyForUrl("data:IMAGE/PNG;base64,AA=="), /^data:\d+:[a-f
 for (const relativePath of [
   "background.js",
   "archive/archive.js",
+  "history/history.js",
   "popup/popup.js",
   "preview/preview.js",
   "shared/collector.js",
   "shared/core.js",
+  "shared/download-queue.js",
+  "shared/duplicates.js",
   "shared/filters.js",
   "shared/archive.js",
+  "shared/templates.js",
   "sidebar/sidebar.js"
 ]) {
   const source = fs.readFileSync(path.join(root, relativePath), "utf8");

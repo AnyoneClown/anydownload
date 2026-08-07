@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Page Image Downloader",
-  "version": "1.6.1",
-  "description": "Find full-size page images with smart filters, live capture, ZIP downloads, and a Firefox Sidebar that follows tabs.",
+  "version": "1.7.0",
+  "description": "Find full-size images, filter duplicates, customize filenames, and manage downloads with a queue, history, ZIPs, and statistics.",
   "permissions": [
     "activeTab",
     "downloads",
@@ -39,6 +39,8 @@
       "shared/core.js",
       "shared/collector.js",
       "shared/archive.js",
+      "shared/templates.js",
+      "shared/download-queue.js",
       "background.js"
     ]
   },

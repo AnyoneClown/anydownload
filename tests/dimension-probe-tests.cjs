@@ -1,15 +1,83 @@
 "use strict";
 
 const assert = require("assert").strict;
+const Templates = require("../extension/shared/templates.js");
 const {
   accumulateLiveImages,
   collectLiveGalleryFingerprint,
   createDimensionProbeScheduler,
+  downloadBatchNotice,
+  eligibleDuplicateCandidates,
   hostPermissionPatternsForImages,
   launchOptionsFromUrl,
   reconcileScanSelection,
+  renderFilenameBatch,
   sourceTabIdFromUrl
 } = require("../extension/popup/popup.js");
+
+assert.deepEqual(downloadBatchNotice({ queued: 3, failed: 0, total: 3 }), {
+  type: "success",
+  message: "Added 3 downloads to the queue. Open Downloads to monitor progress."
+});
+assert.deepEqual(downloadBatchNotice({
+  queued: 2,
+  failed: 1,
+  total: 3,
+  errors: [{ error: "Queue capacity reached." }]
+}), {
+  type: "error",
+  message: "Added 2 of 3 downloads to the queue. 1 could not be queued. First problem: Queue capacity reached."
+});
+assert.equal(downloadBatchNotice({ started: 1 }), null);
+
+const filenameRecords = [
+  { url: "https://images.test/photo.jpg", width: 0, height: 0 },
+  { url: "https://images.test/photo.jpg?variant=second", width: 0, height: 0 }
+];
+const batchDate = new Date(2026, 7, 8, 12, 0, 0);
+const renderWithTemplate = (template, records) => renderFilenameBatch(
+  records,
+  (image, index, usedNames) => Templates.render(template, {
+    url: image.url,
+    filename: "photo.jpg",
+    index: index + 1,
+    width: image.width,
+    height: image.height,
+    date: batchDate
+  }, { usedNames })
+);
+assert.deepEqual(
+  renderWithTemplate("{filename}", filenameRecords).map((item) => item.filename),
+  ["photo.jpg", "photo-2.jpg"],
+  "Filename previews and payloads must share one collision set"
+);
+assert.equal(
+  renderWithTemplate("{index}-{filename}", [filenameRecords[1]])[0].filename,
+  "0001-photo.jpg",
+  "A selected subset must be indexed by batch position rather than discovery position"
+);
+filenameRecords[0].width = 1920;
+filenameRecords[0].height = 1080;
+assert.equal(
+  renderWithTemplate("{width}x{height}-{filename}", [filenameRecords[0]])[0].filename,
+  "1920x1080-photo.jpg",
+  "Measured dimensions must flow through the shared batch renderer"
+);
+
+const eligibleRecords = [
+  { url: "https://images.test/eligible.jpg", format: "jpeg" },
+  { url: "https://images.test/filtered.webp", format: "webp" },
+  { url: "https://images.test/ignored.jpg", format: "jpeg", ignored: true }
+];
+assert.deepEqual(
+  eligibleDuplicateCandidates(
+    eligibleRecords,
+    (image) => image.ignored,
+    (image) => image.format === "jpeg"
+  ),
+  [eligibleRecords[0]],
+  "Duplicate cleanup must never replace an eligible image with a filtered or ignored variant"
+);
 
 assert.equal(
   sourceTabIdFromUrl("moz-extension://fixture/popup/popup.html?sourceTabId=73&launch=abc"),
