@@ -3,6 +3,9 @@
 
   const Core = globalThis.ImageDownloaderCore;
   const collectImagesFromPage = globalThis.ImageDownloaderCollector;
+  const FapFolder = globalThis.AnyDownloadFapFolder;
+  const collectFapFolderMediaFromPage = globalThis.AnyDownloadFapFolderCollector ||
+    (FapFolder && FapFolder.collectFromPage);
   const Instagram = globalThis.ImageDownloaderInstagram;
   const collectInstagramMediaFromPage = Instagram && Instagram.collectFromPage;
   const YouTube = globalThis.AnyDownloadYouTube;
@@ -470,6 +473,50 @@
     const requestedMediaType = info && info.mediaType === "video" ? "video" : "image";
     const sourceUrl = normalizedMediaUrl(info && info.srcUrl);
     let specializedError = "";
+    if (
+      requestedMediaType === "video" &&
+      tab &&
+      Number.isInteger(tab.id) &&
+      FapFolder &&
+      typeof FapFolder.isSupportedUrl === "function" &&
+      typeof collectFapFolderMediaFromPage === "function" &&
+      FapFolder.isSupportedUrl(tab.url)
+    ) {
+      try {
+        const fapFolderResults = await browser.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: collectFapFolderMediaFromPage,
+          args: [{
+            maxItems: Core.MAX_BATCH_SIZE,
+            maxPosts: 64,
+            maxConcurrency: 3,
+            maxDocumentBytes: 2000000,
+            maxTotalDocumentBytes: 16000000,
+            maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH,
+            requestTimeoutMs: 8000
+          }]
+        });
+        const fapFolderScan = fapFolderResults && fapFolderResults[0] &&
+          fapFolderResults[0].result;
+        const videos = fapFolderScan && Array.isArray(fapFolderScan.images)
+          ? fapFolderScan.images.map(safeContextMedia)
+            .filter((image) => image && image.mediaType === "video")
+          : [];
+        const exact = videos.find((image) =>
+          sourceUrl && (image.url === sourceUrl || image.previewUrl === sourceUrl)
+        );
+        if (exact || videos.length === 1) {
+          return exact || videos[0];
+        }
+        specializedError = videos.length > 1
+          ? "This FapFolder page contains multiple videos; open the media list to choose the correct item."
+          : fapFolderScan && Array.isArray(fapFolderScan.warnings)
+            ? fapFolderScan.warnings.map((warning) => String(warning).slice(0, 500)).join(" ")
+            : "";
+      } catch (error) {
+        specializedError = `FapFolder-specific collection failed: ${error.message || error}`;
+      }
+    }
     if (
       requestedMediaType === "video" &&
       tab &&

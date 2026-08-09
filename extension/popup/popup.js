@@ -542,6 +542,9 @@
 
   const Core = globalThis.ImageDownloaderCore;
   const collectImagesFromPage = globalThis.ImageDownloaderCollector;
+  const FapFolder = globalThis.AnyDownloadFapFolder;
+  const collectFapFolderMediaFromPage = globalThis.AnyDownloadFapFolderCollector ||
+    FapFolder && FapFolder.collectFromPage;
   const Instagram = globalThis.ImageDownloaderInstagram;
   const collectInstagramMediaFromPage = Instagram && Instagram.collectFromPage;
   const YouTube = globalThis.AnyDownloadYouTube;
@@ -2291,6 +2294,8 @@
       let instagramWarning = "";
       let instagramCollectionSucceeded = false;
       let preservedInstagramFallback = false;
+      let fapFolderWarning = "";
+      let fapFolderCollectionSucceeded = false;
       let youtubeWarning = "";
       let youtubeCollectionSucceeded = false;
       const instagramPage = Boolean(
@@ -2298,6 +2303,13 @@
         typeof Instagram.isInstagramUrl === "function" &&
         typeof collectInstagramMediaFromPage === "function" &&
         Instagram.isInstagramUrl(tab.url)
+      );
+      const fapFolderPage = Boolean(
+        !instagramPage &&
+        FapFolder &&
+        typeof FapFolder.isSupportedUrl === "function" &&
+        typeof collectFapFolderMediaFromPage === "function" &&
+        FapFolder.isSupportedUrl(tab.url)
       );
 
       if (instagramPage) {
@@ -2359,8 +2371,38 @@
         instagramWarning = "";
       }
 
+      if (fapFolderPage && !injectionResults) {
+        elements["page-label"].textContent = "Inspecting FapFolder video posts…";
+        try {
+          const fapFolderResults = await browser.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: collectFapFolderMediaFromPage,
+            args: [{
+              maxItems: MAX_DISCOVERED_IMAGES,
+              maxPosts: 64,
+              maxConcurrency: 3,
+              maxDocumentBytes: 2000000,
+              maxTotalDocumentBytes: 16000000,
+              maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH,
+              requestTimeoutMs: 8000
+            }]
+          });
+          const fapFolderResult = fapFolderResults && fapFolderResults[0] &&
+            fapFolderResults[0].result;
+          if (fapFolderResult && fapFolderResult.handled && Array.isArray(fapFolderResult.images)) {
+            injectionResults = fapFolderResults;
+            fapFolderCollectionSucceeded = fapFolderResult.images.some((image) =>
+              image && image.mediaType === "video"
+            );
+          }
+        } catch (error) {
+          fapFolderWarning = `FapFolder post inspection was unavailable; the visible page was scanned instead. (${error.message || error})`;
+        }
+      }
+
       const youtubePage = Boolean(
         !instagramPage &&
+        !fapFolderPage &&
         YouTube &&
         typeof YouTube.isYouTubeUrl === "function" &&
         typeof collectYouTubeMediaFromPage === "function" &&
@@ -2473,6 +2515,9 @@
       }
       if (instagramWarning) {
         merged.warnings.push(instagramWarning);
+      }
+      if (fapFolderWarning) {
+        merged.warnings.push(fapFolderWarning);
       }
       if (youtubeWarning) {
         merged.warnings.push(youtubeWarning);
@@ -2587,6 +2632,11 @@
       } else if (instagramCollectionSucceeded && merged.images.length && !merged.warnings.length) {
         setNotice(
           "Collected the active story and available highlights with the current Instagram session.",
+          "success"
+        );
+      } else if (fapFolderCollectionSucceeded && !merged.warnings.length) {
+        setNotice(
+          `Found ${merged.images.length.toLocaleString()} direct video file${merged.images.length === 1 ? "" : "s"} inside the loaded FapFolder posts.`,
           "success"
         );
       } else if (youtubeCollectionSucceeded && !merged.warnings.length) {

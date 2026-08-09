@@ -38,6 +38,7 @@
     "scripts": [
       "shared/core.js",
       "shared/collector.js",
+      "shared/fapfolder.js",
       "shared/instagram.js",
       "shared/youtube.js",
       "shared/archive.js",

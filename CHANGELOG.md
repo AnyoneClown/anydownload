@@ -6,6 +6,7 @@ All notable changes to AnyDownload are documented here.
 
 ### Added
 
+- Bounded FapFolder group-video collection that follows only loaded post links in source order, reuses the current tab session, and extracts direct video files from each post's lazy player markup.
 - Bounded, session-authenticated Instagram profile-feed pagination that follows first-party cursors, preserves feed order, and expands every photo or direct video in every returned carousel.
 - Instagram profile collection filters for posts only, the current story, all highlights, or one discovered named highlight.
 

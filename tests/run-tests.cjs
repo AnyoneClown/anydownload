@@ -70,6 +70,7 @@ assert.deepEqual(
   [
     "shared/core.js",
     "shared/collector.js",
+    "shared/fapfolder.js",
     "shared/instagram.js",
     "shared/youtube.js",
     "shared/archive.js",
@@ -99,6 +100,7 @@ assert.deepEqual(
   [
     "../shared/core.js",
     "../shared/collector.js",
+    "../shared/fapfolder.js",
     "../shared/instagram.js",
     "../shared/youtube.js",
     "../shared/filters.js",
@@ -334,6 +336,12 @@ assert.match(popupJs, /items:\s*downloadItems/);
 assert.match(popupJs, /const archiveItems = renderedDownloadItems\(images, templateValue\)/);
 assert.match(popupJs, /items:\s*archiveItems/);
 assert.match(popupJs, /collectLiveGalleryFingerprint/);
+assert.match(popupJs, /const FapFolder = globalThis\.AnyDownloadFapFolder/);
+assert.match(popupJs, /const collectFapFolderMediaFromPage = globalThis\.AnyDownloadFapFolderCollector/);
+assert.match(popupJs, /FapFolder\.isSupportedUrl\(tab\.url\)/);
+assert.match(popupJs, /func:\s*collectFapFolderMediaFromPage/);
+assert.match(popupJs, /maxPosts:\s*64/);
+assert.match(popupJs, /fapFolderCollectionSucceeded/);
 assert.match(popupJs, /collectInstagramMediaFromPage/);
 assert.match(popupJs, /includeProfilePosts:\s*!settings\.instagramCollections/);
 assert.match(popupJs, /includeStories:\s*Boolean\(settings\.instagramCollections\)/);
@@ -382,6 +390,10 @@ assert.match(
   "In-flight scans must be invalidated when their source route changes"
 );
 assert.match(backgroundJs, /contexts:\s*\["image",\s*"video"\]/);
+assert.match(backgroundJs, /const FapFolder = globalThis\.AnyDownloadFapFolder/);
+assert.match(backgroundJs, /const collectFapFolderMediaFromPage = globalThis\.AnyDownloadFapFolderCollector/);
+assert.match(backgroundJs, /FapFolder\.isSupportedUrl\(tab\.url\)/);
+assert.match(backgroundJs, /func:\s*collectFapFolderMediaFromPage/);
 assert.match(backgroundJs, /const Instagram = globalThis\.ImageDownloaderInstagram/);
 assert.match(backgroundJs, /func:\s*collectInstagramMediaFromPage/);
 assert.match(backgroundJs, /const YouTube = globalThis\.AnyDownloadYouTube/);
@@ -499,6 +511,7 @@ for (const relativePath of [
   "shared/collector.js",
   "shared/core.js",
   "shared/download-queue.js",
+  "shared/fapfolder.js",
   "shared/templates.js",
   "shared/youtube.js",
   "sidebar/sidebar.html",
