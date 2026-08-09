@@ -53,6 +53,11 @@ assert.deepEqual(
   ["photo.jpg", "photo-2.jpg"],
   "Filename previews and payloads must share one collision set"
 );
+assert.deepEqual(
+  renderWithTemplate(Templates.DEFAULT_TEMPLATE, filenameRecords).map((item) => item.filename),
+  ["0001-photo.jpg", "0002-photo.jpg"],
+  "Default filenames must preserve selected input and site-discovery order before concurrent work starts"
+);
 assert.equal(
   renderWithTemplate("{index}-{filename}", [filenameRecords[1]])[0].filename,
   "0001-photo.jpg",

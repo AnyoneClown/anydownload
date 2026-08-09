@@ -47,12 +47,12 @@
         <p id="folder-help" class="field-help" role="status" aria-live="polite" hidden></p>
         <div class="filename-template-toolbar">
           <button id="filename-template-button" class="text-button" type="button" aria-expanded="false" aria-controls="filename-template-panel">Filename template</button>
-          <span id="filename-template-preview" title="Filename preview">Example: image-0001.jpg</span>
+          <span id="filename-template-preview" title="Filename preview">Example: 0001-image-0001.jpg</span>
         </div>
         <div id="filename-template-panel" class="filename-template-panel" hidden>
           <label for="filename-template-input">Template</label>
-          <input id="filename-template-input" type="text" value="{filename}" maxlength="240" autocomplete="off" spellcheck="false" aria-describedby="filename-template-help">
-          <p id="filename-template-help" class="field-help" role="status" aria-live="polite">Tokens: {filename}, {name}, {ext}, {index}, {hostname}, {page-title}, {width}, {height}, {date}</p>
+          <input id="filename-template-input" type="text" value="{index}-{filename}" maxlength="240" autocomplete="off" spellcheck="false" aria-describedby="filename-template-help">
+          <p id="filename-template-help" class="field-help" role="status" aria-live="polite">Tokens: {filename}, {name}, {ext}, {index}, {hostname}, {page-title}, {width}, {height}, {date}. The zero-padded {index} follows selected page order.</p>
         </div>
       </section>
 

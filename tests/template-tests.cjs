@@ -34,7 +34,7 @@ assert.deepEqual(Object.keys(Templates).sort(), [
   "render",
   "validate"
 ].sort());
-assert.equal(Templates.DEFAULT_TEMPLATE, "{filename}");
+assert.equal(Templates.DEFAULT_TEMPLATE, "{index}-{filename}");
 assert.equal(Templates.MAX_FILENAME_LENGTH, 100);
 assert.ok(Object.isFrozen(Templates));
 assert.ok(Object.isFrozen(Templates.TOKENS));
@@ -97,6 +97,11 @@ const metadata = {
   index: 7,
   date: "2026-08-07"
 };
+assert.equal(
+  Templates.render(Templates.DEFAULT_TEMPLATE, metadata),
+  "0007-summer-photo.JPG",
+  "The default template must prefix the source filename with its padded batch position"
+);
 assert.equal(
   Templates.render("{page-title}_{index}_{width}x{height}_{name}.{ext}", metadata),
   "Summer Gallery_0007_1920x1080_summer-photo.jpg"

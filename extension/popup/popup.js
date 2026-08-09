@@ -819,7 +819,7 @@
     elements["filename-template-input"].setAttribute("aria-invalid", String(!result.ok));
     elements["filename-template-help"].classList.toggle("error", !result.ok);
     elements["filename-template-help"].textContent = result.ok
-      ? "Tokens: {filename}, {name}, {ext}, {index}, {hostname}, {page-title}, {width}, {height}, {date}"
+      ? "Tokens: {filename}, {name}, {ext}, {index}, {hostname}, {page-title}, {width}, {height}, {date}. The zero-padded {index} follows selected page order."
       : result.error;
     state.filenameTemplate = result.ok ? result.value : elements["filename-template-input"].value;
     return result;

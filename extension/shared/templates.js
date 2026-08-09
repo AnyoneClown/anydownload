@@ -18,7 +18,10 @@
     throw new Error("ImageDownloaderTemplates requires ImageDownloaderCore.");
   }
 
-  const DEFAULT_TEMPLATE = "{filename}";
+  // Prefix default filenames with their selected-batch position so sorting the
+  // destination folder by name restores the order in which media appeared on
+  // the page, regardless of the queue's completion order.
+  const DEFAULT_TEMPLATE = "{index}-{filename}";
   const MAX_TEMPLATE_LENGTH = 240;
   // Core.sanitizePathSegment, which backs Core.sanitizeFilename, caps a single
   // Downloads path segment at 100 UTF-16 code units.

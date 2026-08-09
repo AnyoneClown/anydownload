@@ -11,6 +11,7 @@ All notable changes to AnyDownload are documented here.
 
 ### Changed
 
+- The default filename template is now `{index}-{filename}`. Zero-padded names are assigned in selected discovery order before concurrent downloads start, so folders sorted by filename retain the page or site-adapter order regardless of completion timing.
 - Automatic live updates now start after every successful manager scan. Sidebar handoffs stop the previous watcher, scan the newly active or navigated page, and start a watcher for that new source without a separate capture action.
 - The profile-only **Stories & highlights** action uses the current signed-in or private-window Instagram session, preserves already collected profile posts, and warns that requesting story data may register as a view.
 - Exact Instagram post and reel routes now collect only the selected post, expand its complete carousel regardless of `img_index`, and never fetch related profile posts, stories, or highlights.

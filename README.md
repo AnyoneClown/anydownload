@@ -11,7 +11,7 @@ The manifest targets Firefox desktop 140+ and Firefox for Android 142+. Firefox 
 3. Select `extension/manifest.json` from this project.
 4. Open a normal website containing images or video, an Instagram post/reel/story/highlight, or a public YouTube video page and select the extension's toolbar button. Use the compact popup directly, choose **Open window** for a resizable manager, or choose the sidebar button to keep the manager beside the page.
 5. Expand **Filters** to choose **Images & videos**, **Images**, or **Videos**, enable **Photos only**, or select a format or Instagram profile collection.
-6. Expand **Filename template** to keep the source name or combine page, host, index, dimension, and date tokens; the live example shows the resulting safe filename.
+6. Expand **Filename template** to keep the default ordered name (`0001-photo.jpg`) or combine page, host, index, dimension, and date tokens; the live example shows the resulting safe filename.
 7. Click an image thumbnail, video poster, or video placeholder to preview it in a full browser tab; choose **Ignore** to hide unwanted media; or right-click a page image or video and open the **AnyDownload** submenu.
 8. On a lazy or infinite-scroll gallery, keep the resizable manager or sidebar open while you scroll; automatic live updates add newly exposed images and direct video files without a manual reload or capture toggle.
 9. Enter a relative destination such as `Website media/example.com`, select the images and videos you want, and use **Download selected** at the bottom. Use **Download ZIP** there only for image selections. The download-arrow button in the header opens the queue, history, progress, and statistics.
@@ -68,7 +68,7 @@ Smart-filter settings are remembered. Applying a filter removes nonmatching item
 
 ## Filename templates and record identity
 
-Expand **Filename template** above the media list to control names for ordinary image/video downloads and image-only ZIP entries. The default `{filename}` keeps the safe source filename. Templates can combine literal text with these tokens:
+Expand **Filename template** above the media list to control names for ordinary image/video downloads and image-only ZIP entries. The default `{index}-{filename}` prefixes the safe source filename with its zero-padded selected-batch position, producing names such as `0001-photo.jpg`. Templates can combine literal text with these tokens:
 
 - `{filename}` — the source filename including its extension.
 - `{name}` and `{ext}` — the source filename stem and extension separately.
@@ -76,6 +76,8 @@ Expand **Filename template** above the media list to control names for ordinary 
 - `{hostname}` and `{page-title}` — the source page host and title.
 - `{width}` and `{height}` — known media dimensions, or `unknown` when unresolved.
 - `{date}` — the user's local batch date in `YYYY-MM-DD` form.
+
+Selected media retains the manager's discovery order, which follows page traversal or a site adapter's explicit feed/carousel order. The complete batch is named in that order before the bounded concurrent download queue starts, so differences in network speed or completion time cannot scramble a folder sorted by filename. Filters, ignored items, and manual deselection are omitted; the remaining selected subset is numbered contiguously from `0001` rather than retaining gaps from its original page positions.
 
 The extension validates templates before enabling a download, preserves the recognized image or video extension, sanitizes browser-unsafe path characters, limits the final filename length, and adds numeric suffixes when two rendered names collide. The example beside the control updates immediately; a missing or unknown token is shown as an error instead of silently producing malformed names.
 
@@ -266,7 +268,7 @@ The manifest declares `data_collection_permissions.required: ["none"]` because t
 - Click **Select all** and confirm the bottom selection count tracks individual checkbox changes and **Download selected** starts that batch. Clear the selection and confirm the action is disabled; enter an unsafe folder and confirm the bottom download actions remain disabled.
 - Expand **Filters**, turn on **Photos only** on a page containing normal photos, logos, avatars, SVG icons, and tiny pixels, and confirm obvious non-photo assets leave the eligible selection. Turn the filter off and select any exceptions manually.
 - In **Filters**, switch among **Images & videos**, **Images**, and **Videos**, test each supported image/video format, and confirm **Photos only** excludes video records until it is turned off. Confirm **Select matches only** affects only filtered rows, nonmatching rows cannot remain silently selected, **Reset** restores defaults, and the settings survive closing/reopening the manager.
-- Test `{filename}`, `{name}-{index}.{ext}`, `{hostname}-{page-title}-{date}-{width}x{height}.{ext}`, duplicate rendered names, a missing token, and unsafe punctuation with both image and video selections. Confirm the live example matches ordinary filenames and image-only ZIP names, recognized extensions survive, invalid templates block downloads, and collisions receive stable numeric suffixes.
+- With the untouched `{index}-{filename}` default, download several media items and confirm sorting the destination by filename preserves their manager/site discovery order as `0001-…`, `0002-…`, even when later items finish first. Deselect the first discovered item and confirm the selected subset restarts at `0001` without a gap. Then test `{filename}`, `{name}-{index}.{ext}`, `{hostname}-{page-title}-{date}-{width}x{height}.{ext}`, duplicate rendered names, a missing token, and unsafe punctuation with both image and video selections. Confirm the live example matches ordinary filenames and image-only ZIP names, recognized extensions survive, invalid templates block downloads, and collisions receive stable numeric suffixes.
 - Confirm repeated exact URLs merge into one row while distinct thumbnail/original or CDN URLs remain separate records. Trigger several automatic rescans and confirm an unchanged source is not appended again.
 - Open an infinite-scroll test gallery and leave the manager or sidebar open. Uncheck one known item, leave another checked, then scroll until new images and direct video sources appear. Confirm automatic updates require no button, preserve known checked/unchecked state, select only eligible new media, and leave ignored or filter-rejected additions unselected.
 - Open the Firefox Sidebar from the toolbar button and from Firefox's sidebar menu. Choose **Enable auto-follow**, accept the optional permission, switch active tabs, and navigate the active tab; confirm the old watcher stops, each completed normal page is scanned automatically, and live updates start for the new source. Remove the permission in Firefox and confirm the sidebar explains how to enable it again.

@@ -160,8 +160,9 @@ assert.match(popupHtml, /class="folder-options"/);
 assert.match(popupHtml, /id="history-button"[^>]*title="Download queue and statistics"/);
 assert.match(popupHtml, /id="queue-badge"[^>]*hidden/);
 assert.match(popupHtml, /id="filename-template-button"[^>]*aria-controls="filename-template-panel"/);
-assert.match(popupHtml, /id="filename-template-input"[^>]*value="\{filename\}"[^>]*maxlength="240"/);
+assert.match(popupHtml, /id="filename-template-input"[^>]*value="\{index\}-\{filename\}"[^>]*maxlength="240"/);
 assert.match(popupHtml, /id="filename-template-help"[^>]*>[^<]*\{hostname\}[^<]*\{page-title\}[^<]*\{date\}/);
+assert.match(popupHtml, /zero-padded \{index\} follows selected page order/);
 for (const removedControlId of [
   "deduplicate-button",
   "duplicate-panel",
