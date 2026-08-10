@@ -2374,6 +2374,69 @@
       }
     }
 
+    function processProfileGridDom() {
+      // Instagram can render a profile grid without exposing its feed data to
+      // page-context API requests. Restrict this fallback to direct media in
+      // canonical post/reel links, excluding avatars, highlight covers, and
+      // navigation images. It intentionally collects only visible grid items;
+      // the profile-feed API remains responsible for pagination and carousel
+      // expansion when the current session permits it.
+      if (route.kind !== "profile" || !settings.includeProfilePosts || found.size) {
+        return;
+      }
+      let anchors = [];
+      try {
+        anchors = Array.from(document.querySelectorAll("a[href]")).slice(0, MAX_RELATED_LINKS * 16);
+      } catch (_error) {
+        anchors = [];
+      }
+      const visitedPosts = new Set();
+      for (const anchor of anchors) {
+        if (itemLimitReached || payloadLimitReached) {
+          break;
+        }
+        let href = "";
+        try {
+          href = instagramHttpUrl(
+            anchor.getAttribute("href") || anchor.href,
+            route.pageUrl
+          );
+        } catch (_error) {
+          href = "";
+        }
+        const postRoute = parseRoute(href);
+        if (!href || !["post", "reel"].includes(postRoute.kind) || !postRoute.shortcode ||
+          visitedPosts.has(postRoute.shortcode)) {
+          continue;
+        }
+        visitedPosts.add(postRoute.shortcode);
+        const records = domMediaIn(anchor);
+        if (!records.length) {
+          continue;
+        }
+        const membership = safeCollectionMembership({
+          type: "post",
+          id: postRoute.shortcode,
+          title: "",
+          owner: route.username
+        });
+        for (const item of records) {
+          addRecord(item.url, {
+            previewUrl: item.previewUrl,
+            alt: item.alt,
+            width: item.width,
+            height: item.height,
+            mediaType: item.mediaType,
+            instagramCollections: membership ? [membership] : [],
+            kinds: [`Instagram visible profile ${postRoute.kind} ${item.mediaType}`]
+          });
+          if (itemLimitReached || payloadLimitReached) {
+            break;
+          }
+        }
+      }
+    }
+
     function profilePk() {
       return profilePks.values().next().value || "";
     }
@@ -2413,7 +2476,9 @@
       }
       const endpoint = new URL("/api/v1/users/web_profile_info/", route.pageUrl);
       endpoint.searchParams.set("username", route.username);
-      const fetched = await fetchInstagramJson(endpoint.href, "profile-info");
+      // This is the primary profile-data request, not a linked story or
+      // highlight document. Do not report its rejection as a related page.
+      const fetched = await fetchInstagramJson(endpoint.href, "profile-info", false);
       if (!fetched) {
         return "";
       }
@@ -2436,7 +2501,7 @@
         if (maxId) {
           endpoint.searchParams.set("max_id", maxId);
         }
-        const fetched = await fetchInstagramJson(endpoint.href, "profile-feed");
+        const fetched = await fetchInstagramJson(endpoint.href, "profile-feed", false);
         if (!fetched) {
           break;
         }
@@ -2459,7 +2524,7 @@
     async function fetchReelCollection(reelId, sourceRoute, purpose) {
       const endpoint = new URL("/api/v1/feed/reels_media/", route.pageUrl);
       endpoint.searchParams.set("reel_ids", safeText(reelId, 200));
-      const fetched = await fetchInstagramJson(endpoint.href, purpose);
+      const fetched = await fetchInstagramJson(endpoint.href, purpose, false);
       if (fetched) {
         processJson(fetched.value, sourceRoute, fetched.url, false);
       }
@@ -2471,7 +2536,7 @@
           `/api/v1/highlights/${encodeURIComponent(pk)}/highlights_tray/`,
           route.pageUrl
         );
-        const tray = await fetchInstagramJson(trayEndpoint.href, "highlight-tray");
+        const tray = await fetchInstagramJson(trayEndpoint.href, "highlight-tray", false);
         if (tray) {
           processJson(tray.value, route, tray.url, false);
         }
@@ -2520,6 +2585,7 @@
     if (route.kind === "profile") {
       const pk = await discoverProfilePk();
       await collectProfileFeed(pk);
+      processProfileGridDom();
       if (settings.includeStories || settings.includeHighlights) {
         await collectProfileStoriesAndHighlights(pk);
       }

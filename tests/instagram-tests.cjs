@@ -418,6 +418,42 @@ async function run() {
     assert.match(requests[0].url, /\/api\/v1\/feed\/user\/42\/?\?count=12$/);
   }
 
+  // Instagram can render the visible profile grid while rejecting the
+  // session's profile-data API request. The adapter must still keep direct
+  // media inside canonical post links, and must not call that primary API
+  // failure an unavailable related page.
+  {
+    const requests = [];
+    const result = await scan("https://www.instagram.com/alice/", {
+      elements: [fakeDomElement("a", {
+        attributes: { href: "/p/VISIBLE1/" },
+        children: [fakeDomElement("img", {
+          attributes: {
+            src: "https://scontent.cdninstagram.com/profile-grid.jpg",
+            alt: "Alice dancing"
+          },
+          width: 1080,
+          height: 1350
+        })]
+      })]
+    }, {}, async (url) => {
+      requests.push(url);
+      return jsonResponse(url, {}, { ok: false });
+    });
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://scontent.cdninstagram.com/profile-grid.jpg"
+    ]);
+    assert.deepEqual(result.images[0].instagramCollections, [{
+      type: "post",
+      id: "VISIBLE1",
+      title: "",
+      owner: "alice"
+    }]);
+    assert.equal(requests.length, 1);
+    assert.match(requests[0], /\/api\/v1\/users\/web_profile_info\//);
+    assert.ok(!result.warnings.some((warning) => /related Instagram page/i.test(warning)));
+  }
+
   // Profile feeds are paged with the signed-in session. Every carousel child
   // is kept in source order and media owned by another account is rejected.
   {
