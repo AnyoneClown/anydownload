@@ -384,6 +384,58 @@
       current.startsWith("instagram:");
   }
 
+  const VOLATILE_MEDIA_QUERY_PARAM = new RegExp([
+    "^(?:",
+    "x-amz-(?:algorithm|credential|date|expires|security-token|signature|signedheaders)|",
+    "x-goog-(?:algorithm|credential|date|expires|signature|signedheaders)|",
+    "expires?|expiry|exp|signature|sig|policy|key-pair-id|",
+    "auth(?:entication)?|access[_-]?token|session[_-]?token|token|",
+    "utm_[a-z0-9_]+|fbclid|gclid|dclid|_?cb|cache(?:buster)?|timestamp",
+    ")$"
+  ].join(""), "i");
+
+  function normalizedMediaIdentity(value) {
+    return String(value == null ? "" : value)
+      .trim()
+      .replace(/[\u0000-\u001f\u007f]/g, "")
+      .slice(0, 300);
+  }
+
+  function mediaIdentityKey(image) {
+    const explicit = normalizedMediaIdentity(image && image.identityKey);
+    if (explicit) {
+      return `identity:${explicit}`;
+    }
+    const value = String(image && image.url || "");
+    if (!value || /^data:/i.test(value)) {
+      return `url:${value}`;
+    }
+    try {
+      const parsed = new URL(value);
+      const stableParameters = [];
+      for (const [name, parameterValue] of parsed.searchParams) {
+        // Signed CDN URLs often rotate these credentials while continuing to
+        // address the same media path. Keep all transform/content parameters
+        // intact so distinct responsive or cropped assets stay separate.
+        if (VOLATILE_MEDIA_QUERY_PARAM.test(name)) {
+          continue;
+        }
+        stableParameters.push([name, parameterValue]);
+      }
+      stableParameters.sort(([leftName, leftValue], [rightName, rightValue]) =>
+        leftName.localeCompare(rightName) || leftValue.localeCompare(rightValue)
+      );
+      parsed.search = "";
+      for (const [name, parameterValue] of stableParameters) {
+        parsed.searchParams.append(name, parameterValue);
+      }
+      parsed.hash = "";
+      return `url:${parsed.href}`;
+    } catch (_error) {
+      return `url:${value}`;
+    }
+  }
+
   function mergeMediaRecord(existing, incoming) {
     if (!existing) {
       return incoming;
@@ -392,6 +444,8 @@
       return existing;
     }
     return Object.assign({}, existing, incoming, {
+      identityKey: normalizedMediaIdentity(incoming.identityKey) ||
+        normalizedMediaIdentity(existing.identityKey),
       previewUrl: incoming.previewUrl || existing.previewUrl || "",
       alt: incoming.alt || existing.alt || "",
       width: Math.max(Number(existing.width) || 0, Number(incoming.width) || 0),
@@ -423,16 +477,17 @@
 
   function accumulateLiveImages(previousImages, scannedImages, options) {
     const settings = Object.assign({ maxImages: 1500, maxPayloadLength: 2000000 }, options || {});
-    const byUrl = new Map();
+    const byIdentity = new Map();
     for (const image of [...(previousImages || []), ...(scannedImages || [])]) {
       if (image && typeof image.url === "string" && image.url) {
-        byUrl.set(image.url, mergeMediaRecord(byUrl.get(image.url), image));
+        const key = mediaIdentityKey(image);
+        byIdentity.set(key, mergeMediaRecord(byIdentity.get(key), image));
       }
     }
 
     const images = [];
     let payloadLength = 0;
-    for (const image of byUrl.values()) {
+    for (const image of byIdentity.values()) {
       const imageLength = image.url.length + String(image.previewUrl || "").length;
       if (
         images.length >= settings.maxImages ||
@@ -443,11 +498,16 @@
       images.push(image);
       payloadLength += imageLength;
     }
-    return { images, trimmed: images.length < byUrl.size };
+    return { images, trimmed: images.length < byIdentity.size };
   }
 
   function reconcileScanSelection(nextImages, previousImages, previousSelected, preserve, isEligible) {
-    const previousUrls = new Set((previousImages || []).map((image) => image && image.url));
+    const previousByIdentity = new Map();
+    for (const image of previousImages || []) {
+      if (image && typeof image.url === "string" && image.url) {
+        previousByIdentity.set(mediaIdentityKey(image), image);
+      }
+    }
     const selectedBefore = previousSelected instanceof Set
       ? previousSelected
       : new Set(previousSelected || []);
@@ -457,7 +517,8 @@
       if (!image || typeof image.url !== "string" || !eligible(image)) {
         continue;
       }
-      if (!preserve || !previousUrls.has(image.url) || selectedBefore.has(image.url)) {
+      const previous = previousByIdentity.get(mediaIdentityKey(image));
+      if (!preserve || !previous || selectedBefore.has(previous.url)) {
         selected.add(image.url);
       }
     }
@@ -528,6 +589,7 @@
       hostPermissionPatternsForImages,
       launchOptionsFromUrl,
       canRetainSameInstagramRoute,
+      mediaIdentityKey,
       matchesInstagramCollectionFilter,
       mergeInstagramCollections,
       reconcileScanSelection,
@@ -1412,7 +1474,7 @@
 
   function mergeScanResults(injectionResults) {
     const validateMediaUrl = Core.validateMediaUrl || Core.validateDownloadUrl;
-    const byUrl = new Map();
+    const byIdentity = new Map();
     const warnings = new Set();
     let primaryPage = null;
     let totalUrlLength = 0;
@@ -1453,10 +1515,12 @@
         const normalizedPreviewUrl = previewResult.ok && previewResult.value !== normalizedUrl
           ? previewResult.value
           : "";
-        const current = byUrl.get(normalizedUrl);
+        const identityKey = normalizedMediaIdentity(image && image.identityKey);
+        const recordKey = mediaIdentityKey({ url: normalizedUrl, identityKey });
+        const current = byIdentity.get(recordKey);
         if (!current) {
           if (
-            byUrl.size >= MAX_DISCOVERED_IMAGES ||
+            byIdentity.size >= MAX_DISCOVERED_IMAGES ||
             totalUrlLength + normalizedUrl.length > Core.MAX_BATCH_TOTAL_URL_LENGTH
           ) {
             aggregateLimitReached = true;
@@ -1468,8 +1532,9 @@
             ? normalizedPreviewUrl
             : "";
           totalUrlLength += previewUrl.length;
-          byUrl.set(normalizedUrl, {
+          byIdentity.set(recordKey, {
             url: normalizedUrl,
+            identityKey,
             previewUrl,
             filename: String(image.filename || "").slice(0, 500),
             alt: String(image.alt || "").slice(0, 500),
@@ -1500,6 +1565,18 @@
             current.kinds.push(safeKind);
           }
         }
+        const currentArea = (Number(current.width) || 0) * (Number(current.height) || 0);
+        const nextArea = (Number(image.width) || 0) * (Number(image.height) || 0);
+        if (nextArea >= currentArea) {
+          const nextPreviewUrl = normalizedPreviewUrl || current.previewUrl || "";
+          const oldUrlLength = current.url.length + String(current.previewUrl || "").length;
+          const nextUrlLength = normalizedUrl.length + nextPreviewUrl.length;
+          if (totalUrlLength - oldUrlLength + nextUrlLength <= Core.MAX_BATCH_TOTAL_URL_LENGTH) {
+            totalUrlLength += nextUrlLength - oldUrlLength;
+            current.url = normalizedUrl;
+            current.previewUrl = nextPreviewUrl;
+          }
+        }
         current.instagramCollections = mergeInstagramCollections(
           current.instagramCollections,
           image.instagramCollections
@@ -1522,6 +1599,7 @@
         }
         current.itag = current.itag || Math.max(0, Math.round(Number(image.itag) || 0));
         current.alt = current.alt || String(image.alt || "").slice(0, 500);
+        current.identityKey = current.identityKey || identityKey;
         if (!current.previewUrl && normalizedPreviewUrl &&
           totalUrlLength + normalizedPreviewUrl.length <= Core.MAX_BATCH_TOTAL_URL_LENGTH) {
           current.previewUrl = normalizedPreviewUrl;
@@ -1539,7 +1617,7 @@
 
     return {
       page: primaryPage,
-      images: Array.from(byUrl.values()),
+      images: Array.from(byIdentity.values()),
       warnings: Array.from(warnings)
     };
   }
@@ -2239,7 +2317,12 @@
     const scanSourceGeneration = sourcePageGeneration;
 
     const previousImages = state.images;
-    const previousByUrl = new Map(previousImages.map((image) => [image.url, image]));
+    const previousByIdentity = new Map();
+    for (const image of previousImages) {
+      if (image && typeof image.url === "string" && image.url) {
+        previousByIdentity.set(mediaIdentityKey(image), image);
+      }
+    }
     const previousSelected = new Set(state.selected);
     const previousPageScopeKey = state.pageScopeKey;
     const previousIgnoredKeys = new Set(state.ignoredKeys);
@@ -2547,7 +2630,7 @@
 
       if (preserveThisPage) {
         for (const image of merged.images) {
-          const previous = previousByUrl.get(image.url);
+          const previous = previousByIdentity.get(mediaIdentityKey(image));
           if (!previous) {
             continue;
           }
@@ -2622,7 +2705,7 @@
       }
 
       const addedCount = preserveThisPage
-        ? merged.images.filter((image) => !previousByUrl.has(image.url)).length
+        ? merged.images.filter((image) => !previousByIdentity.has(mediaIdentityKey(image))).length
         : 0;
       if (settings.live && addedCount) {
         setNotice(

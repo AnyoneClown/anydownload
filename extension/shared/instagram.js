@@ -113,6 +113,7 @@
     const MAX_COLLECTION_MEMBERSHIPS = 16;
     const warnings = new Set();
     const found = new Map();
+    const foundRecordKeysByUrl = new Map();
     const owners = new Set();
     const profilePks = new Set();
     const highlightDescriptors = new Map();
@@ -766,12 +767,54 @@
       return safeCollectionMembership({ type, id: collectionId, title, owner });
     }
 
+    function mediaIdentityForCollection(object, membership, position) {
+      const collection = safeCollectionMembership(membership);
+      if (!collection || !collection.id) {
+        return "";
+      }
+      const owner = ownerFromObject(object) || collection.owner;
+      if (!owner) {
+        return "";
+      }
+      // Carousel order is stable for a post and lets a visible grid cover
+      // merge with the first structured carousel item when the session later
+      // exposes the feed API. Stories/highlights use their media IDs when the
+      // response exposes one because their order can change over time.
+      const index = Math.max(1, Number(position) || 1);
+      const item = collection.type === "post"
+        ? String(index)
+        : mediaItemIdentifier(object) || String(index);
+      return `instagram:${collection.type}:${owner}:${collection.id}:${item}`;
+    }
+
     function addRecord(url, details) {
       if (!url) {
         return;
       }
-      const existing = found.get(url);
+      details = details && typeof details === "object" ? details : {};
+      const identityKey = safeText(details.identityKey, 300).trim();
+      const recordKey = identityKey ? `identity:${identityKey}` : `url:${url}`;
+      const existingRecordKey = found.has(recordKey)
+        ? recordKey
+        : foundRecordKeysByUrl.get(url);
+      const existing = existingRecordKey ? found.get(existingRecordKey) : null;
       if (existing) {
+        const currentArea = (Number(existing.width) || 0) * (Number(existing.height) || 0);
+        const nextArea = (Number(details.width) || 0) * (Number(details.height) || 0);
+        if (nextArea >= currentArea && existing.url !== url) {
+          const nextPreviewUrl = details.previewUrl && details.previewUrl !== url
+            ? details.previewUrl
+            : "";
+          const oldPayloadLength = existing.url.length + String(existing.previewUrl || "").length;
+          const nextPayloadLength = url.length + nextPreviewUrl.length;
+          if (totalPayloadLength - oldPayloadLength + nextPayloadLength <= settings.maxPayloadLength) {
+            foundRecordKeysByUrl.delete(existing.url);
+            totalPayloadLength += nextPayloadLength - oldPayloadLength;
+            existing.url = url;
+            existing.previewUrl = nextPreviewUrl;
+            foundRecordKeysByUrl.set(url, existingRecordKey);
+          }
+        }
         if (details.mediaType === "video") {
           existing.mediaType = "video";
           existing.mimeType = "video/mp4";
@@ -815,6 +858,7 @@
       }
       const record = {
         url,
+        identityKey,
         previewUrl,
         sourceProvider: "instagram",
         alt: safeText(details.alt, 500),
@@ -834,11 +878,13 @@
           record.duration = duration;
         }
       }
-      found.set(url, record);
+      found.set(recordKey, record);
+      foundRecordKeysByUrl.set(url, recordKey);
     }
 
     function clearIncompleteExactRecords() {
       found.clear();
+      foundRecordKeysByUrl.clear();
       totalPayloadLength = 0;
       itemLimitReached = false;
       payloadLimitReached = false;
@@ -865,6 +911,7 @@
         owners.add(owner);
       }
       const mediaType = isVideoObject(object, videoOptions) ? "video" : "image";
+      const identityKey = mediaIdentityForCollection(object, membership, position);
       const numberedKind = total > 1 ? `${collectionKind} ${position}/${total}` : collectionKind;
       const title = collectionKind === "highlight" ? safeText(collectionTitle, 20).trim() : "";
       const recordKind = `Instagram ${numberedKind}${title ? ` (${title})` : ""}`;
@@ -885,7 +932,8 @@
           duration: safeProperty(object, "video_duration") || safeProperty(object, "duration"),
           kinds: [`${recordKind} video`],
           instagramCollections: membership ? [membership] : [],
-          mediaType: "video"
+          mediaType: "video",
+          identityKey
         });
         return;
       }
@@ -901,7 +949,8 @@
         height: image.height || objectDimensions.height,
         kinds: [`${recordKind} image`],
         instagramCollections: membership ? [membership] : [],
-        mediaType: "image"
+        mediaType: "image",
+        identityKey
       });
     }
 
@@ -1044,6 +1093,14 @@
         safeProperty(object, "pk") || safeProperty(object, "id") ||
           safeProperty(object, "media_id") || safeProperty(object, "reel_id")
       );
+    }
+
+    function mediaItemIdentifier(object) {
+      return safeText(
+        safeProperty(object, "pk") || safeProperty(object, "id") ||
+          safeProperty(object, "media_id") || safeProperty(object, "reel_id"),
+        200
+      ).trim().replace(/^highlight:/i, "");
     }
 
     function objectUrlMatches(object, expectedRoute, baseUrl) {
@@ -1452,6 +1509,7 @@
       const height = positiveNumber(meta.get("og:video:height") || meta.get("og:image:height"));
       const alt = meta.get("og:description") || meta.get("twitter:description") || "";
       const membership = collectionMembershipFor({}, sourceRoute, collectionKind, "");
+      const identityKey = mediaIdentityForCollection({}, membership, 1);
       if (video) {
         addRecord(video, {
           previewUrl: image,
@@ -1459,6 +1517,7 @@
           width,
           height,
           mediaType: "video",
+          identityKey,
           instagramCollections: membership ? [membership] : [],
           kinds: [`Instagram ${collectionKind} video`]
         });
@@ -1471,6 +1530,7 @@
           width,
           height,
           mediaType: "image",
+          identityKey,
           instagramCollections: membership ? [membership] : [],
           kinds: [`Instagram ${collectionKind} image`]
         });
@@ -2368,6 +2428,7 @@
           width: item.width,
           height: item.height,
           mediaType: item.mediaType,
+          identityKey: mediaIdentityForCollection({}, membership, index + 1),
           instagramCollections: membership ? [membership] : [],
           kinds: [`Instagram ${label} ${item.mediaType}`]
         });
@@ -2427,6 +2488,7 @@
             width: item.width,
             height: item.height,
             mediaType: item.mediaType,
+            identityKey: mediaIdentityForCollection({}, membership, 1),
             instagramCollections: membership ? [membership] : [],
             kinds: [`Instagram visible profile ${postRoute.kind} ${item.mediaType}`]
           });

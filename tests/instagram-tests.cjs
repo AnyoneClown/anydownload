@@ -454,6 +454,43 @@ async function run() {
     assert.ok(!result.warnings.some((warning) => /related Instagram page/i.test(warning)));
   }
 
+  // A profile item keeps a stable post/slot identity when Instagram rotates
+  // the signed CDN URL that backs the same media.
+  {
+    const firstVariant = {
+      code: "ROTATE1",
+      user: { username: "alice" },
+      ...imageNode(
+        "rotate-1",
+        "https://scontent.cdninstagram.com/rotate.jpg?expires=100&signature=old"
+      )
+    };
+    const refreshedVariant = {
+      code: "ROTATE1",
+      user: { username: "alice" },
+      ...imageNode(
+        "rotate-1",
+        "https://scontent.cdninstagram.com/rotate.jpg?expires=200&signature=new"
+      )
+    };
+    const result = await scan("https://www.instagram.com/alice/", {
+      scripts: [script({ data: { user: {
+        pk: "42",
+        username: "alice",
+        edge_owner_to_timeline_media: {
+          edges: [{ node: firstVariant }, { node: refreshedVariant }]
+        }
+      } } })]
+    }, {}, async (url) => jsonResponse(url, {
+      items: [],
+      more_available: false
+    }));
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://scontent.cdninstagram.com/rotate.jpg?expires=200&signature=new"
+    ]);
+    assert.equal(result.images[0].identityKey, "instagram:post:alice:ROTATE1:1");
+  }
+
   // Profile feeds are paged with the signed-in session. Every carousel child
   // is kept in source order and media owned by another account is rejected.
   {

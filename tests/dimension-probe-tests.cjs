@@ -10,6 +10,7 @@ const {
   hostPermissionPatternsForImages,
   launchOptionsFromUrl,
   canRetainSameInstagramRoute,
+  mediaIdentityKey,
   matchesInstagramCollectionFilter,
   mergeInstagramCollections,
   reconcileScanSelection,
@@ -235,6 +236,61 @@ assert.deepEqual(hostPermissionPatternsForImages([]), []);
   });
   assert.equal(bounded.trimmed, true);
   assert.deepEqual(bounded.images.map((image) => image.url), [first.url]);
+}
+
+// Live updates identify a record separately from its temporary download URL.
+// CDN credentials may rotate during a scroll, but a different responsive
+// transform must remain independently downloadable.
+{
+  const initial = {
+    url: "https://cdn.test/media/photo.jpg?width=1200&expires=100&signature=old",
+    width: 1200,
+    height: 800
+  };
+  const refreshed = {
+    url: "https://cdn.test/media/photo.jpg?signature=new&width=1200&expires=200",
+    width: 1200,
+    height: 800
+  };
+  const differentTransform = {
+    url: "https://cdn.test/media/photo.jpg?width=640&signature=next&expires=300",
+    width: 640,
+    height: 427
+  };
+  assert.equal(mediaIdentityKey(initial), mediaIdentityKey(refreshed));
+  assert.notEqual(mediaIdentityKey(initial), mediaIdentityKey(differentTransform));
+  const accumulated = accumulateLiveImages([initial], [refreshed], {
+    maxImages: 10,
+    maxPayloadLength: 10000
+  });
+  assert.deepEqual(accumulated.images.map((image) => image.url), [refreshed.url]);
+  assert.deepEqual(
+    [...reconcileScanSelection(
+      accumulated.images,
+      [initial],
+      new Set([initial.url]),
+      true
+    )],
+    [refreshed.url],
+    "A selected record must stay selected when its signed URL rotates"
+  );
+
+  const instagramPrevious = {
+    url: "https://cdninstagram.test/cover.jpg?stp=old&token=old",
+    identityKey: "instagram:post:alice:POST123:1"
+  };
+  const instagramRefreshed = {
+    url: "https://cdninstagram.test/cover.jpg?stp=new&token=new",
+    identityKey: "instagram:post:alice:POST123:1"
+  };
+  const instagramAccumulated = accumulateLiveImages(
+    [instagramPrevious],
+    [instagramRefreshed],
+    { maxImages: 10, maxPayloadLength: 10000 }
+  );
+  assert.deepEqual(instagramAccumulated.images.map((image) => image.url), [
+    instagramRefreshed.url
+  ]);
 }
 
 function createHarness(options = {}) {
