@@ -60,7 +60,7 @@ const historyJs = fs.readFileSync(path.join(root, "history/history.js"), "utf8")
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.name, "AnyDownload — Page Media Downloader");
-assert.equal(manifest.version, "1.9.0");
+assert.equal(manifest.version, "1.10.0");
 assert.equal(manifest.action.default_title, "Download page media");
 assert.equal(Core.MAX_BATCH_TOTAL_URL_LENGTH, 2000000);
 assert.deepEqual(manifest.permissions.sort(), ["activeTab", "downloads", "menus", "scripting", "storage"]);

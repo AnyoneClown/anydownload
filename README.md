@@ -18,7 +18,7 @@ The manifest targets Firefox desktop 140+ and Firefox for Android 142+. Firefox 
 
 The temporary extension is removed when Firefox restarts. Use the **Reload** button on `about:debugging` after changing source files. Mozilla documents this workflow in [Temporary installation in Firefox](https://extensionworkshop.com/documentation/develop/temporary-installation-in-firefox/).
 
-If you are upgrading an existing temporary installation, reload the add-on from `about:debugging` before clicking its toolbar button again. Version 1.9.0 adds Instagram post, carousel, story, and highlight collection plus basic progressive YouTube downloads on top of the direct image/video support introduced in 1.8.0; see [Version history](#version-history) for earlier milestones.
+If you are upgrading an existing temporary installation, reload the add-on from `about:debugging` before clicking its toolbar button again. Version 1.10.0 introduces a cohesive light/dark interface and illustrated extension icon, makes live updates automatic, simplifies filters and download actions, and adds bounded FapFolder group-video collection on top of the Instagram and basic progressive YouTube support introduced in 1.9.0; see [Version history](#version-history) for earlier milestones.
 
 ## Instagram profiles, posts, stories, and highlights
 
@@ -197,7 +197,7 @@ The `activeTab` permission is granted only after the user invokes the toolbar ac
 
 ## Version history
 
-- **Unreleased** — Makes live updates automatic, moves **Photos only** into the simplified Filters panel, removes configurable dimension/orientation filters and retired image-copy analysis controls, adds bounded signed-in Instagram profile-feed pagination with full carousel expansion, restricts exact-post routes to that post, adds profile collection filters for posts, the current story, all highlights, or one named highlight, and prevents refreshed signed URLs from adding duplicate live-media rows.
+- **1.10.0** — Introduces the redesigned AnyDownload interface and illustrated Firefox icon, unifies all extension surfaces under one restrained light/dark theme, makes live updates automatic, simplifies filters and download actions, removes heuristic duplicate tooling, adds bounded FapFolder group-video collection, and improves signed-in Instagram profile pagination and collection filters.
 - **1.9.0** — Adds ordered Instagram carousel expansion, active-story and highlight extraction, and an explicit profile-owner **Stories & highlights** collector that reuses the current Instagram session without persisting credentials. It also adds basic public YouTube progressive-video resolution, usually 240p/360p with audio, with anonymous player requests and just-in-time queue refreshes that never persist signed Googlevideo URLs.
 - **1.8.0** — Adds direct MP4, WebM, Ogg/OGV, MOV, M4V, and MKV discovery; video poster/placeholder rows and previews; media filters; image/video context actions; live gallery updates; and ordinary single, bulk, or mixed image/video downloads. ZIP creation remains image-only. Direct exposed HTTP(S) URLs are handed to Firefox unchanged without a DRM detection blocklist; AnyDownload does not decrypt protected media or assemble `blob:`, HLS, or DASH streams.
 - **1.7.0** — Adds safe filename templates with page/image metadata tokens and a durable ordinary-download queue with pause/resume/cancel/retry controls, recent batch history, and today/lifetime statistics.

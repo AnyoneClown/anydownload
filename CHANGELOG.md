@@ -4,14 +4,20 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-08-13
+
 ### Added
 
+- A new illustrated AnyDownload icon with dedicated transparent PNG assets for Firefox's 16, 32, 48, and 96 pixel extension surfaces.
+- A shared light/dark visual theme for the manager, Downloads dashboard, Archive Progress, media preview, and Sidebar fallback.
 - Bounded FapFolder group-video collection that follows only loaded post links in source order, reuses the current tab session, and extracts direct video files from each post's lazy player markup.
 - Bounded, session-authenticated Instagram profile-feed pagination that follows first-party cursors, preserves feed order, and expands every photo or direct video in every returned carousel.
 - Instagram profile collection filters for posts only, the current story, all highlights, or one discovered named highlight.
 
 ### Changed
 
+- The extension interface now uses a restrained desktop-utility design with warm neutral surfaces, forest-green structure, vermilion actions, clearer toolbar icons, card-based media rows, and responsive multi-column manager layouts.
+- Downloads, Archive Progress, previews, and manager states now share consistent controls, borders, status colors, focus treatments, spacing, and reduced-motion behavior.
 - The default filename template is now `{index}-{filename}`. Zero-padded names are assigned in selected discovery order before concurrent downloads start, so folders sorted by filename retain the page or site-adapter order regardless of completion timing.
 - Automatic live updates now start after every successful manager scan. Sidebar handoffs stop the previous watcher, scan the newly active or navigated page, and start a watcher for that new source without a separate capture action.
 - The profile-only **Stories & highlights** action uses the current signed-in or private-window Instagram session, preserves already collected profile posts, and warns that requesting story data may register as a view.
