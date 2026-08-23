@@ -12,7 +12,9 @@
   const collectYouTubeMediaFromPage = globalThis.AnyDownloadYouTubeCollector ||
     (YouTube && YouTube.collectYouTubeMediaFromPage);
   const Archive = globalThis.ImageDownloaderArchive;
+  const Filters = globalThis.ImageDownloaderFilters;
   const Templates = globalThis.ImageDownloaderTemplates;
+  const Tracker = globalThis.AnyDownloadTracker;
   const DownloadQueue = globalThis.ImageDownloaderDownloadQueue;
   const MAX_CONCURRENCY = 5;
   const QUEUE_CONCURRENCY = 3;
@@ -45,6 +47,8 @@
   const managerWindowQueues = new Map();
   const downloadQueueContexts = new Map();
   const youtubeResolutionCache = new Map();
+  const trackerRuns = new Map();
+  let trackerMutationQueue = Promise.resolve();
   let archiveInProgress = false;
 
   function acknowledgeMenuCreation() {
@@ -1852,6 +1856,10 @@
         ok: result.accepted > 0,
         total: batch.total,
         queued: result.accepted,
+        acceptedIndexes: Array.isArray(result.acceptedIndexes)
+          ? result.acceptedIndexes.map((index) => batch.items[index] && batch.items[index].originalIndex)
+            .filter((index) => Number.isInteger(index))
+          : [],
         failed: batch.total - result.accepted,
         folder: batch.folder,
         jobId: result.jobId,
@@ -1860,6 +1868,740 @@
         error: result.accepted ? "" : errors[0] && errors[0].error || "The download queue is full."
       };
     });
+  }
+
+  function trackerPublicSnapshot(tracker) {
+    if (!tracker) {
+      return null;
+    }
+    const { seen: _seen, ...snapshot } = tracker;
+    return { ...snapshot, seenCount: Array.isArray(tracker.seen) ? tracker.seen.length : 0 };
+  }
+
+  async function loadTrackers() {
+    if (!Tracker) {
+      return [];
+    }
+    const stored = await browser.storage.local.get(Tracker.STORAGE_KEY);
+    return Tracker.normalizeTrackers(stored && stored[Tracker.STORAGE_KEY], Date.now());
+  }
+
+  async function saveTrackers(trackers) {
+    await browser.storage.local.set({
+      [Tracker.STORAGE_KEY]: Tracker.normalizeTrackers(trackers, Date.now())
+    });
+  }
+
+  function queueTrackerMutation(callback) {
+    const operation = trackerMutationQueue.catch(() => undefined).then(callback);
+    trackerMutationQueue = operation;
+    operation.catch(() => undefined);
+    return operation;
+  }
+
+  function updateStoredTracker(id, updater) {
+    return queueTrackerMutation(async () => {
+      const trackers = await loadTrackers();
+      const index = trackers.findIndex((tracker) => tracker.id === id);
+      if (index < 0) {
+        return null;
+      }
+      const updated = Tracker.normalizeTracker(updater(trackers[index]), Date.now());
+      if (!updated) {
+        throw new Error("The tracker update is invalid.");
+      }
+      trackers[index] = updated;
+      await saveTrackers(trackers);
+      return updated;
+    });
+  }
+
+  function trackerAlarmName(id) {
+    return `${Tracker.ALARM_PREFIX}${id}`;
+  }
+
+  async function syncTrackerAlarm(tracker) {
+    if (!Tracker || !browser.alarms) {
+      return;
+    }
+    const name = trackerAlarmName(tracker.id);
+    if (!tracker.enabled) {
+      await browser.alarms.clear(name);
+      return;
+    }
+    const nextRunAt = Math.max(
+      Date.now() + 1000,
+      Number(tracker.nextRunAt) || Date.now() + tracker.intervalMinutes * 60000
+    );
+    browser.alarms.create(name, {
+      when: nextRunAt,
+      periodInMinutes: tracker.intervalMinutes
+    });
+  }
+
+  async function reconcileTrackerAlarms() {
+    if (!Tracker || !browser.alarms || typeof browser.alarms.getAll !== "function") {
+      return;
+    }
+    const trackers = await loadTrackers();
+    const known = new Map(trackers.map((tracker) => [trackerAlarmName(tracker.id), tracker]));
+    const alarms = await browser.alarms.getAll();
+    const existing = new Map((alarms || []).map((alarm) => [alarm.name, alarm]));
+    for (const alarm of alarms || []) {
+      if (alarm.name.startsWith(Tracker.ALARM_PREFIX) && !known.has(alarm.name)) {
+        await browser.alarms.clear(alarm.name);
+      }
+    }
+    for (const tracker of trackers) {
+      const alarm = existing.get(trackerAlarmName(tracker.id));
+      if (!tracker.enabled) {
+        if (alarm) {
+          await browser.alarms.clear(alarm.name);
+        }
+        continue;
+      }
+      if (!alarm || Number(alarm.periodInMinutes) !== tracker.intervalMinutes) {
+        await syncTrackerAlarm(tracker);
+      }
+    }
+  }
+
+  function trackerRunError(message, code, status, retryAfterMinutes) {
+    const error = new Error(message);
+    error.trackerCode = code || "request";
+    error.httpStatus = Number(status) || 0;
+    error.retryAfterMinutes = Number(retryAfterMinutes) || 0;
+    return error;
+  }
+
+  function retryAfterMinutes(response) {
+    const raw = String(response && response.headers && response.headers.get("retry-after") || "").trim();
+    if (!raw) {
+      return 0;
+    }
+    if (/^\d+$/.test(raw)) {
+      return Math.min(24 * 60, Math.max(1, Math.ceil(Number(raw) / 60)));
+    }
+    const time = Date.parse(raw);
+    return Number.isFinite(time)
+      ? Math.min(24 * 60, Math.max(1, Math.ceil((time - Date.now()) / 60000)))
+      : 0;
+  }
+
+  async function fetchTrackerDocumentWithSignal(tracker, pageUrl, signal) {
+    const response = await fetch(pageUrl, {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      redirect: "error",
+      signal,
+      headers: { Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1" }
+    });
+    if (!response.ok) {
+      if (response.status === 429) {
+        throw trackerRunError(
+          "The website rate-limited the tracker (HTTP 429).",
+          "rate_limited",
+          response.status,
+          retryAfterMinutes(response)
+        );
+      }
+      const code = [401, 403].includes(response.status)
+        ? "authorization"
+        : response.status >= 500
+          ? "server"
+          : "request";
+      throw trackerRunError(`The tracked page returned HTTP ${response.status}.`, code, response.status);
+    }
+    const responseUrl = Tracker.normalizePageUrl(response.url || pageUrl);
+    if (!responseUrl || new URL(responseUrl).origin !== new URL(tracker.url).origin) {
+      throw trackerRunError("The tracked page redirected to a different website.", "redirect");
+    }
+    const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+    if (contentType && !/(?:text\/html|application\/xhtml\+xml)/.test(contentType)) {
+      throw trackerRunError(
+        `The tracked URL returned ${contentType.split(";", 1)[0]} instead of HTML.`,
+        "content"
+      );
+    }
+    const declaredLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > Tracker.MAX_HTML_BYTES) {
+      throw trackerRunError("The tracked page is larger than the 4 MB safety limit.", "content");
+    }
+    let bytes;
+    if (response.body && typeof response.body.getReader === "function") {
+      const reader = response.body.getReader();
+      const chunks = [];
+      let total = 0;
+      while (true) {
+        const result = await reader.read();
+        if (result.done) {
+          break;
+        }
+        const chunk = result.value instanceof Uint8Array
+          ? result.value
+          : new Uint8Array(result.value || 0);
+        total += chunk.byteLength;
+        if (total > Tracker.MAX_HTML_BYTES) {
+          await reader.cancel().catch(() => undefined);
+          throw trackerRunError("The tracked page is larger than the 4 MB safety limit.", "content");
+        }
+        chunks.push(chunk);
+      }
+      bytes = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+    } else {
+      bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.byteLength > Tracker.MAX_HTML_BYTES) {
+        throw trackerRunError("The tracked page is larger than the 4 MB safety limit.", "content");
+      }
+    }
+    if (typeof DOMParser !== "function") {
+      throw trackerRunError("Firefox could not initialize the tracker HTML parser.", "parser");
+    }
+    const html = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    const documentObject = new DOMParser().parseFromString(html, "text/html");
+    if (!documentObject || !documentObject.documentElement) {
+      throw trackerRunError("Firefox could not parse the tracked page.", "parser");
+    }
+    return { documentObject, responseUrl };
+  }
+
+  async function fetchTrackerDocument(tracker, pageUrl) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Tracker.REQUEST_TIMEOUT_MS);
+    try {
+      return await fetchTrackerDocumentWithSignal(tracker, pageUrl, controller.signal);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async function trackerPermissionGranted(tracker) {
+    if (!browser.permissions || typeof browser.permissions.contains !== "function") {
+      return true;
+    }
+    return browser.permissions.contains({
+      origins: [Tracker.permissionPatternForUrl(tracker.url)]
+    });
+  }
+
+  async function collectTrackerPages(tracker) {
+    const pagination = tracker.pagination || { mode: "none", maxPages: 1 };
+    const media = [];
+    const mediaUrls = new Set();
+    const visited = new Set();
+    let currentUrl = tracker.url;
+    let pageTitle = tracker.pageTitle;
+    let payloadLength = 0;
+    let pagesChecked = 0;
+
+    while (currentUrl && pagesChecked < pagination.maxPages && !visited.has(currentUrl)) {
+      visited.add(currentUrl);
+      const { documentObject, responseUrl } = await fetchTrackerDocument(tracker, currentUrl);
+      pagesChecked += 1;
+      if (pagesChecked === 1) {
+        pageTitle = String(documentObject.title || tracker.pageTitle || tracker.url)
+          .trim().slice(0, 300) || tracker.pageTitle;
+      }
+      const remainingItems = Tracker.MAX_ITEMS_PER_SCAN - media.length;
+      const remainingPayload = Core.MAX_BATCH_TOTAL_URL_LENGTH - payloadLength;
+      const discovered = Tracker.extractMediaFromDocument(documentObject, responseUrl, {
+        maxItems: Math.max(1, remainingItems),
+        maxPayloadLength: Math.max(1024, remainingPayload)
+      });
+      let added = 0;
+      for (const item of discovered) {
+        if (media.length >= Tracker.MAX_ITEMS_PER_SCAN || mediaUrls.has(item.url)) {
+          continue;
+        }
+        const length = String(item.url || "").length;
+        if (payloadLength + length > Core.MAX_BATCH_TOTAL_URL_LENGTH) {
+          break;
+        }
+        mediaUrls.add(item.url);
+        media.push(item);
+        payloadLength += length;
+        added += 1;
+      }
+      if (media.length >= Tracker.MAX_ITEMS_PER_SCAN || pagination.mode === "none") {
+        break;
+      }
+      if (pagination.mode === "next-link") {
+        currentUrl = Tracker.extractNextPageUrl(
+          documentObject,
+          responseUrl,
+          pagination.nextSelector
+        );
+      } else if (pagination.mode === "url-template") {
+        if (pagesChecked > 1 && added === 0) {
+          break;
+        }
+        currentUrl = Tracker.pageUrlFromTemplate(
+          pagination.urlTemplate,
+          pagesChecked + 1,
+          tracker.url
+        );
+      } else {
+        currentUrl = "";
+      }
+    }
+    return { media, pageTitle, pagesChecked };
+  }
+
+  function trackerBackoffMinutes(tracker, error, consecutiveErrors) {
+    const interval = Math.max(Tracker.MIN_INTERVAL_MINUTES, Number(tracker.intervalMinutes) || 60);
+    const exponential = Math.min(24 * 60, 15 * (2 ** Math.min(6, Math.max(0, consecutiveErrors - 1))));
+    return Math.min(
+      24 * 60,
+      Math.max(interval, exponential, Number(error && error.retryAfterMinutes) || 0)
+    );
+  }
+
+  function finishTrackerRun(id, startedAt, reason, changes, activity) {
+    const finishedAt = Date.now();
+    return updateStoredTracker(id, (current) => ({
+      ...current,
+      ...changes,
+      updatedAt: finishedAt,
+      lastDurationMs: Math.max(0, finishedAt - startedAt),
+      activity: Tracker.appendActivity(current.activity, {
+        startedAt,
+        finishedAt,
+        durationMs: Math.max(0, finishedAt - startedAt),
+        reason,
+        ...activity
+      })
+    }));
+  }
+
+  async function notifyTracker(tracker, kind, message) {
+    if (!tracker || !browser.notifications || typeof browser.notifications.create !== "function") {
+      return;
+    }
+    const enabled = kind === "matches"
+      ? tracker.notifications && tracker.notifications.newMatches
+      : tracker.notifications && tracker.notifications.errors;
+    if (!enabled) {
+      return;
+    }
+    await browser.notifications.create(`anydownload-tracker:${tracker.id}:${kind}`, {
+      type: "basic",
+      iconUrl: browser.runtime.getURL("icons/image-downloader-illustrated-v2-96.png"),
+      title: kind === "matches" ? "AnyDownload found new media" : "AnyDownload tracker needs attention",
+      message: String(message || "").slice(0, 500)
+    });
+  }
+
+  function trackerDownloadItems(tracker, media) {
+    const date = new Date();
+    const usedNames = new Set();
+    return media.map((item, index) => {
+      const mediaType = item.mediaType === "video" ? "video" : "image";
+      const fallback = (Core.filenameForMedia || Core.filenameForImage)(
+        item.url,
+        index,
+        mediaType
+      );
+      const filename = Templates.render(tracker.filenameTemplate, {
+        filename: item.filename || fallback,
+        url: item.url,
+        pageUrl: tracker.url,
+        pageTitle: tracker.pageTitle,
+        width: item.width,
+        height: item.height,
+        mimeType: item.mimeType,
+        mediaType,
+        index: index + 1,
+        date
+      }, { usedNames });
+      return { ...item, filename };
+    });
+  }
+
+  async function performTrackerRun(id, reason) {
+    const trackers = await loadTrackers();
+    const tracker = trackers.find((candidate) => candidate.id === id);
+    if (!tracker) {
+      throw new Error("This tracker no longer exists.");
+    }
+    if (reason === "alarm" && !tracker.enabled) {
+      return trackerPublicSnapshot(tracker);
+    }
+    const startedAt = Date.now();
+    if (reason === "alarm" && Number(tracker.nextRunAt) > startedAt + 1000) {
+      return trackerPublicSnapshot(tracker);
+    }
+    await updateStoredTracker(id, (current) => ({
+      ...current,
+      lastRunAt: startedAt,
+      nextRunAt: startedAt + current.intervalMinutes * 60000
+    }));
+
+    let pagesChecked = 0;
+    try {
+      if (!await trackerPermissionGranted(tracker)) {
+        throw trackerRunError(
+          "Website access was removed. Open the tracked page in AnyDownload and grant access again.",
+          "permission"
+        );
+      }
+      const collected = await collectTrackerPages(tracker);
+      pagesChecked = collected.pagesChecked;
+      const pageTitle = collected.pageTitle;
+      const matches = collected.media.filter((item) =>
+        Filters.matchesSmartFilters(item, tracker.filters) &&
+        Tracker.matchesTrackerRules(item, tracker.matching)
+      );
+      const fingerprintsInDocument = new Set();
+      const fingerprinted = [];
+      for (const item of matches) {
+        const fingerprint = Tracker.mediaFingerprint(item);
+        if (!fingerprint || fingerprintsInDocument.has(fingerprint)) {
+          continue;
+        }
+        fingerprintsInDocument.add(fingerprint);
+        fingerprinted.push({ item, fingerprint });
+      }
+      const seen = new Set(tracker.seen);
+
+      if (!tracker.initialized && !tracker.downloadInitial) {
+        const baseline = fingerprinted.map((entry) => entry.fingerprint);
+        const finishedAt = Date.now();
+        const updated = await finishTrackerRun(id, startedAt, reason, {
+          pageTitle,
+          initialized: true,
+          seen: Tracker.recordSeen(tracker.seen, baseline),
+          lastSuccessAt: finishedAt,
+          nextRunAt: finishedAt + tracker.intervalMinutes * 60000,
+          backoffUntil: 0,
+          consecutiveErrors: 0,
+          consecutiveAuthorizationErrors: 0,
+          autoPausedReason: "",
+          lastFound: fingerprinted.length,
+          lastQueued: 0,
+          lastPagesChecked: pagesChecked,
+          lastError: ""
+        }, {
+          status: "baseline",
+          pagesChecked,
+          found: fingerprinted.length,
+          queued: 0,
+          message: `Baseline recorded with ${fingerprinted.length} matching item${fingerprinted.length === 1 ? "" : "s"}.`
+        });
+        return trackerPublicSnapshot(updated);
+      }
+
+      const fresh = fingerprinted
+        .filter((entry) => !seen.has(entry.fingerprint))
+        .slice(0, tracker.matching.maxDownloadsPerRun);
+      if (!fresh.length) {
+        const finishedAt = Date.now();
+        const updated = await finishTrackerRun(id, startedAt, reason, {
+          pageTitle,
+          initialized: true,
+          lastSuccessAt: finishedAt,
+          nextRunAt: finishedAt + tracker.intervalMinutes * 60000,
+          backoffUntil: 0,
+          consecutiveErrors: 0,
+          consecutiveAuthorizationErrors: 0,
+          autoPausedReason: "",
+          lastFound: fingerprinted.length,
+          lastQueued: 0,
+          lastPagesChecked: pagesChecked,
+          lastError: ""
+        }, {
+          status: "success",
+          pagesChecked,
+          found: fingerprinted.length,
+          queued: 0,
+          message: "No unseen matching media was found."
+        });
+        return trackerPublicSnapshot(updated);
+      }
+
+      const downloadItems = trackerDownloadItems(tracker, fresh.map((entry) => entry.item));
+      const queueResult = await enqueueDownloadBatch(validateBatch({
+        type: "DOWNLOAD_BATCH",
+        folder: tracker.folder,
+        saveAs: false,
+        incognito: false,
+        pageTitle,
+        pageUrl: tracker.url,
+        items: downloadItems
+      }));
+      const acceptedIndexes = Array.isArray(queueResult.acceptedIndexes)
+        ? queueResult.acceptedIndexes
+        : [];
+      const acceptedFingerprints = acceptedIndexes
+        .map((index) => fresh[index] && fresh[index].fingerprint)
+        .filter(Boolean);
+      if (!queueResult.ok || !acceptedFingerprints.length) {
+        throw trackerRunError(
+          queueResult.error || "No new tracker matches could be queued.",
+          "queue"
+        );
+      }
+      const partialError = queueResult.failed
+        ? `${queueResult.failed} new match${queueResult.failed === 1 ? "" : "es"} could not be queued and will be retried.`
+        : "";
+      const finishedAt = Date.now();
+      const updated = await finishTrackerRun(id, startedAt, reason, {
+        pageTitle,
+        initialized: true,
+        seen: Tracker.recordSeen(tracker.seen, acceptedFingerprints),
+        lastSuccessAt: finishedAt,
+        nextRunAt: finishedAt + tracker.intervalMinutes * 60000,
+        backoffUntil: 0,
+        consecutiveErrors: 0,
+        consecutiveAuthorizationErrors: 0,
+        autoPausedReason: "",
+        lastFound: fingerprinted.length,
+        lastQueued: acceptedFingerprints.length,
+        lastPagesChecked: pagesChecked,
+        lastError: partialError
+      }, {
+        status: partialError ? "partial" : "success",
+        pagesChecked,
+        found: fingerprinted.length,
+        queued: acceptedFingerprints.length,
+        message: partialError || `Queued ${acceptedFingerprints.length} new match${acceptedFingerprints.length === 1 ? "" : "es"}.`
+      });
+      await notifyTracker(
+        updated,
+        "matches",
+        `${acceptedFingerprints.length} new match${acceptedFingerprints.length === 1 ? " was" : "es were"} added to Downloads from ${updated.pageTitle}.`
+      ).catch(() => undefined);
+      return trackerPublicSnapshot(updated);
+    } catch (error) {
+      const message = error && error.name === "AbortError"
+        ? "The tracked page did not respond within 15 seconds."
+        : error && error.message ? error.message : String(error);
+      const code = error && error.name === "AbortError"
+        ? "timeout"
+        : String(error && error.trackerCode || "network");
+      const consecutiveErrors = tracker.consecutiveErrors + 1;
+      const consecutiveAuthorizationErrors = code === "authorization"
+        ? tracker.consecutiveAuthorizationErrors + 1
+        : 0;
+      const shouldAutoPause = code === "permission" ||
+        consecutiveAuthorizationErrors >= 3;
+      const backoffMinutes = trackerBackoffMinutes(tracker, error, consecutiveErrors);
+      const finishedAt = Date.now();
+      const nextRunAt = finishedAt + backoffMinutes * 60000;
+      const autoPausedReason = shouldAutoPause
+        ? code === "permission"
+          ? "Site access was removed."
+          : "Paused after three consecutive authorization failures."
+        : "";
+      const displayMessage = autoPausedReason
+        ? `${message} ${autoPausedReason}`
+        : `${message} Next automatic retry is delayed for ${backoffMinutes} minutes.`;
+      const updated = await finishTrackerRun(id, startedAt, reason, {
+        enabled: shouldAutoPause ? false : tracker.enabled,
+        nextRunAt,
+        backoffUntil: shouldAutoPause ? 0 : nextRunAt,
+        consecutiveErrors,
+        consecutiveAuthorizationErrors,
+        autoPausedReason,
+        lastFound: 0,
+        lastQueued: 0,
+        lastPagesChecked: pagesChecked,
+        lastError: displayMessage
+      }, {
+        status: "error",
+        pagesChecked,
+        found: 0,
+        queued: 0,
+        message: displayMessage
+      });
+      if (consecutiveErrors === 1 || shouldAutoPause) {
+        await notifyTracker(updated, "error", `${updated.pageTitle}: ${displayMessage}`)
+          .catch(() => undefined);
+      }
+      return trackerPublicSnapshot(updated);
+    }
+  }
+
+  function runTracker(id, reason) {
+    const existing = trackerRuns.get(id);
+    if (existing) {
+      return existing;
+    }
+    const operation = performTrackerRun(id, reason)
+      .then(async (tracker) => {
+        if (tracker) {
+          await syncTrackerAlarm(tracker);
+        }
+        return tracker;
+      })
+      .finally(() => {
+        if (trackerRuns.get(id) === operation) {
+          trackerRuns.delete(id);
+        }
+      });
+    trackerRuns.set(id, operation);
+    return operation;
+  }
+
+  async function upsertTracker(message) {
+    if (!Tracker) {
+      throw new Error("The tracker engine is unavailable.");
+    }
+    if (message.incognito) {
+      throw new Error("Background trackers are unavailable in private windows.");
+    }
+    const url = Tracker.normalizePageUrl(message.tracker && message.tracker.url);
+    const permissionPattern = Tracker.permissionPatternForUrl(url);
+    if (!url || !permissionPattern) {
+      throw new Error("The tracked page URL is invalid.");
+    }
+    if (browser.permissions && typeof browser.permissions.contains === "function" &&
+      !await browser.permissions.contains({ origins: [permissionPattern] })) {
+      throw new Error("Website access was not granted for this tracker.");
+    }
+    const stored = await queueTrackerMutation(async () => {
+      const trackers = await loadTrackers();
+      const existingIndex = trackers.findIndex((tracker) => tracker.url === url);
+      if (existingIndex < 0 && trackers.length >= Tracker.MAX_TRACKERS) {
+        throw new Error(`AnyDownload supports at most ${Tracker.MAX_TRACKERS} trackers.`);
+      }
+      const now = Date.now();
+      const existing = existingIndex >= 0 ? trackers[existingIndex] : null;
+      const id = existing && existing.id || `tracker-${crypto.randomUUID()}`;
+      const supplied = message.tracker && typeof message.tracker === "object" ? message.tracker : {};
+      const suppliedMatching = Object.prototype.hasOwnProperty.call(supplied, "matching")
+        ? supplied.matching
+        : Object.prototype.hasOwnProperty.call(supplied, "query")
+          ? { ...(existing && existing.matching || {}), includeText: supplied.query }
+          : existing && existing.matching;
+      const recoveringFromAutoPause = Boolean(existing && existing.autoPausedReason);
+      const candidate = Tracker.normalizeTracker({
+        ...existing,
+        ...supplied,
+        id,
+        url,
+        matching: suppliedMatching,
+        seen: existing ? existing.seen : [],
+        initialized: existing ? existing.initialized : false,
+        createdAt: existing ? existing.createdAt : now,
+        updatedAt: now,
+        enabled: existing && !recoveringFromAutoPause ? existing.enabled : true,
+        backoffUntil: recoveringFromAutoPause ? 0 : existing && existing.backoffUntil,
+        consecutiveErrors: recoveringFromAutoPause ? 0 : existing && existing.consecutiveErrors,
+        consecutiveAuthorizationErrors: recoveringFromAutoPause
+          ? 0
+          : existing && existing.consecutiveAuthorizationErrors,
+        autoPausedReason: recoveringFromAutoPause ? "" : existing && existing.autoPausedReason,
+        nextRunAt: 0
+      }, now);
+      const requestedPaginationMode = String(
+        supplied.pagination && supplied.pagination.mode || ""
+      ).toLowerCase();
+      if (
+        candidate &&
+        ["next-link", "url-template"].includes(requestedPaginationMode) &&
+        candidate.pagination.mode !== requestedPaginationMode
+      ) {
+        throw new Error("The pagination settings are invalid or point to a different website.");
+      }
+      const next = candidate && Tracker.normalizeTracker({
+        ...candidate,
+        nextRunAt: now + candidate.intervalMinutes * 60000
+      }, now);
+      if (!next) {
+        throw new Error("The tracker settings are invalid.");
+      }
+      if (existingIndex >= 0) {
+        trackers[existingIndex] = next;
+      } else {
+        trackers.push(next);
+      }
+      await saveTrackers(trackers);
+      return next;
+    });
+    await syncTrackerAlarm(stored);
+    return stored.enabled ? runTracker(stored.id, "save") : trackerPublicSnapshot(stored);
+  }
+
+  async function trackerMessage(message) {
+    if (!Tracker) {
+      throw new Error("The tracker engine is unavailable.");
+    }
+    if (message.type === "GET_TRACKER") {
+      const url = Tracker.normalizePageUrl(message.url);
+      const trackers = await loadTrackers();
+      return { ok: true, tracker: trackerPublicSnapshot(trackers.find((item) => item.url === url)) };
+    }
+    if (message.type === "GET_TRACKERS") {
+      const trackers = await loadTrackers();
+      return {
+        ok: true,
+        trackers: trackers.map(trackerPublicSnapshot),
+        maxTrackers: Tracker.MAX_TRACKERS
+      };
+    }
+    if (message.type === "UPSERT_TRACKER") {
+      return { ok: true, tracker: await upsertTracker(message) };
+    }
+    if (message.type === "RUN_TRACKER") {
+      const id = String(message.id || "");
+      return { ok: true, tracker: await runTracker(id, "manual") };
+    }
+    if (message.type === "SET_TRACKER_ENABLED") {
+      const enabled = Boolean(message.enabled);
+      const updated = await updateStoredTracker(String(message.id || ""), (current) => ({
+        ...current,
+        enabled,
+        updatedAt: Date.now(),
+        nextRunAt: Date.now() + current.intervalMinutes * 60000,
+        backoffUntil: enabled ? 0 : current.backoffUntil,
+        consecutiveErrors: enabled ? 0 : current.consecutiveErrors,
+        consecutiveAuthorizationErrors: enabled ? 0 : current.consecutiveAuthorizationErrors,
+        autoPausedReason: enabled ? "" : current.autoPausedReason
+      }));
+      if (!updated) {
+        throw new Error("This tracker no longer exists.");
+      }
+      await syncTrackerAlarm(updated);
+      return { ok: true, tracker: trackerPublicSnapshot(updated) };
+    }
+    if (message.type === "SET_ALL_TRACKERS_ENABLED") {
+      const enabled = Boolean(message.enabled);
+      const updated = await queueTrackerMutation(async () => {
+        const now = Date.now();
+        const trackers = (await loadTrackers()).map((tracker) => Tracker.normalizeTracker({
+          ...tracker,
+          enabled,
+          updatedAt: now,
+          nextRunAt: now + tracker.intervalMinutes * 60000,
+          backoffUntil: enabled ? 0 : tracker.backoffUntil,
+          consecutiveErrors: enabled ? 0 : tracker.consecutiveErrors,
+          consecutiveAuthorizationErrors: enabled ? 0 : tracker.consecutiveAuthorizationErrors,
+          autoPausedReason: enabled ? "" : tracker.autoPausedReason
+        }, now));
+        await saveTrackers(trackers);
+        return trackers;
+      });
+      await Promise.all(updated.map(syncTrackerAlarm));
+      return { ok: true, trackers: updated.map(trackerPublicSnapshot) };
+    }
+    if (message.type === "DELETE_TRACKER") {
+      const id = String(message.id || "");
+      await queueTrackerMutation(async () => {
+        const trackers = await loadTrackers();
+        await saveTrackers(trackers.filter((tracker) => tracker.id !== id));
+      });
+      if (browser.alarms) {
+        await browser.alarms.clear(trackerAlarmName(id));
+      }
+      return { ok: true, tracker: null };
+    }
+    return undefined;
   }
 
   async function updateQueueForDownload(incognito, change) {
@@ -2144,11 +2886,96 @@
   browser.runtime.onInstalled.addListener(() =>
     rebuildContextMenus().catch((error) => {
       console.error("AnyDownload could not rebuild its media context menu.", error);
-    }).finally(resumeStoredQueues)
+    }).finally(() => Promise.all([
+      resumeStoredQueues(),
+      reconcileTrackerAlarms()
+    ]))
   );
 
   if (browser.runtime.onStartup && typeof browser.runtime.onStartup.addListener === "function") {
-    browser.runtime.onStartup.addListener(resumeStoredQueues);
+    browser.runtime.onStartup.addListener(() => Promise.all([
+      resumeStoredQueues(),
+      reconcileTrackerAlarms()
+    ]));
+  }
+
+  if (Tracker && browser.alarms && browser.alarms.onAlarm) {
+    browser.alarms.onAlarm.addListener((alarm) => {
+      if (!alarm || !String(alarm.name || "").startsWith(Tracker.ALARM_PREFIX)) {
+        return undefined;
+      }
+      const id = String(alarm.name).slice(Tracker.ALARM_PREFIX.length);
+      return runTracker(id, "alarm").catch((error) => {
+        console.error("AnyDownload tracker run failed.", error);
+      });
+    });
+  }
+
+  if (Tracker && browser.notifications && browser.notifications.onClicked) {
+    browser.notifications.onClicked.addListener((notificationId) => {
+      if (!String(notificationId || "").startsWith("anydownload-tracker:")) {
+        return undefined;
+      }
+      const url = browser.runtime.getURL("tracking/tracking.html");
+      return browser.tabs.create({ active: true, url }).then(() =>
+        browser.notifications.clear(notificationId).catch(() => undefined)
+      ).catch(() => undefined);
+    });
+  }
+
+  if (Tracker && browser.permissions && browser.permissions.onRemoved) {
+    browser.permissions.onRemoved.addListener(() => {
+      queueTrackerMutation(async () => {
+        const trackers = await loadTrackers();
+        const updated = [];
+        const paused = [];
+        for (const tracker of trackers) {
+          const granted = await trackerPermissionGranted(tracker).catch(() => true);
+          if (granted) {
+            updated.push(tracker);
+            continue;
+          }
+          if (!tracker.enabled && tracker.autoPausedReason === "Site access was removed.") {
+            updated.push(tracker);
+            continue;
+          }
+          const now = Date.now();
+          const message = "Website access was removed. Open the tracked page in AnyDownload and grant access again.";
+          const next = Tracker.normalizeTracker({
+            ...tracker,
+            enabled: false,
+            autoPausedReason: "Site access was removed.",
+            lastError: message,
+            backoffUntil: 0,
+            consecutiveErrors: tracker.consecutiveErrors + 1,
+            consecutiveAuthorizationErrors: 0,
+            lastRunAt: now,
+            lastDurationMs: 0,
+            updatedAt: now,
+            activity: Tracker.appendActivity(tracker.activity, {
+              startedAt: now,
+              finishedAt: now,
+              durationMs: 0,
+              reason: "permission",
+              status: "error",
+              pagesChecked: 0,
+              found: 0,
+              queued: 0,
+              message
+            })
+          }, now);
+          updated.push(next);
+          paused.push(next);
+        }
+        await saveTrackers(updated);
+        return { updated, paused };
+      }).then(({ updated, paused }) => Promise.all([
+        ...updated.map(syncTrackerAlarm),
+        ...paused.map((tracker) => notifyTracker(tracker, "error", `${tracker.pageTitle}: ${tracker.lastError}`))
+      ])).catch((error) => {
+        console.error("AnyDownload could not reconcile removed tracker permissions.", error);
+      });
+    });
   }
 
   if (browser.menus && browser.menus.onClicked) {
@@ -2190,6 +3017,21 @@
           ok: false,
           error: error && error.message ? error.message : String(error)
         }));
+    }
+
+    if ([
+      "GET_TRACKER",
+      "GET_TRACKERS",
+      "UPSERT_TRACKER",
+      "RUN_TRACKER",
+      "SET_TRACKER_ENABLED",
+      "SET_ALL_TRACKERS_ENABLED",
+      "DELETE_TRACKER"
+    ].includes(message.type)) {
+      return trackerMessage(message).catch((error) => ({
+        ok: false,
+        error: error && error.message ? error.message : String(error)
+      }));
     }
 
     if (message.type === "DOWNLOAD_ARCHIVE") {
@@ -2239,5 +3081,8 @@
   // unbound task recovered from "starting" cannot remain queued indefinitely.
   resumeStoredQueues().catch((error) => {
     console.error("AnyDownload could not resume its saved queue.", error);
+  });
+  reconcileTrackerAlarms().catch((error) => {
+    console.error("AnyDownload could not restore its tracker schedule.", error);
   });
 })();

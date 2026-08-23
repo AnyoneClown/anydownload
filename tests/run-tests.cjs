@@ -57,13 +57,17 @@ const historyPath = path.join(root, "history/history.html");
 const historyHtml = fs.readFileSync(historyPath, "utf8");
 const historyCss = fs.readFileSync(path.join(root, "history/history.css"), "utf8");
 const historyJs = fs.readFileSync(path.join(root, "history/history.js"), "utf8");
+const trackingPath = path.join(root, "tracking/tracking.html");
+const trackingHtml = fs.readFileSync(trackingPath, "utf8");
+const trackingCss = fs.readFileSync(path.join(root, "tracking/tracking.css"), "utf8");
+const trackingJs = fs.readFileSync(path.join(root, "tracking/tracking.js"), "utf8");
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.name, "AnyDownload — Page Media Downloader");
-assert.equal(manifest.version, "1.10.0");
+assert.equal(manifest.version, "1.11.0");
 assert.equal(manifest.action.default_title, "Download page media");
 assert.equal(Core.MAX_BATCH_TOTAL_URL_LENGTH, 2000000);
-assert.deepEqual(manifest.permissions.sort(), ["activeTab", "downloads", "menus", "scripting", "storage"]);
+assert.deepEqual(manifest.permissions.sort(), ["activeTab", "alarms", "downloads", "menus", "notifications", "scripting", "storage"]);
 assert.deepEqual(manifest.optional_host_permissions, ["<all_urls>"]);
 assert.deepEqual(
   manifest.background.scripts,
@@ -74,7 +78,9 @@ assert.deepEqual(
     "shared/instagram.js",
     "shared/youtube.js",
     "shared/archive.js",
+    "shared/filters.js",
     "shared/templates.js",
+    "shared/tracker.js",
     "shared/download-queue.js",
     "background.js"
   ]
@@ -161,6 +167,8 @@ assert.match(popupHtml, /class="folder-toolbar"/);
 assert.match(popupHtml, /class="folder-options"/);
 assert.match(popupHtml, /id="history-button"[^>]*title="Download queue and statistics"/);
 assert.match(popupHtml, /id="queue-badge"[^>]*hidden/);
+assert.match(popupHtml, /id="tracking-dashboard-button"[^>]*title="Background trackers"/);
+assert.match(popupJs, /runtime\.getURL\("tracking\/tracking\.html"\)/);
 assert.match(popupHtml, /id="filename-template-button"[^>]*aria-controls="filename-template-panel"/);
 assert.match(popupHtml, /id="filename-template-input"[^>]*value="\{index\}-\{filename\}"[^>]*maxlength="240"/);
 assert.match(popupHtml, /id="filename-template-help"[^>]*>[^<]*\{hostname\}[^<]*\{page-title\}[^<]*\{date\}/);
@@ -218,6 +226,25 @@ for (const collectionFilter of ["all", "posts", "story", "highlights"]) {
 }
 assert.match(popupHtml, /id="smart-filter-panel"[^>]*hidden/);
 assert.match(popupHtml, /id="smart-filters-button"[^>]*aria-expanded="false"[^>]*aria-controls="smart-filter-panel"/);
+assert.match(popupHtml, /id="tracker-button"[^>]*aria-controls="tracker-panel"[^>]*disabled/);
+assert.match(popupHtml, /id="tracker-panel"[^>]*hidden/);
+assert.match(popupHtml, /id="tracker-download-initial-input"[^>]*type="checkbox"/);
+for (const trackerControlId of [
+  "tracker-include-text-input",
+  "tracker-exclude-text-input",
+  "tracker-include-patterns-input",
+  "tracker-exclude-patterns-input",
+  "tracker-max-downloads-select",
+  "tracker-pagination-mode-select",
+  "tracker-max-pages-select",
+  "tracker-next-selector-input",
+  "tracker-url-template-input",
+  "tracker-notify-matches-input",
+  "tracker-notify-errors-input"
+]) {
+  assert.match(popupHtml, new RegExp(`id=["']${trackerControlId}["']`));
+}
+assert.match(popupHtml, /AJAX “More” requests are not replayed yet/);
 assert.equal(
   (popupHtml.match(/id=["']photos-only-input["']/g) || []).length,
   1,
@@ -322,6 +349,14 @@ assert.match(popupJs, /elements\["archive-footer-button"\]\.addEventListener\("c
 assert.match(popupJs, /elements\["download-button"\]\.addEventListener\("click", downloadSelectedImages\)/);
 assert.match(popupJs, /function hostPermissionPatternsForImages\(images\)/);
 assert.match(popupJs, /browser\.permissions\.request\(\{ origins \}\)/);
+assert.match(popupJs, /type:\s*"UPSERT_TRACKER"/);
+assert.match(popupJs, /type:\s*"RUN_TRACKER"/);
+assert.match(popupJs, /type:\s*"SET_TRACKER_ENABLED"/);
+assert.match(popupJs, /type:\s*"DELETE_TRACKER"/);
+assert.match(popupJs, /browser\.permissions\.request\(\{ origins:\s*\[pattern\] \}\)/);
+assert.match(popupJs, /maxDownloadsPerRun:/);
+assert.match(popupJs, /urlTemplate:/);
+assert.match(popupJs, /newMatches:/);
 assert.doesNotMatch(
   popupJs,
   /type:\s*"DOWNLOAD_ARCHIVE"/,
@@ -404,6 +439,19 @@ assert.match(backgroundJs, /browser\.menus\.onClicked\.addListener/);
 assert.match(backgroundJs, /targetElementId/);
 assert.doesNotMatch(backgroundJs, /browser\.action\.onClicked\.addListener/);
 assert.match(backgroundJs, /message\.type === "OPEN_MANAGER_WINDOW"/);
+assert.match(backgroundJs, /const Tracker = globalThis\.AnyDownloadTracker/);
+assert.match(backgroundJs, /browser\.alarms\.onAlarm\.addListener/);
+assert.match(backgroundJs, /credentials:\s*"include"/);
+assert.match(backgroundJs, /Tracker\.extractMediaFromDocument/);
+assert.match(backgroundJs, /Tracker\.extractNextPageUrl/);
+assert.match(backgroundJs, /Tracker\.pageUrlFromTemplate/);
+assert.match(backgroundJs, /Tracker\.matchesTrackerRules/);
+assert.match(backgroundJs, /function trackerBackoffMinutes/);
+assert.match(backgroundJs, /browser\.notifications\.create/);
+assert.match(backgroundJs, /browser\.permissions\.onRemoved/);
+assert.match(backgroundJs, /"UPSERT_TRACKER"/);
+assert.match(backgroundJs, /"GET_TRACKERS"/);
+assert.match(backgroundJs, /"SET_ALL_TRACKERS_ENABLED"/);
 assert.match(backgroundJs, /browser\.tabs\.get\(message\.sourceTabId\)/);
 assert.match(backgroundJs, /function managerWindowUrl\(sourceTabId\)/);
 assert.match(backgroundJs, /openResizableImageWindow\(tab\)/);
@@ -490,6 +538,41 @@ assert.match(historyJs, /performDownloadsAction\(\s*"show",\s*\[task\.downloadId
 assert.match(historyJs, /performDownloadsAction\(\s*"showDefaultFolder"/s);
 assert.match(historyCss, /\.stats-grid\s*\{[^}]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\);/s);
 assert.match(historyCss, /@media\s*\(max-width:\s*800px\)/);
+assert.match(historyHtml, /href="\.\.\/tracking\/tracking\.html">Trackers<\/a>/);
+
+assert.match(trackingHtml, /^<!doctype html>/i, "Tracking dashboard must use standards mode");
+assert.match(trackingHtml, /<title>AnyDownload — Tracking<\/title>/);
+assert.match(trackingHtml, /id="total-stat"/);
+assert.match(trackingHtml, /id="active-stat"/);
+assert.match(trackingHtml, /id="issues-stat"/);
+assert.match(trackingHtml, /id="queued-stat"/);
+assert.match(trackingHtml, /id="tracker-list"[^>]*aria-live="polite"/);
+assert.match(trackingHtml, /id="pause-all-button"/);
+assert.match(trackingHtml, /id="resume-all-button"/);
+assert.match(trackingHtml, /href="\.\.\/history\/history\.html">Downloads<\/a>/);
+const trackingResourcePaths = [
+  ...Array.from(
+    trackingHtml.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*><\/script>/gi),
+    (match) => match[1]
+  ),
+  ...Array.from(
+    trackingHtml.matchAll(/<(?:link|img)\b[^>]*(?:href|src)=["']([^"']+)["'][^>]*>/gi),
+    (match) => match[1]
+  )
+];
+for (const resourcePath of trackingResourcePaths) {
+  assertLocalResource(path.dirname(trackingPath), resourcePath, "Tracking dashboard resource");
+}
+assert.match(trackingJs, /type:\s*"GET_TRACKERS"/);
+assert.match(trackingJs, /type:\s*"SET_ALL_TRACKERS_ENABLED"/);
+assert.match(trackingJs, /"RUN_TRACKER"/);
+assert.match(trackingJs, /"DELETE_TRACKER"/);
+assert.match(trackingJs, /activity-list/);
+assert.match(trackingJs, /Automatically paused/);
+assert.doesNotMatch(trackingJs, /\.innerHTML\s*=/);
+assert.match(trackingCss, /\.stats-grid\s*\{[^}]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\);/s);
+assert.match(trackingCss, /\.activity-list\s*\{/);
+assert.match(trackingCss, /@media\s*\(max-width:\s*560px\)/);
 
 for (const relativePath of [
   "archive/archive.css",
@@ -512,10 +595,14 @@ for (const relativePath of [
   "shared/core.js",
   "shared/download-queue.js",
   "shared/fapfolder.js",
+  "shared/tracker.js",
   "shared/templates.js",
   "shared/youtube.js",
   "sidebar/sidebar.html",
-  "sidebar/sidebar.js"
+  "sidebar/sidebar.js",
+  "tracking/tracking.css",
+  "tracking/tracking.html",
+  "tracking/tracking.js"
 ]) {
   assert.ok(fs.existsSync(path.join(root, relativePath)), `Missing ${relativePath}`);
 }
@@ -622,7 +709,9 @@ for (const relativePath of [
   "shared/filters.js",
   "shared/archive.js",
   "shared/templates.js",
-  "sidebar/sidebar.js"
+  "shared/tracker.js",
+  "sidebar/sidebar.js",
+  "tracking/tracking.js"
 ]) {
   const source = fs.readFileSync(path.join(root, relativePath), "utf8");
   assert.doesNotThrow(() => new Function(source), `${relativePath} has a syntax error`);

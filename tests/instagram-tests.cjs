@@ -454,6 +454,53 @@ async function run() {
     assert.ok(!result.warnings.some((warning) => /related Instagram page/i.test(warning)));
   }
 
+  // When the profile feed API is unavailable, carousel markers in the visible
+  // grid trigger the exact post endpoint so every slide replaces the cover.
+  {
+    const shortcode = "GRIDCAR123";
+    const requests = [];
+    const result = await scan("https://www.instagram.com/alice/", {
+      elements: [fakeDomElement("a", {
+        attributes: { href: `/alice/p/${shortcode}/` },
+        children: [
+          fakeDomElement("img", {
+            attributes: { src: "https://scontent.cdninstagram.com/grid-cover.jpg" },
+            width: 1080,
+            height: 1350
+          }),
+          fakeDomElement("svg", { attributes: { "aria-label": "Carousel" } })
+        ]
+      })]
+    }, {}, async (url) => {
+      requests.push(url);
+      const parsed = new URL(url);
+      if (parsed.pathname === "/api/v1/users/web_profile_info/") {
+        return jsonResponse(url, {}, { ok: false });
+      }
+      assert.equal(
+        parsed.pathname,
+        `/api/v1/media/${instagramMediaIdFromShortcode(shortcode)}/info/`
+      );
+      return jsonResponse(url, { items: [{
+        code: shortcode,
+        user: { username: "alice" },
+        carousel_media: [
+          imageNode("grid-1", "https://scontent.cdninstagram.com/grid-cover.jpg"),
+          imageNode("grid-2", "https://scontent.cdninstagram.com/grid-second.jpg")
+        ]
+      }] });
+    });
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://scontent.cdninstagram.com/grid-cover.jpg",
+      "https://scontent.cdninstagram.com/grid-second.jpg"
+    ]);
+    assert.equal(requests.length, 2);
+    assert.deepEqual(result.images.map((item) => item.identityKey), [
+      `instagram:post:alice:${shortcode}:1`,
+      `instagram:post:alice:${shortcode}:2`
+    ]);
+  }
+
   // A profile item keeps a stable post/slot identity when Instagram rotates
   // the signed CDN URL that backs the same media.
   {

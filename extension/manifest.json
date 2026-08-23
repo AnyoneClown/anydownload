@@ -1,12 +1,14 @@
 {
   "manifest_version": 3,
   "name": "AnyDownload — Page Media Downloader",
-  "version": "1.10.0",
-  "description": "Download page media, Instagram collections, and basic progressive YouTube videos with safe bulk queues.",
+  "version": "1.11.0",
+  "description": "Download and track page media, Instagram collections, and basic progressive YouTube videos with safe bulk queues.",
   "permissions": [
     "activeTab",
+    "alarms",
     "downloads",
     "menus",
+    "notifications",
     "scripting",
     "storage"
   ],
@@ -42,7 +44,9 @@
       "shared/instagram.js",
       "shared/youtube.js",
       "shared/archive.js",
+      "shared/filters.js",
       "shared/templates.js",
+      "shared/tracker.js",
       "shared/download-queue.js",
       "background.js"
     ]

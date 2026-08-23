@@ -667,7 +667,10 @@
     sidebarWindowId: null,
     smartFilters: Filters.normalizeFilters(),
     sourceWindowId: null,
-    sourceTabId: launchSourceTabId
+    sourceTabId: launchSourceTabId,
+    tracker: null,
+    trackerBusy: false,
+    trackerPageUrl: ""
   };
 
   const elements = {};
@@ -749,7 +752,32 @@
       "sidebar-follow-button",
       "smart-filter-panel",
       "smart-filters-button",
-      "summary-label"
+      "summary-label",
+      "tracking-dashboard-button",
+      "tracker-button",
+      "tracker-delete-button",
+      "tracker-download-initial-input",
+      "tracker-exclude-patterns-input",
+      "tracker-exclude-text-input",
+      "tracker-include-patterns-input",
+      "tracker-include-text-input",
+      "tracker-interval-select",
+      "tracker-max-downloads-select",
+      "tracker-max-pages-field",
+      "tracker-max-pages-select",
+      "tracker-next-selector-field",
+      "tracker-next-selector-input",
+      "tracker-notify-errors-input",
+      "tracker-notify-matches-input",
+      "tracker-pagination-mode-select",
+      "tracker-panel",
+      "tracker-pause-button",
+      "tracker-run-button",
+      "tracker-save-button",
+      "tracker-state-label",
+      "tracker-status",
+      "tracker-url-template-field",
+      "tracker-url-template-input"
     ];
     for (const id of ids) {
       elements[id] = document.getElementById(id);
@@ -760,6 +788,408 @@
     elements.notice.textContent = message || "";
     elements.notice.className = `notice${type ? ` ${type}` : ""}`;
     elements.notice.hidden = !message;
+  }
+
+  function trackerPermissionPattern(pageUrl) {
+    try {
+      const parsed = new URL(String(pageUrl || ""));
+      return ["http:", "https:"].includes(parsed.protocol) && parsed.hostname
+        ? `${parsed.protocol}//${parsed.hostname}/*`
+        : "";
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function formatTrackerTime(value) {
+    const time = Number(value);
+    if (!Number.isFinite(time) || time <= 0) {
+      return "not checked yet";
+    }
+    return new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    }).format(new Date(time));
+  }
+
+  function setTrackerBusy(busy, status) {
+    state.trackerBusy = Boolean(busy);
+    for (const id of [
+      "tracker-save-button",
+      "tracker-run-button",
+      "tracker-pause-button",
+      "tracker-delete-button",
+      "tracker-interval-select",
+      "tracker-download-initial-input",
+      "tracker-exclude-patterns-input",
+      "tracker-exclude-text-input",
+      "tracker-include-patterns-input",
+      "tracker-include-text-input",
+      "tracker-max-downloads-select",
+      "tracker-max-pages-select",
+      "tracker-next-selector-input",
+      "tracker-notify-errors-input",
+      "tracker-notify-matches-input",
+      "tracker-pagination-mode-select",
+      "tracker-url-template-input"
+    ]) {
+      elements[id].disabled = state.trackerBusy;
+    }
+    elements["tracker-button"].disabled = state.trackerBusy || state.incognito || !state.pageUrl;
+    if (status) {
+      elements["tracker-status"].textContent = status;
+      elements["tracker-status"].classList.remove("error");
+    }
+  }
+
+  function updateTrackerPaginationFields() {
+    const mode = elements["tracker-pagination-mode-select"].value;
+    elements["tracker-max-pages-field"].hidden = mode === "none";
+    elements["tracker-next-selector-field"].hidden = mode !== "next-link";
+    elements["tracker-url-template-field"].hidden = mode !== "url-template";
+  }
+
+  function populateTrackerControls(tracker) {
+    const matching = tracker && tracker.matching || {};
+    const pagination = tracker && tracker.pagination || {};
+    const notifications = tracker && tracker.notifications || {};
+    elements["tracker-include-text-input"].value = matching.includeText == null
+      ? elements["filter-input"].value.trim()
+      : matching.includeText;
+    elements["tracker-exclude-text-input"].value = matching.excludeText || "";
+    elements["tracker-include-patterns-input"].value = Array.isArray(matching.includePatterns)
+      ? matching.includePatterns.join("\n")
+      : "";
+    elements["tracker-exclude-patterns-input"].value = Array.isArray(matching.excludePatterns)
+      ? matching.excludePatterns.join("\n")
+      : "";
+    elements["tracker-max-downloads-select"].value = String(matching.maxDownloadsPerRun || 100);
+    elements["tracker-pagination-mode-select"].value = pagination.mode || "none";
+    elements["tracker-max-pages-select"].value = String(pagination.maxPages || 3);
+    elements["tracker-next-selector-input"].value = pagination.nextSelector || "";
+    elements["tracker-url-template-input"].value = pagination.urlTemplate || "";
+    elements["tracker-notify-matches-input"].checked = notifications.newMatches !== false;
+    elements["tracker-notify-errors-input"].checked = notifications.errors !== false;
+    updateTrackerPaginationFields();
+  }
+
+  function updateTrackerUi() {
+    const tracker = state.tracker;
+    const available = Boolean(state.pageUrl) && !state.incognito;
+    elements["tracker-button"].disabled = state.trackerBusy || !available;
+    elements["tracking-dashboard-button"].disabled = state.incognito;
+    elements["tracker-button"].classList.toggle("active", Boolean(tracker));
+    elements["tracker-button"].textContent = tracker ? "Tracking" : "Track page";
+    elements["tracker-button"].title = state.incognito
+      ? "Background trackers are unavailable in private windows"
+      : "Check this URL regularly and queue newly discovered matches";
+    for (const id of [
+      "tracker-save-button",
+      "tracker-run-button",
+      "tracker-pause-button",
+      "tracker-delete-button",
+      "tracker-interval-select",
+      "tracker-exclude-patterns-input",
+      "tracker-exclude-text-input",
+      "tracker-include-patterns-input",
+      "tracker-include-text-input",
+      "tracker-max-downloads-select",
+      "tracker-max-pages-select",
+      "tracker-next-selector-input",
+      "tracker-notify-errors-input",
+      "tracker-notify-matches-input",
+      "tracker-pagination-mode-select",
+      "tracker-url-template-input"
+    ]) {
+      elements[id].disabled = state.trackerBusy || !available;
+    }
+
+    elements["tracker-state-label"].textContent = tracker
+      ? tracker.enabled ? "Active" : "Paused"
+      : state.incognito ? "Unavailable in private windows" : "Not active";
+    elements["tracker-save-button"].textContent = tracker ? "Update tracker" : "Start tracking";
+    elements["tracker-run-button"].hidden = !tracker;
+    elements["tracker-pause-button"].hidden = !tracker;
+    elements["tracker-delete-button"].hidden = !tracker;
+    elements["tracker-pause-button"].textContent = tracker && tracker.enabled ? "Pause" : "Resume";
+
+    if (tracker) {
+      const interval = String(tracker.intervalMinutes || 60);
+      if (Array.from(elements["tracker-interval-select"].options).some((option) => option.value === interval)) {
+        elements["tracker-interval-select"].value = interval;
+      }
+      elements["tracker-download-initial-input"].checked = Boolean(tracker.downloadInitial);
+      elements["tracker-download-initial-input"].disabled = state.trackerBusy || !available || Boolean(tracker.initialized);
+      elements["tracker-status"].classList.toggle("error", Boolean(tracker.lastError));
+      if (tracker.lastError) {
+        const reliability = tracker.autoPausedReason
+          ? " · Automatically paused"
+          : tracker.backoffUntil > Date.now()
+            ? ` · Retry after ${formatTrackerTime(tracker.backoffUntil)}`
+            : "";
+        elements["tracker-status"].textContent = `Last check failed: ${tracker.lastError}${reliability}`;
+      } else if (tracker.lastSuccessAt) {
+        elements["tracker-status"].textContent =
+          `Checked ${formatTrackerTime(tracker.lastSuccessAt)} · ${Number(tracker.lastPagesChecked || 1).toLocaleString()} page${tracker.lastPagesChecked === 1 ? "" : "s"} · ${Number(tracker.lastFound || 0).toLocaleString()} matched · ${Number(tracker.lastQueued || 0).toLocaleString()} queued.`;
+      } else {
+        elements["tracker-status"].textContent = "Waiting for the first check.";
+      }
+    } else {
+      elements["tracker-download-initial-input"].disabled = state.trackerBusy || !available;
+      elements["tracker-status"].classList.remove("error");
+      elements["tracker-status"].textContent = state.incognito
+        ? "Open this page in a regular window to create a background tracker."
+        : "Start tracking to create a baseline. Current matches are skipped unless you opt in above.";
+    }
+  }
+
+  async function refreshTrackerStatus(force) {
+    if (!state.pageUrl || state.incognito) {
+      state.tracker = null;
+      state.trackerPageUrl = state.incognito ? state.pageUrl : "";
+      populateTrackerControls(null);
+      updateTrackerUi();
+      return;
+    }
+    if (!force && state.trackerPageUrl === state.pageUrl) {
+      updateTrackerUi();
+      return;
+    }
+    const requestedUrl = state.pageUrl;
+    const response = await browser.runtime.sendMessage({
+      type: "GET_TRACKER",
+      url: requestedUrl
+    });
+    if (requestedUrl !== state.pageUrl) {
+      return;
+    }
+    if (!response || !response.ok) {
+      throw new Error(response && response.error || "Firefox could not read the tracker state.");
+    }
+    state.tracker = response.tracker || null;
+    state.trackerPageUrl = requestedUrl;
+    populateTrackerControls(state.tracker);
+    updateTrackerUi();
+  }
+
+  async function saveTracker() {
+    if (state.trackerBusy || state.incognito) {
+      return;
+    }
+    const pattern = trackerPermissionPattern(state.pageUrl);
+    const folder = folderStatus();
+    const template = requireValidFilenameTemplate();
+    if (!pattern || !folder.ok || !template) {
+      if (!pattern) {
+        setNotice("This page cannot be tracked in the background.", "error");
+      } else if (!folder.ok) {
+        elements["folder-input"].focus();
+      }
+      return;
+    }
+    const paginationMode = elements["tracker-pagination-mode-select"].value;
+    const paginationTemplate = elements["tracker-url-template-input"].value.trim();
+    const nextSelector = elements["tracker-next-selector-input"].value.trim();
+    if (paginationMode === "next-link" && nextSelector) {
+      try {
+        document.querySelector(nextSelector);
+      } catch (_error) {
+        setNotice("The custom Next-link selector is not valid CSS.", "error");
+        elements["tracker-next-selector-input"].focus();
+        return;
+      }
+    }
+    if (paginationMode === "url-template" && !paginationTemplate.includes("{page}")) {
+      setNotice("The pagination URL template must contain {page}.", "error");
+      elements["tracker-url-template-input"].focus();
+      return;
+    }
+    if (paginationMode === "url-template") {
+      try {
+        const base = new URL(state.pageUrl);
+        const candidate = new URL(paginationTemplate.split("{page}").join("2"), base);
+        if (candidate.origin !== base.origin || !["http:", "https:"].includes(candidate.protocol)) {
+          throw new Error("different origin");
+        }
+      } catch (_error) {
+        setNotice("The pagination URL template must be a valid URL on the same website.", "error");
+        elements["tracker-url-template-input"].focus();
+        return;
+      }
+    }
+    if (!browser.permissions || typeof browser.permissions.request !== "function") {
+      setNotice("This Firefox build cannot grant the site access needed by background trackers.", "error");
+      return;
+    }
+
+    let permissionPromise;
+    try {
+      permissionPromise = browser.permissions.request({ origins: [pattern] });
+    } catch (error) {
+      setNotice(`Firefox could not request access to this site. (${error.message || error})`, "error");
+      return;
+    }
+
+    setTrackerBusy(true, state.tracker ? "Updating tracker…" : "Creating the first baseline…");
+    try {
+      if (!await permissionPromise) {
+        throw new Error("Site access was not granted, so the tracker was not created.");
+      }
+      const filters = smartFiltersFromControls();
+      const includeText = elements["tracker-include-text-input"].value.trim();
+      state.smartFilters = filters;
+      const response = await browser.runtime.sendMessage({
+        type: "UPSERT_TRACKER",
+        incognito: state.incognito,
+        tracker: {
+          url: state.pageUrl,
+          pageTitle: state.pageTitle,
+          folder: folder.value,
+          intervalMinutes: Number(elements["tracker-interval-select"].value),
+          filters,
+          query: includeText,
+          matching: {
+            includeText,
+            excludeText: elements["tracker-exclude-text-input"].value.trim(),
+            includePatterns: elements["tracker-include-patterns-input"].value.split(/\n+/),
+            excludePatterns: elements["tracker-exclude-patterns-input"].value.split(/\n+/),
+            maxDownloadsPerRun: Number(elements["tracker-max-downloads-select"].value)
+          },
+          pagination: {
+            mode: paginationMode,
+            maxPages: Number(elements["tracker-max-pages-select"].value),
+            nextSelector,
+            urlTemplate: paginationTemplate
+          },
+          notifications: {
+            newMatches: elements["tracker-notify-matches-input"].checked,
+            errors: elements["tracker-notify-errors-input"].checked
+          },
+          filenameTemplate: template.value,
+          downloadInitial: elements["tracker-download-initial-input"].checked
+        }
+      });
+      if (!response || !response.ok) {
+        throw new Error(response && response.error || "Firefox could not save the tracker.");
+      }
+      state.tracker = response.tracker || null;
+      state.trackerPageUrl = state.pageUrl;
+      state.hasStoredFolder = true;
+      populateTrackerControls(state.tracker);
+      await browser.storage.local.set({
+        destinationFolder: folder.value,
+        filenameTemplate: template.value,
+        smartFilters: filters
+      });
+      setNotice(
+        state.tracker && state.tracker.lastError
+          ? `Tracker saved, but its first check failed. (${state.tracker.lastError})`
+          : state.tracker && !state.tracker.enabled
+            ? "Tracker updated and remains paused."
+          : state.tracker && state.tracker.lastQueued
+            ? `Tracker saved and queued ${Number(state.tracker.lastQueued).toLocaleString()} current match${state.tracker.lastQueued === 1 ? "" : "es"}.`
+            : "Tracker saved. New matches will be added to the download queue in the background.",
+        state.tracker && state.tracker.lastError ? "error" : "success"
+      );
+    } catch (error) {
+      setNotice(error && error.message ? error.message : String(error), "error");
+    } finally {
+      setTrackerBusy(false);
+      updateTrackerUi();
+    }
+  }
+
+  async function runTrackerNow() {
+    if (!state.tracker || state.trackerBusy) {
+      return;
+    }
+    setTrackerBusy(true, "Checking the tracked page…");
+    try {
+      const response = await browser.runtime.sendMessage({
+        type: "RUN_TRACKER",
+        id: state.tracker.id
+      });
+      if (!response || !response.ok) {
+        throw new Error(response && response.error || "The tracker check failed.");
+      }
+      state.tracker = response.tracker;
+      populateTrackerControls(state.tracker);
+      setNotice(
+        state.tracker.lastError
+          ? `Tracker check failed. (${state.tracker.lastError})`
+          : state.tracker.lastQueued
+            ? `Queued ${Number(state.tracker.lastQueued).toLocaleString()} new match${state.tracker.lastQueued === 1 ? "" : "es"}.`
+            : "Tracker is up to date; no new matches were queued.",
+        state.tracker.lastError ? "error" : "success"
+      );
+    } catch (error) {
+      setNotice(error && error.message ? error.message : String(error), "error");
+    } finally {
+      setTrackerBusy(false);
+      updateTrackerUi();
+    }
+  }
+
+  async function toggleTrackerEnabled() {
+    if (!state.tracker || state.trackerBusy) {
+      return;
+    }
+    const enabled = !state.tracker.enabled;
+    setTrackerBusy(true, enabled ? "Resuming tracker…" : "Pausing tracker…");
+    try {
+      const response = await browser.runtime.sendMessage({
+        type: "SET_TRACKER_ENABLED",
+        id: state.tracker.id,
+        enabled
+      });
+      if (!response || !response.ok) {
+        throw new Error(response && response.error || "Firefox could not update the tracker.");
+      }
+      state.tracker = response.tracker;
+      populateTrackerControls(state.tracker);
+      setNotice(enabled ? "Tracker resumed." : "Tracker paused.", "success");
+    } catch (error) {
+      setNotice(error && error.message ? error.message : String(error), "error");
+    } finally {
+      setTrackerBusy(false);
+      updateTrackerUi();
+    }
+  }
+
+  async function deleteTracker() {
+    if (!state.tracker || state.trackerBusy || !window.confirm("Remove this background tracker? Its download history will be kept.")) {
+      return;
+    }
+    setTrackerBusy(true, "Removing tracker…");
+    try {
+      const response = await browser.runtime.sendMessage({
+        type: "DELETE_TRACKER",
+        id: state.tracker.id
+      });
+      if (!response || !response.ok) {
+        throw new Error(response && response.error || "Firefox could not remove the tracker.");
+      }
+      state.tracker = null;
+      state.trackerPageUrl = state.pageUrl;
+      populateTrackerControls(null);
+      setNotice("Tracker removed.", "success");
+    } catch (error) {
+      setNotice(error && error.message ? error.message : String(error), "error");
+    } finally {
+      setTrackerBusy(false);
+      updateTrackerUi();
+    }
+  }
+
+  function handleTrackerStorageChanges(changes, areaName) {
+    if (areaName !== "local" || !changes || !changes["mediaTrackers:v1"] || !state.pageUrl || state.incognito || state.trackerBusy) {
+      return;
+    }
+    refreshTrackerStatus(true).catch((error) => {
+      console.error("AnyDownload could not refresh its tracker state.", error);
+    });
   }
 
   function filenameTemplateStatus() {
@@ -925,6 +1355,19 @@
     }
     await browser.tabs.create(createProperties).catch((error) => {
       setNotice(`Firefox could not open the download queue. (${error.message || error})`, "error");
+    });
+  }
+
+  async function openTrackingDashboard() {
+    const createProperties = {
+      active: true,
+      url: browser.runtime.getURL("tracking/tracking.html")
+    };
+    if (Number.isInteger(state.sourceWindowId)) {
+      createProperties.windowId = state.sourceWindowId;
+    }
+    await browser.tabs.create(createProperties).catch((error) => {
+      setNotice(`Firefox could not open background trackers. (${error.message || error})`, "error");
     });
   }
 
@@ -2772,6 +3215,14 @@
       state.busy = false;
       updateOpenWindowButton();
       renderImages();
+      if (succeeded && state.trackerPageUrl !== state.pageUrl) {
+        refreshTrackerStatus().catch((error) => {
+          console.error("AnyDownload could not load the tracker for this page.", error);
+          updateTrackerUi();
+        });
+      } else {
+        updateTrackerUi();
+      }
     }
     return succeeded;
   }
@@ -3564,6 +4015,23 @@
     elements["open-window-button"].addEventListener("click", openManagerWindow);
     elements["sidebar-button"].addEventListener("click", openFirefoxSidebar);
     elements["history-button"].addEventListener("click", openDownloadHistory);
+    elements["tracking-dashboard-button"].addEventListener("click", openTrackingDashboard);
+    elements["tracker-button"].addEventListener("click", () => {
+      const panel = elements["tracker-panel"];
+      panel.hidden = !panel.hidden;
+      elements["tracker-button"].setAttribute("aria-expanded", String(!panel.hidden));
+      if (!panel.hidden) {
+        refreshTrackerStatus(true).catch((error) => {
+          elements["tracker-status"].textContent = error && error.message ? error.message : String(error);
+          elements["tracker-status"].classList.add("error");
+        });
+      }
+    });
+    elements["tracker-save-button"].addEventListener("click", saveTracker);
+    elements["tracker-pagination-mode-select"].addEventListener("change", updateTrackerPaginationFields);
+    elements["tracker-run-button"].addEventListener("click", runTrackerNow);
+    elements["tracker-pause-button"].addEventListener("click", toggleTrackerEnabled);
+    elements["tracker-delete-button"].addEventListener("click", deleteTracker);
     if (elements["sidebar-follow-button"]) {
       elements["sidebar-follow-button"].addEventListener("click", requestSidebarFollowPermission);
     }
@@ -3706,11 +4174,13 @@
     updateOpenWindowButton();
     updateSmartFilterButton();
     updateInstagramCollectionFilterUi();
+    updateTrackerUi();
     await initializeSidebarContext();
     wireEvents();
     wireSourceTabLifecycle();
     wireSidebarPermissionLifecycle();
     browser.storage.onChanged.addListener(handleIgnoredStorageChanges);
+    browser.storage.onChanged.addListener(handleTrackerStorageChanges);
     try {
       const stored = await browser.storage.local.get([
         "destinationFolder",

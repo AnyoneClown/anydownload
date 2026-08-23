@@ -2499,6 +2499,67 @@
       }
     }
 
+    async function collectProfileGridCarousels() {
+      if (route.kind !== "profile" || !settings.includeProfilePosts) {
+        return;
+      }
+      let anchors = [];
+      try {
+        anchors = Array.from(document.querySelectorAll("a[href]")).slice(0, MAX_RELATED_LINKS * 16);
+      } catch (_error) {
+        anchors = [];
+      }
+      const visitedPosts = new Set();
+      for (const anchor of anchors) {
+        let carousel = false;
+        try {
+          carousel = Array.from(anchor.querySelectorAll("[aria-label], title")).some((marker) =>
+            /carousel/i.test(safeText(
+              marker.getAttribute && marker.getAttribute("aria-label") || marker.textContent,
+              100
+            ))
+          );
+        } catch (_error) {
+          carousel = false;
+        }
+        const postRoute = parseRoute(instagramHttpUrl(
+          anchor.getAttribute("href") || anchor.href,
+          route.pageUrl
+        ));
+        const shortcode = postRoute.shortcode;
+        const mediaId = mediaIdFromShortcode(shortcode);
+        const membership = safeCollectionMembership({
+          type: "post",
+          id: shortcode,
+          owner: route.username
+        });
+        if (!carousel || !mediaId || visitedPosts.has(shortcode) || found.has(
+          `identity:${mediaIdentityForCollection({}, membership, 2)}`
+        )) {
+          continue;
+        }
+        visitedPosts.add(shortcode);
+        const endpoint = new URL(
+          `/api/v1/media/${encodeURIComponent(mediaId)}/info/`,
+          route.pageUrl
+        );
+        const fetched = await fetchInstagramJson(
+          endpoint.href,
+          "profile-carousel",
+          false,
+          EXACT_FETCH_TIMEOUT_MS
+        );
+        if (!fetched) {
+          continue;
+        }
+        for (const item of feedPageFrom(fetched.value).items) {
+          if (objectIdentifier(item) === shortcode || objectId(item) === mediaId) {
+            addProfilePost(item, fetched.url, route.username);
+          }
+        }
+      }
+    }
+
     function profilePk() {
       return profilePks.values().next().value || "";
     }
@@ -2647,6 +2708,7 @@
     if (route.kind === "profile") {
       const pk = await discoverProfilePk();
       await collectProfileFeed(pk);
+      await collectProfileGridCarousels();
       processProfileGridDom();
       if (settings.includeStories || settings.includeHighlights) {
         await collectProfileStoriesAndHighlights(pk);

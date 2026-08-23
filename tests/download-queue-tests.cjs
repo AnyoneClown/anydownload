@@ -105,6 +105,7 @@ const firstBatch = Queue.enqueueBatch(empty, [
   saveAs: true
 });
 assert.equal(firstBatch.accepted, 2);
+assert.deepEqual(firstBatch.acceptedIndexes, [0, 2]);
 assert.equal(firstBatch.rejected.length, 1);
 assert.equal(firstBatch.rejected[0].index, 1);
 assert.equal(empty.jobs.length, 0, "Transitions must not mutate the input state");

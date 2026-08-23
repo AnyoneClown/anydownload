@@ -507,7 +507,7 @@
     const state = cloneState(inputState, now);
     const rejected = [];
     if (!Array.isArray(items)) {
-      return { state, jobId: null, accepted: 0, rejected: [{ index: -1, error: "Items must be an array." }] };
+      return { state, jobId: null, accepted: 0, acceptedIndexes: [], rejected: [{ index: -1, error: "Items must be an array." }] };
     }
     const capacity = state.jobs.length >= MAX_STORED_JOBS
       ? 0
@@ -539,6 +539,7 @@
       }
       totalUrlLength += result.value.length;
       acceptedItems.push({
+        originalIndex: index,
         url: result.value,
         filename: boundedString(read(input, "filename", ""), MAX_FILENAME_LENGTH, "")
       });
@@ -551,7 +552,7 @@
       });
     }
     if (!acceptedItems.length) {
-      return { state, jobId: null, accepted: 0, rejected };
+      return { state, jobId: null, accepted: 0, acceptedIndexes: [], rejected };
     }
 
     const usedIds = allUsedIds(state);
@@ -588,7 +589,13 @@
       tasks
     });
     addStat(state, "enqueued", tasks.length, now);
-    return { state, jobId, accepted: tasks.length, rejected };
+    return {
+      state,
+      jobId,
+      accepted: tasks.length,
+      acceptedIndexes: acceptedItems.map((item) => item.originalIndex),
+      rejected
+    };
   }
 
   function locateTask(state, taskId) {

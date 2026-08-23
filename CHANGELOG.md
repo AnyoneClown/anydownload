@@ -4,6 +4,26 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-08-23
+
+### Added
+
+- A bounded background tracker that stores the current URL, folder, filename template, filters, matching rules, pagination strategy, and alert preferences; requests exact-site access; baselines existing matches by default; and sends only unseen matches to the durable download queue.
+- Include/exclude text, newline-separated `*`/`?` URL patterns, a 1–100 per-check download cap, and incremental static pagination through either a same-origin Next link or a same-origin `{page}` URL template for up to ten pages.
+- Optional system notifications for newly queued matches and tracker errors. Clicking a tracker notification opens the Tracking dashboard.
+- Reliability controls with bounded exponential retry delays for failures and rate limits, `Retry-After` handling, consecutive-error state, and automatic pausing when site permission is removed or authentication repeatedly fails.
+- Compact tracker controls for interval selection, optional initial downloads, matching, pagination, alerts, live status, manual checks, pause/resume, and removal.
+- A dedicated responsive **Tracking** dashboard, linked from the manager and Downloads, with all-tracker statistics, search/status filters, saved matching and pagination details, per-run activity history, reliability state, individual run/pause/remove actions, source-page links, and pause/resume-all controls.
+
+### Fixed
+
+- Instagram profile-grid carousels now request the exact post when the profile feed API is unavailable, preserving every ordered photo or direct video instead of only the visible cover.
+
+### Security and boundaries
+
+- Tracker requests reuse the normal browser session without reading or storing cookie values, stay on the granted origin, time out after 15 seconds, reject non-HTML/oversized responses, and retain compact media fingerprints instead of page documents.
+- Pagination remains same-origin, sequential, user-configured, and capped. The MVP does not run page JavaScript, press **More**, replay AJAX requests, crawl detail pages, track private windows, or assemble `blob:`, HLS, or DASH media.
+
 ## [1.10.0] - 2026-08-13
 
 ### Added
