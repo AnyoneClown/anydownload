@@ -92,6 +92,23 @@ assert.equal(Filters.imageFileType({ url: "https://cdn.test/no-extension", mimeT
 assert.equal(Filters.imageFileType({ url: "data:video/ogg;base64,AA==" }), "ogv");
 assert.equal(Filters.imageFileType({ url: "https://cdn.test/file.bmp" }), "unknown");
 assert.equal(Filters.imageFileType(null), "unknown");
+const mutableType = { url: "https://cdn.test/photo.jpg" };
+assert.equal(Filters.imageFileType(mutableType), "jpeg");
+mutableType.url = "https://cdn.test/photo.webp";
+assert.equal(
+  Filters.imageFileType(mutableType),
+  "webp",
+  "Cached file types must invalidate when media metadata changes"
+);
+
+const mutableNormalizedFilters = Filters.normalizeFilters({ format: "webp" });
+assert.equal(Filters.normalizeFilters(mutableNormalizedFilters).format, "webp");
+mutableNormalizedFilters.format = "PNG";
+assert.equal(
+  Filters.normalizeFilters(mutableNormalizedFilters).format,
+  "png",
+  "Normalized-filter caching must not retain a stale mutated value"
+);
 
 const normalPhoto = {
   url: "https://gallery.test/holidays/sunset-001.webp",

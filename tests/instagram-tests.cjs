@@ -501,6 +501,57 @@ async function run() {
     ]);
   }
 
+  // Independent visible-grid carousel lookups run with bounded concurrency,
+  // while results remain in the source-anchor order even when responses finish
+  // out of order.
+  {
+    const shortcodes = ["PARCAR001", "PARCAR002", "PARCAR003"];
+    let activeRequests = 0;
+    let maximumActiveRequests = 0;
+    const elements = shortcodes.map((shortcode, index) => fakeDomElement("a", {
+      attributes: { href: `/alice/p/${shortcode}/` },
+      children: [
+        fakeDomElement("img", {
+          attributes: { src: `https://scontent.cdninstagram.com/parallel-cover-${index + 1}.jpg` },
+          width: 1080,
+          height: 1350
+        }),
+        fakeDomElement("svg", { attributes: { "aria-label": "Carousel" } })
+      ]
+    }));
+    const result = await scan("https://www.instagram.com/alice/", {
+      scripts: [script({ data: { user: { pk: "42", username: "alice" } } })],
+      elements
+    }, {}, async (url) => {
+      const parsed = new URL(url);
+      if (parsed.pathname === "/api/v1/feed/user/42/") {
+        return jsonResponse(url, { items: [], more_available: false });
+      }
+      const shortcodeIndex = shortcodes.findIndex((shortcode) =>
+        parsed.pathname === `/api/v1/media/${instagramMediaIdFromShortcode(shortcode)}/info/`
+      );
+      assert.ok(shortcodeIndex >= 0, `Unexpected Instagram request: ${url}`);
+      activeRequests += 1;
+      maximumActiveRequests = Math.max(maximumActiveRequests, activeRequests);
+      await new Promise((resolve) => setTimeout(resolve, (shortcodes.length - shortcodeIndex) * 5));
+      activeRequests -= 1;
+      const shortcode = shortcodes[shortcodeIndex];
+      return jsonResponse(url, { items: [{
+        code: shortcode,
+        user: { username: "alice" },
+        carousel_media: [
+          imageNode(`parallel-${shortcodeIndex}-1`, `https://scontent.cdninstagram.com/parallel-${shortcodeIndex + 1}-1.jpg`),
+          imageNode(`parallel-${shortcodeIndex}-2`, `https://scontent.cdninstagram.com/parallel-${shortcodeIndex + 1}-2.jpg`)
+        ]
+      }] });
+    });
+    assert.equal(maximumActiveRequests, 3);
+    assert.deepEqual(result.images.map((item) => item.url), shortcodes.flatMap((_shortcode, index) => [
+      `https://scontent.cdninstagram.com/parallel-${index + 1}-1.jpg`,
+      `https://scontent.cdninstagram.com/parallel-${index + 1}-2.jpg`
+    ]));
+  }
+
   // A profile item keeps a stable post/slot identity when Instagram rotates
   // the signed CDN URL that backs the same media.
   {
@@ -1196,6 +1247,33 @@ async function run() {
       "https://scontent.cdninstagram.com/highlight-1.jpg",
       "https://scontent.cdninstagram.com/highlight-2.jpg"
     ]);
+  }
+
+  // Unrelated inline JavaScript is ignored before byte accounting and JSON
+  // balancing, so a large application bundle cannot crowd out a later compact
+  // hydration payload.
+  {
+    const carousel = {
+      shortcode: "FASTJSON1",
+      owner: { username: "alice" },
+      edge_sidecar_to_children: {
+        edges: [{ node: imageNode(
+          "fast-json-1",
+          "https://scontent.cdninstagram.com/fast-json.jpg"
+        ) }]
+      }
+    };
+    const irrelevantBundle = "function helper(){return {feature:true,retries:3};}\n".repeat(600);
+    const result = await scan("https://www.instagram.com/p/FASTJSON1/", {
+      scripts: [
+        script(irrelevantBundle, "text/javascript", true),
+        script({ graphql: { shortcode_media: carousel } })
+      ]
+    }, { maxTotalDocumentBytes: 16384 });
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://scontent.cdninstagram.com/fast-json.jpg"
+    ]);
+    assert.ok(!result.warnings.some((warning) => /response-size safety limit/i.test(warning)));
   }
 
   // JSON assignment/callback wrappers are parsed as data, never evaluated.

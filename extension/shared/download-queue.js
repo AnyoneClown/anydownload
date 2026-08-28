@@ -28,7 +28,13 @@
     "cancelled"
   ]);
   const ACTIVE_STATUSES = new Set(["starting", "in_progress"]);
+  const normalizedStates = new WeakSet();
   let generatedIdSequence = 0;
+
+  function markNormalizedState(state) {
+    normalizedStates.add(state);
+    return state;
+  }
 
   function isRecord(value) {
     return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -162,7 +168,7 @@
 
   function emptyState(input) {
     const now = resolveNow(input);
-    return {
+    return markNormalizedState({
       schemaVersion: SCHEMA_VERSION,
       jobs: [],
       history: [],
@@ -170,7 +176,7 @@
         lifetime: emptyCounter(),
         today: { date: dayKey(now), ...emptyCounter() }
       }
-    };
+    });
   }
 
   function validateUrl(value) {
@@ -486,11 +492,34 @@
     } else {
       stats = rebuildStats(jobs, currentDay);
     }
-    return { schemaVersion: SCHEMA_VERSION, jobs, history, stats };
+    return markNormalizedState({ schemaVersion: SCHEMA_VERSION, jobs, history, stats });
+  }
+
+  function cloneNormalizedState(state, now) {
+    const cloned = markNormalizedState({
+      schemaVersion: SCHEMA_VERSION,
+      jobs: state.jobs.map((job) => ({
+        ...job,
+        tasks: job.tasks.map((task) => ({ ...task }))
+      })),
+      history: state.history.map((item) => ({ ...item })),
+      stats: {
+        lifetime: { ...state.stats.lifetime },
+        today: { ...state.stats.today }
+      }
+    });
+    rollToday(cloned, now);
+    return cloned;
   }
 
   function cloneState(state, now) {
-    return hydrate(state, { now, recoverInFlight: false });
+    // States produced by this model are already bounded and normalized. A
+    // structural copy preserves pure transitions without reparsing every URL
+    // in a large queue. External or restored values still take the defensive
+    // hydration path below.
+    return normalizedStates.has(state)
+      ? cloneNormalizedState(state, now)
+      : hydrate(state, { now, recoverInFlight: false });
   }
 
   function rollToday(state, now) {
@@ -1233,9 +1262,9 @@
     return { state, removed };
   }
 
-  function progressSummaryForJob(job) {
-    const summary = {
-      total: job.tasks.length,
+  function emptyProgressSummary() {
+    return {
+      total: 0,
       queued: 0,
       starting: 0,
       in_progress: 0,
@@ -1249,11 +1278,16 @@
       totalBytes: 0,
       percent: 0
     };
-    for (const task of job.tasks) {
-      summary[task.status] += 1;
-      summary.bytesReceived += task.bytesReceived;
-      summary.totalBytes += task.totalBytes;
-    }
+  }
+
+  function addTaskProgress(summary, task) {
+    summary.total += 1;
+    summary[task.status] += 1;
+    summary.bytesReceived += task.bytesReceived;
+    summary.totalBytes += task.totalBytes;
+  }
+
+  function finishProgressSummary(summary) {
     summary.active = summary.starting + summary.in_progress;
     summary.finished = summary.complete + summary.interrupted + summary.cancelled;
     if (summary.totalBytes > 0) {
@@ -1264,15 +1298,33 @@
     return summary;
   }
 
+  function progressSummaryForJob(job) {
+    const summary = emptyProgressSummary();
+    for (const task of job.tasks) {
+      addTaskProgress(summary, task);
+    }
+    return finishProgressSummary(summary);
+  }
+
   function progressSummary(inputState, jobId, options) {
     const now = resolveNow(read(options, "now", undefined));
-    const state = cloneState(inputState, now);
+    // Summaries are read-only. Reuse model-owned state directly and normalize
+    // only values that entered through the public API.
+    const state = normalizedStates.has(inputState)
+      ? inputState
+      : hydrate(inputState, { now, recoverInFlight: false });
     const safeJobId = safeId(jobId);
     if (safeJobId) {
       const job = state.jobs.find((candidate) => candidate.id === safeJobId);
       return job ? progressSummaryForJob(job) : null;
     }
-    return progressSummaryForJob({ tasks: state.jobs.flatMap((job) => job.tasks) });
+    const summary = emptyProgressSummary();
+    for (const job of state.jobs) {
+      for (const task of job.tasks) {
+        addTaskProgress(summary, task);
+      }
+    }
+    return finishProgressSummary(summary);
   }
 
   const api = Object.freeze({

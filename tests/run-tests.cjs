@@ -351,6 +351,7 @@ assert.match(
 );
 assert.match(popupJs, /runtime\.getURL\("history\/history\.html"\)/);
 assert.match(popupJs, /type:\s*"GET_DOWNLOAD_DASHBOARD"/);
+assert.match(popupJs, /summaryOnly:\s*true/);
 assert.match(popupJs, /elements\["archive-footer-button"\]\.addEventListener\("click", downloadSelectedArchive\)/);
 assert.match(popupJs, /elements\["download-button"\]\.addEventListener\("click", downloadSelectedImages\)/);
 assert.match(popupJs, /function hostPermissionPatternsForImages\(images\)/);

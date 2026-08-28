@@ -28,6 +28,7 @@ function copy(value) {
 function storageArea(initial = {}, options = {}) {
   const data = copy(initial);
   const setFailures = Array.isArray(options.setFailures) ? options.setFailures : [];
+  let setCallCount = 0;
   return {
     async get(keys) {
       if (keys == null) {
@@ -52,6 +53,7 @@ function storageArea(initial = {}, options = {}) {
       return result;
     },
     async set(values) {
+      setCallCount += 1;
       const failureIndex = setFailures.findIndex((failure) =>
         typeof failure.predicate !== "function" || failure.predicate(copy(values))
       );
@@ -70,6 +72,9 @@ function storageArea(initial = {}, options = {}) {
     },
     dump() {
       return copy(data);
+    },
+    get setCallCount() {
+      return setCallCount;
     }
   };
 }
@@ -333,9 +338,9 @@ function createHarness(options = {}) {
     for (const [key, value] of Object.entries(delta)) {
       change[key] = { current: value };
     }
-    for (const listener of downloadChangeListeners) {
-      listener(copy(change));
-    }
+    await Promise.all(downloadChangeListeners.map((listener) =>
+      listener(copy(change))
+    ));
   }
 
   return {
@@ -360,6 +365,37 @@ function createHarness(options = {}) {
       startupListeners.forEach((listener) => listener());
     }
   };
+}
+
+async function testEmptyQueueReadsDoNotWriteStorage() {
+  const harness = createHarness();
+  const normal = await harness.send({
+    type: "GET_DOWNLOAD_DASHBOARD",
+    incognito: false
+  });
+  const privateDashboard = await harness.send({
+    type: "GET_DOWNLOAD_DASHBOARD",
+    incognito: true
+  });
+  const lightweight = await harness.send({
+    type: "GET_DOWNLOAD_DASHBOARD",
+    incognito: false,
+    summaryOnly: true
+  });
+  assert.equal(normal.snapshot.summary.total, 0);
+  assert.equal(privateDashboard.snapshot.summary.total, 0);
+  assert.deepEqual(Object.keys(lightweight.snapshot), ["summary"]);
+  assert.equal(lightweight.snapshot.summary.total, 0);
+  assert.equal(
+    harness.local.setCallCount,
+    0,
+    "Reading an unchanged empty queue must not create a durable storage write"
+  );
+  assert.equal(
+    harness.session.setCallCount,
+    0,
+    "Reading an unchanged private queue must not create a session storage write"
+  );
 }
 
 async function testQueueConcurrencyProgressAndStatistics() {
@@ -1407,6 +1443,48 @@ async function testBulkRetryLeavesCancelledTasksAlone() {
   assert.equal(tasks.find((task) => task.id === otherCancelledTaskId).status, "cancelled");
 }
 
+async function testProgressEventsAvoidDurableWriteAmplification() {
+  const harness = createHarness();
+  await harness.send({
+    type: "DOWNLOAD_BATCH",
+    folder: "AnyDownload/progress-writes",
+    items: [{
+      url: "https://progress.example/photo.jpg",
+      filename: "photo.jpg"
+    }]
+  });
+
+  const writesBeforeProgress = harness.local.setCallCount;
+  await harness.emitDownloadChange(1, {
+    bytesReceived: 512,
+    totalBytes: 4096
+  });
+  assert.equal(
+    harness.local.setCallCount,
+    writesBeforeProgress,
+    "A byte-only progress event must not rewrite the full durable queue"
+  );
+  assert.equal(
+    harness.local.dump()[QUEUE_STORAGE_KEY].jobs[0].tasks[0].bytesReceived,
+    0,
+    "Transient progress can remain in memory until reconciliation"
+  );
+
+  await harness.emitDownloadChange(1, {
+    state: "complete",
+    bytesReceived: 4096,
+    totalBytes: 4096
+  });
+  assert.ok(
+    harness.local.setCallCount > writesBeforeProgress,
+    "A terminal event must still persist queue and ledger state immediately"
+  );
+  assert.equal(
+    harness.local.dump()[QUEUE_STORAGE_KEY].jobs[0].tasks[0].bytesReceived,
+    4096
+  );
+}
+
 async function testCompletedDownloadLedgerAndStatusLookup() {
   const harness = createHarness();
   const queued = await harness.send({
@@ -1474,6 +1552,7 @@ async function testCompletedDownloadLedgerAndStatusLookup() {
 }
 
 (async () => {
+  await testEmptyQueueReadsDoNotWriteStorage();
   await testQueueConcurrencyProgressAndStatistics();
   await testDirectVideoSingleAndBulkPassthrough();
   await testYouTubeProviderReferencesStayDurableAndRefreshOnRetry();
@@ -1489,6 +1568,7 @@ async function testCompletedDownloadLedgerAndStatusLookup() {
   await testFinishedDetailsMakeRoomWithoutLosingHistory();
   await testBulkControlsAtQueueLimit();
   await testBulkRetryLeavesCancelledTasksAlone();
+  await testProgressEventsAvoidDurableWriteAmplification();
   await testCompletedDownloadLedgerAndStatusLookup();
   console.log("All background queue integration checks passed.");
 })().catch((error) => {

@@ -45,6 +45,7 @@ class FakeElement {
     this.hidden = false;
     this.listeners = new Map();
     this.max = 1;
+    this.replaceCount = 0;
     this.textContent = "";
     this.title = "";
     this.type = "";
@@ -66,6 +67,7 @@ class FakeElement {
   }
 
   replaceChildren(...children) {
+    this.replaceCount += 1;
     this.children = [];
     this.append(...children);
   }
@@ -287,6 +289,22 @@ async function exerciseRetryControls() {
   assert.ok(failedButtons.includes("Retry failed"));
 }
 
+async function exerciseUnchangedRefreshSkipsDomRebuild() {
+  const page = await loadHistoryPage({
+    snapshot: emptySnapshot(),
+    tabs: { async getCurrent() { return { incognito: false }; } },
+    downloads: { async showDefaultFolder() {} }
+  });
+  const jobList = page.document.getElementById("job-list");
+  assert.equal(jobList.replaceCount, 1);
+  await page.document.getElementById("refresh-button").dispatch("click");
+  assert.equal(
+    jobList.replaceCount,
+    1,
+    "Polling an unchanged dashboard must not rebuild its job DOM"
+  );
+}
+
 async function exerciseDownloadsApiFailures() {
   const snapshot = emptySnapshot({
     summary: { total: 1, complete: 1 },
@@ -341,6 +359,7 @@ Promise.resolve()
   .then(exercisePrivateContextAndStats)
   .then(exerciseWindowContextFallback)
   .then(exerciseRetryControls)
+  .then(exerciseUnchangedRefreshSkipsDomRebuild)
   .then(exerciseDownloadsApiFailures)
   .then(() => {
     console.log("All download dashboard page checks passed.");

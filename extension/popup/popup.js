@@ -393,6 +393,7 @@
     "utm_[a-z0-9_]+|fbclid|gclid|dclid|_?cb|cache(?:buster)?|timestamp",
     ")$"
   ].join(""), "i");
+  const mediaIdentityCache = new WeakMap();
 
   function normalizedMediaIdentity(value) {
     return String(value == null ? "" : value)
@@ -402,38 +403,58 @@
   }
 
   function mediaIdentityKey(image) {
+    const cacheable = Boolean(image) && (typeof image === "object" || typeof image === "function");
     const explicit = normalizedMediaIdentity(image && image.identityKey);
+    const cached = cacheable ? mediaIdentityCache.get(image) : null;
     if (explicit) {
-      return `identity:${explicit}`;
+      if (cached && cached.identityKey === explicit) {
+        return cached.key;
+      }
+      const key = `identity:${explicit}`;
+      if (cacheable) {
+        mediaIdentityCache.set(image, { identityKey: explicit, url: "", key });
+      }
+      return key;
     }
+
     const value = String(image && image.url || "");
+    if (cached && !cached.identityKey && cached.url === value) {
+      return cached.key;
+    }
+
+    let key;
     if (!value || /^data:/i.test(value)) {
-      return `url:${value}`;
-    }
-    try {
-      const parsed = new URL(value);
-      const stableParameters = [];
-      for (const [name, parameterValue] of parsed.searchParams) {
-        // Signed CDN URLs often rotate these credentials while continuing to
-        // address the same media path. Keep all transform/content parameters
-        // intact so distinct responsive or cropped assets stay separate.
-        if (VOLATILE_MEDIA_QUERY_PARAM.test(name)) {
-          continue;
+      key = `url:${value}`;
+    } else {
+      try {
+        const parsed = new URL(value);
+        const stableParameters = [];
+        for (const [name, parameterValue] of parsed.searchParams) {
+          // Signed CDN URLs often rotate these credentials while continuing to
+          // address the same media path. Keep all transform/content parameters
+          // intact so distinct responsive or cropped assets stay separate.
+          if (VOLATILE_MEDIA_QUERY_PARAM.test(name)) {
+            continue;
+          }
+          stableParameters.push([name, parameterValue]);
         }
-        stableParameters.push([name, parameterValue]);
+        stableParameters.sort(([leftName, leftValue], [rightName, rightValue]) =>
+          leftName.localeCompare(rightName) || leftValue.localeCompare(rightValue)
+        );
+        parsed.search = "";
+        for (const [name, parameterValue] of stableParameters) {
+          parsed.searchParams.append(name, parameterValue);
+        }
+        parsed.hash = "";
+        key = `url:${parsed.href}`;
+      } catch (_error) {
+        key = `url:${value}`;
       }
-      stableParameters.sort(([leftName, leftValue], [rightName, rightValue]) =>
-        leftName.localeCompare(rightName) || leftValue.localeCompare(rightValue)
-      );
-      parsed.search = "";
-      for (const [name, parameterValue] of stableParameters) {
-        parsed.searchParams.append(name, parameterValue);
-      }
-      parsed.hash = "";
-      return `url:${parsed.href}`;
-    } catch (_error) {
-      return `url:${value}`;
     }
+    if (cacheable) {
+      mediaIdentityCache.set(image, { identityKey: "", url: value, key });
+    }
+    return key;
   }
 
   function mergeMediaRecord(existing, incoming) {
@@ -627,6 +648,7 @@
   const LIVE_RETRY_INTERVAL_MS = 4000;
   const LIVE_FORCE_SCAN_MS = 12000;
   const SIDEBAR_SCAN_DEBOUNCE_MS = 140;
+  const FILTER_RENDER_DEBOUNCE_MS = 90;
   const SIDEBAR_ALL_URLS_PERMISSION = Object.freeze({ origins: ["<all_urls>"] });
   const launchUrl = globalScope.location && globalScope.location.href;
   const launchSourceTabId = sourceTabIdFromUrl(launchUrl);
@@ -645,9 +667,40 @@
     document.documentElement.classList.add("responsive-surface");
   }
 
+  let filenamePreviewsDirty = true;
+  let filenamePreviewDateKey = "";
+  let filenamePreviewTemplateValue = "";
+  let filterRenderTimer = null;
+
+  class TrackedSelectionSet extends Set {
+    add(value) {
+      const existed = this.has(value);
+      super.add(value);
+      if (!existed) {
+        markFilenamePreviewsDirty();
+      }
+      return this;
+    }
+
+    delete(value) {
+      const deleted = super.delete(value);
+      if (deleted) {
+        markFilenamePreviewsDirty();
+      }
+      return deleted;
+    }
+
+    clear() {
+      if (this.size) {
+        super.clear();
+        markFilenamePreviewsDirty();
+      }
+    }
+  }
+
   const state = {
     images: [],
-    selected: new Set(),
+    selected: new TrackedSelectionSet(),
     scanWarnings: [],
     busy: false,
     hasStoredFolder: false,
@@ -677,6 +730,7 @@
   };
 
   const elements = {};
+  const ignoredKeyByImage = new WeakMap();
   const renderedMetaNodes = new Map();
   const renderedNameNodes = new Map();
   const visibleDimensionRows = new Map();
@@ -685,6 +739,8 @@
   let downloadStatusGeneration = 0;
   let downloadStatusRefreshTimer = null;
   let ignoreWriteQueue = Promise.resolve();
+  let indexedImages = null;
+  let imageByUrl = new Map();
   let liveCaptureTimer = null;
   let liveCaptureGeneration = 0;
   let liveFingerprint = "";
@@ -700,6 +756,14 @@
   let sidebarFollowRequest = null;
   let sidebarFollowRunning = false;
   let smartFilterRefreshTimer = null;
+
+  function markFilenamePreviewsDirty() {
+    filenamePreviewsDirty = true;
+  }
+
+  function filenamePreviewDateKeyFor(date) {
+    return [date.getFullYear(), date.getMonth() + 1, date.getDate()].join("-");
+  }
 
   const dimensionProbeScheduler = createDimensionProbeScheduler({
     maxConcurrency: MAX_DIMENSION_PROBE_CONCURRENCY,
@@ -1335,14 +1399,23 @@
       });
     }
     state.filenamePreviewByUrl = previews;
+    filenamePreviewsDirty = false;
+    filenamePreviewTemplateValue = elements["filename-template-input"].value;
+    filenamePreviewDateKey = filenamePreviewDateKeyFor(date);
     return previews;
   }
 
   function updateFilenameTemplateUi() {
     const result = filenameTemplateStatus();
     const date = new Date();
-    const previews = rebuildFilenamePreviews(result, date);
-    const sample = selectedDownloadableImages()[0] ||
+    const currentTemplateValue = elements["filename-template-input"].value;
+    const currentDateKey = filenamePreviewDateKeyFor(date);
+    const previews = filenamePreviewsDirty ||
+      filenamePreviewTemplateValue !== currentTemplateValue ||
+      filenamePreviewDateKey !== currentDateKey
+      ? rebuildFilenamePreviews(result, date)
+      : state.filenamePreviewByUrl;
+    const sample = firstSelectedDownloadableImage() ||
       state.images.find((image) => !isImageIgnored(image)) || {
       url: "https://example.invalid/image-0001.jpg",
       width: 1920,
@@ -1369,6 +1442,7 @@
   }
 
   function refreshRenderedFilenamePreviews() {
+    markFilenamePreviewsDirty();
     updateFilenameTemplateUi();
     for (const [url, records] of renderedNameNodes) {
       const image = currentImageForUrl(url);
@@ -1429,7 +1503,8 @@
     try {
       const response = await browser.runtime.sendMessage({
         type: "GET_DOWNLOAD_DASHBOARD",
-        incognito: state.incognito
+        incognito: state.incognito,
+        summaryOnly: true
       });
       if (generation !== queueBadgeGeneration) {
         return;
@@ -1553,6 +1628,7 @@
 
   function resetSidebarPageState(label, notice, noticeType) {
     state.images = [];
+    markFilenamePreviewsDirty();
     state.selected.clear();
     state.explicitRedownloads.clear();
     downloadStatusGeneration += 1;
@@ -1782,7 +1858,15 @@
   }
 
   function ignoredKey(image) {
-    return Core.ignoreKeyForUrl(image && image.url);
+    if (!image || typeof image !== "object") {
+      return "";
+    }
+    if (ignoredKeyByImage.has(image)) {
+      return ignoredKeyByImage.get(image);
+    }
+    const key = Core.ignoreKeyForUrl(image.url);
+    ignoredKeyByImage.set(image, key);
+    return key;
   }
 
   function isImageIgnored(image) {
@@ -2398,9 +2482,22 @@
     );
   }
 
+  function firstSelectedDownloadableImage() {
+    return state.images.find((image) =>
+      state.selected.has(image.url) &&
+      imageCanBeSelected(image) &&
+      !isImageIgnored(image) &&
+      Filters.matchesSmartFilters(image, state.smartFilters) &&
+      imageMatchesInstagramCollectionFilter(image)
+    );
+  }
+
   function friendlyFilename(image) {
+    if (state.filenamePreviewByUrl.has(image.url)) {
+      return state.filenamePreviewByUrl.get(image.url);
+    }
     const index = Math.max(0, state.images.indexOf(image));
-    return state.filenamePreviewByUrl.get(image.url) || baseFilenameForMedia(image, index);
+    return baseFilenameForMedia(image, index);
   }
 
   function validPixelDimension(value) {
@@ -2411,7 +2508,11 @@
   }
 
   function currentImageForUrl(url) {
-    return state.images.find((image) => image.url === url) || null;
+    if (indexedImages !== state.images) {
+      indexedImages = state.images;
+      imageByUrl = new Map(state.images.map((image) => [image.url, image]));
+    }
+    return imageByUrl.get(url) || null;
   }
 
   function applyMeasuredDimensions(image, width, height) {
@@ -2420,6 +2521,9 @@
     if (!width || !height) {
       image.dimensionStatus = "unavailable";
       return false;
+    }
+    if (image.width !== width || image.height !== height) {
+      markFilenamePreviewsDirty();
     }
     image.width = width;
     image.height = height;
@@ -2575,7 +2679,7 @@
     updateImageMetas(image.url);
   }
 
-  function updateSummary() {
+  function updateSummary(visibleImages) {
     const total = state.images.length;
     const ignoredCount = state.images.filter(isImageIgnored).length;
     const storedIgnoredCount = state.ignoredKeys.size;
@@ -2589,7 +2693,7 @@
     const selectedItems = selectedDownloadableImages();
     const selected = selectedItems.length;
     const selectedHasVideo = selectedItems.some((item) => mediaTypeFor(item) === "video");
-    const visible = filteredImages();
+    const visible = Array.isArray(visibleImages) ? visibleImages : filteredImages();
     const hasFilter = Boolean(elements["filter-input"].value.trim()) ||
       (!state.showIgnored && (
         state.hideDownloaded ||
@@ -2829,7 +2933,21 @@
     return row;
   }
 
+  function scheduleFilterRender() {
+    if (filterRenderTimer !== null) {
+      clearTimeout(filterRenderTimer);
+    }
+    filterRenderTimer = setTimeout(() => {
+      filterRenderTimer = null;
+      renderImages();
+    }, FILTER_RENDER_DEBOUNCE_MS);
+  }
+
   function renderImages() {
+    if (filterRenderTimer !== null) {
+      clearTimeout(filterRenderTimer);
+      filterRenderTimer = null;
+    }
     updateFilenameTemplateUi();
     renderGeneration += 1;
     if (thumbnailObserver) {
@@ -2938,7 +3056,7 @@
           : "No downloadable images or direct video files were found in the loaded page.";
       }
       elements["image-list"].appendChild(empty);
-      updateSummary();
+      updateSummary(visible);
       return;
     }
 
@@ -2956,7 +3074,7 @@
         : `Showing the first ${MAX_RENDERED_ROWS.toLocaleString()} matches. All ${visible.length.toLocaleString()} remain available for bulk selection.`;
       elements["image-list"].appendChild(note);
     }
-    updateSummary();
+    updateSummary(visible);
   }
 
   async function scanPage(options) {
@@ -2992,6 +3110,7 @@
     updateOpenWindowButton();
     if (!settings.preserveSelection) {
       state.images = [];
+      markFilenamePreviewsDirty();
       state.selected.clear();
       state.explicitRedownloads.clear();
       downloadStatusGeneration += 1;
@@ -3338,7 +3457,8 @@
       }
 
       state.images = merged.images;
-      state.selected = reconcileScanSelection(
+      markFilenamePreviewsDirty();
+      state.selected = new TrackedSelectionSet(reconcileScanSelection(
         merged.images,
         previousImages,
         previousSelected,
@@ -3346,7 +3466,7 @@
         (image) => !isImageIgnored(image) &&
           Filters.matchesSmartFilters(image, state.smartFilters) &&
           matchesInstagramCollectionFilter(image, state.instagramCollectionFilter)
-      );
+      ));
       state.scanWarnings = merged.warnings;
       state.pageTitle = merged.page.pageTitle || "";
       state.pageUrl = merged.page.pageUrl || "";
@@ -3406,6 +3526,7 @@
       }
       if (!settings.preserveSelection) {
         state.images = [];
+        markFilenamePreviewsDirty();
         state.selected.clear();
         state.explicitRedownloads.clear();
         downloadStatusGeneration += 1;
@@ -4289,7 +4410,7 @@
       elements["sidebar-follow-button"].addEventListener("click", requestSidebarFollowPermission);
     }
     elements["instagram-collections-button"].addEventListener("click", collectInstagramCollections);
-    elements["filter-input"].addEventListener("input", renderImages);
+    elements["filter-input"].addEventListener("input", scheduleFilterRender);
     elements["folder-input"].addEventListener("input", updateSummary);
     elements["filename-template-button"].addEventListener("click", () => {
       const panel = elements["filename-template-panel"];
@@ -4376,7 +4497,7 @@
     });
     elements["clear-ignored-button"].addEventListener("click", restoreAllIgnoredImages);
     elements["select-all-button"].addEventListener("click", () => {
-      state.selected = new Set(filteredImages()
+      state.selected = new TrackedSelectionSet(filteredImages()
         .filter((image) => downloadStatusFor(image) !== "downloaded" && imageCanBeSelected(image))
         .map((image) => image.url));
       state.explicitRedownloads.clear();

@@ -71,6 +71,8 @@
   });
   const NON_PHOTO_TOKEN = /(?:^|[^a-z0-9])(?:analytics|avatar|avatars|badge|badges|beacon|blank|emoji|emojis|emoticon|emoticons|favicon|favicons|gravatar|icon|icons|logo|logos|pixel|pixels|spacer|sprite|sprites|tracker|tracking|transparent)(?:[^a-z0-9]|$)/i;
   const NON_PHOTO_EXTENSION = /\.(?:ico|cur)(?:$|[?#])/i;
+  const fileTypeCache = new WeakMap();
+  const normalizedFiltersCache = new WeakMap();
 
   const DEFAULT_FILTERS = Object.freeze({
     mediaType: "any",
@@ -84,6 +86,10 @@
     } catch (_error) {
       return undefined;
     }
+  }
+
+  function cacheSafeValue(value) {
+    return value === null || !["object", "function"].includes(typeof value);
   }
 
   function normalizeBoolean(value, fallback) {
@@ -141,57 +147,119 @@
   }
 
   function normalizeFilters(filters) {
-    return {
-      mediaType: normalizeMediaType(
-        readProperty(filters, "mediaType"),
-        DEFAULT_FILTERS.mediaType
-      ),
-      photosOnly: normalizeBoolean(
-        readProperty(filters, "photosOnly"),
-        DEFAULT_FILTERS.photosOnly
-      ),
-      format: normalizeFormat(readProperty(filters, "format"), DEFAULT_FILTERS.format)
+    const rawMediaType = readProperty(filters, "mediaType");
+    const rawPhotosOnly = readProperty(filters, "photosOnly");
+    const rawFormat = readProperty(filters, "format");
+    const cacheable = Boolean(filters) && typeof filters === "object" &&
+      [rawMediaType, rawPhotosOnly, rawFormat].every(cacheSafeValue);
+    const cached = cacheable ? normalizedFiltersCache.get(filters) : null;
+    if (
+      cached &&
+      cached.rawMediaType === rawMediaType &&
+      cached.rawPhotosOnly === rawPhotosOnly &&
+      cached.rawFormat === rawFormat
+    ) {
+      return cached.normalized;
+    }
+
+    const normalized = {
+      mediaType: normalizeMediaType(rawMediaType, DEFAULT_FILTERS.mediaType),
+      photosOnly: normalizeBoolean(rawPhotosOnly, DEFAULT_FILTERS.photosOnly),
+      format: normalizeFormat(rawFormat, DEFAULT_FILTERS.format)
     };
+    if (cacheable) {
+      normalizedFiltersCache.set(filters, {
+        rawMediaType,
+        rawPhotosOnly,
+        rawFormat,
+        normalized
+      });
+    }
+    normalizedFiltersCache.set(normalized, {
+      rawMediaType: normalized.mediaType,
+      rawPhotosOnly: normalized.photosOnly,
+      rawFormat: normalized.format,
+      normalized
+    });
+    return normalized;
   }
 
   function imageFileType(image) {
-    for (const key of ["mimeType", "contentType", "type"]) {
-      const directType = normalizeFormat(readProperty(image, key), "");
-      if (directType) {
-        return directType;
+    const rawMimeType = readProperty(image, "mimeType");
+    const rawContentType = readProperty(image, "contentType");
+    const rawType = readProperty(image, "type");
+    const rawUrl = readProperty(image, "url");
+    const cacheable = Boolean(image) && typeof image === "object" &&
+      [rawMimeType, rawContentType, rawType, rawUrl].every(cacheSafeValue);
+    const cached = cacheable ? fileTypeCache.get(image) : null;
+    if (
+      cached &&
+      cached.rawMimeType === rawMimeType &&
+      cached.rawContentType === rawContentType &&
+      cached.rawType === rawType &&
+      cached.rawUrl === rawUrl
+    ) {
+      return cached.result;
+    }
+
+    let result = "";
+    for (const value of [rawMimeType, rawContentType, rawType]) {
+      result = normalizeFormat(value, "");
+      if (result) {
+        break;
       }
     }
 
-    let url = readProperty(image, "url");
-    try {
-      url = String(url == null ? "" : url).trim();
-    } catch (_error) {
-      return "unknown";
-    }
-    if (!url) {
-      return "unknown";
-    }
-
-    const dataMime = url.match(/^data:([^;,]+)/i);
-    if (dataMime) {
-      return normalizeFormat(dataMime[1], "unknown");
+    let url = rawUrl;
+    if (!result) {
+      try {
+        url = String(url == null ? "" : url).trim();
+      } catch (_error) {
+        url = "";
+      }
+      if (!url) {
+        result = "unknown";
+      }
     }
 
-    try {
-      const parsed = new URL(url);
-      for (const key of ["format", "fm"]) {
-        const queryType = normalizeFormat(parsed.searchParams.get(key), "");
-        if (queryType) {
-          return queryType;
+    if (!result) {
+      const dataMime = url.match(/^data:([^;,]+)/i);
+      if (dataMime) {
+        result = normalizeFormat(dataMime[1], "unknown");
+      }
+    }
+
+    if (!result) {
+      try {
+        const parsed = new URL(url);
+        for (const key of ["format", "fm"]) {
+          const queryType = normalizeFormat(parsed.searchParams.get(key), "");
+          if (queryType) {
+            result = queryType;
+            break;
+          }
         }
+        if (!result) {
+          const extension = parsed.pathname.match(/\.([a-z0-9+]+)$/i);
+          result = extension ? normalizeFormat(extension[1], "unknown") : "unknown";
+        }
+      } catch (_error) {
+        const cleanUrl = url.split(/[?#]/, 1)[0];
+        const extension = cleanUrl.match(/\.([a-z0-9+]+)$/i);
+        result = extension ? normalizeFormat(extension[1], "unknown") : "unknown";
       }
-      const extension = parsed.pathname.match(/\.([a-z0-9+]+)$/i);
-      return extension ? normalizeFormat(extension[1], "unknown") : "unknown";
-    } catch (_error) {
-      const cleanUrl = url.split(/[?#]/, 1)[0];
-      const extension = cleanUrl.match(/\.([a-z0-9+]+)$/i);
-      return extension ? normalizeFormat(extension[1], "unknown") : "unknown";
     }
+
+    if (cacheable) {
+      fileTypeCache.set(image, {
+        rawMimeType,
+        rawContentType,
+        rawType,
+        rawUrl,
+        result
+      });
+    }
+    return result;
   }
 
   function imageDimensions(image) {

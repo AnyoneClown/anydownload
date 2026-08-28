@@ -10,6 +10,12 @@ All notable changes to AnyDownload are documented here.
 - Three tracker actions: **Add to review**, **Notify only**, and **Download automatically**. New trackers default to review, while existing tracker records retain automatic-download behavior.
 - A local review inbox on the Tracking dashboard with media previews and individual Approve or Dismiss actions. Approval uses the tracker’s current destination and durable queue; pending signed URLs are refreshed whenever the tracked page exposes them again.
 
+### Changed
+
+- Large durable queues now reuse already-normalized state for transitions and read-only summaries, reconcile native downloads concurrently, avoid unchanged and byte-only storage rewrites, and send lightweight summary-only payloads to the manager badge.
+- Manager filtering and rerendering now cache stable media/filter metadata and filename previews, index current rows by URL, and debounce text-filter DOM rebuilds. Downloads dashboard polling also skips unchanged DOM rebuilds.
+- Instagram collection now skips unrelated inline scripts and link scans, caches repeated carousel/DOM analysis, and fetches independent profile carousels, stories, and highlights with bounded three-request concurrency while preserving source order.
+
 ### Privacy and boundaries
 
 - The normal completed ledger retains at most 5,000 fingerprints and 500 per source website; private-window completion state stays in session storage. Filenames and completion times are retained, but source media URLs are not.

@@ -7,6 +7,7 @@
   const elements = {};
   const expandedJobs = new Set();
   let snapshot = null;
+  let renderedSnapshotSignature = "";
   let pollTimer = null;
   let refreshing = false;
   let privateContext = false;
@@ -96,6 +97,14 @@
   function setError(message) {
     elements["error-banner"].textContent = message || "";
     elements["error-banner"].hidden = !message;
+  }
+
+  function snapshotSignature(value) {
+    try {
+      return JSON.stringify(value);
+    } catch (_error) {
+      return null;
+    }
   }
 
   async function performDownloadsAction(method, args, unsupportedMessage) {
@@ -379,9 +388,14 @@
       if (!response || !response.ok || !response.snapshot) {
         throw new Error(response && response.error || "The download queue did not respond.");
       }
-      snapshot = response.snapshot;
+      const nextSnapshot = response.snapshot;
+      const nextSignature = snapshotSignature(nextSnapshot);
+      snapshot = nextSnapshot;
       setError("");
-      render();
+      if (nextSignature === null || nextSignature !== renderedSnapshotSignature) {
+        renderedSnapshotSignature = nextSignature || "";
+        render();
+      }
     } catch (error) {
       setError(error && error.message ? error.message : String(error));
     } finally {
@@ -405,6 +419,7 @@
         throw new Error(response && response.error || "Firefox could not update the queue.");
       }
       snapshot = response.snapshot || snapshot;
+      renderedSnapshotSignature = snapshotSignature(snapshot) || "";
       render();
       await refresh();
     } catch (error) {

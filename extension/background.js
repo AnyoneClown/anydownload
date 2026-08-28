@@ -19,6 +19,7 @@
   const DownloadQueue = globalThis.ImageDownloaderDownloadQueue;
   const MAX_CONCURRENCY = 5;
   const QUEUE_CONCURRENCY = 3;
+  const QUEUE_RECONCILE_CONCURRENCY = 8;
   const QUEUE_STORAGE_KEY = "downloadQueueState:v1";
   const MAX_ARCHIVE_ITEMS = 2000;
   const MAX_ARCHIVE_ENTRY_BYTES = 64 * 1024 * 1024;
@@ -1570,28 +1571,40 @@
       tasks.map((task) => [task.id, durableQueueTaskSignature(task)])
     );
     let durableChange = false;
-    for (const task of tasks) {
-      try {
-        const matches = await browser.downloads.search({ id: task.downloadId });
-        if (matches && matches[0]) {
-          const snapshot = withoutLocalFilename(matches[0]);
-          if (
-            task.needsReconciliation === true
-            && ["complete", "interrupted", "cancelled"].includes(task.status)
-            && snapshot.state !== task.status
-          ) {
-            continue;
+    let searchCursor = 0;
+
+    async function searchWorker() {
+      while (searchCursor < tasks.length) {
+        const taskIndex = searchCursor;
+        const task = tasks[taskIndex];
+        searchCursor += 1;
+        try {
+          const matches = await browser.downloads.search({ id: task.downloadId });
+          if (matches && matches[0]) {
+            const snapshot = withoutLocalFilename(matches[0]);
+            if (
+              task.needsReconciliation === true
+              && ["complete", "interrupted", "cancelled"].includes(task.status)
+              && snapshot.state !== task.status
+            ) {
+              continue;
+            }
+            snapshots[taskIndex] = snapshot;
+          } else if (markMissing) {
+            missingTasks[taskIndex] = task;
           }
-          snapshots.push(snapshot);
-        } else if (markMissing) {
-          missingTasks.push(task);
+        } catch (_error) {
+          // Transient API failures keep the task intact so it can be reconciled
+          // on a later wake instead of being mistaken for a removed download.
         }
-      } catch (_error) {
-        // Transient API failures keep the task intact so it can be reconciled
-        // on a later wake instead of being mistaken for a removed download.
       }
     }
-    context.state = DownloadQueue.applyDownloadSnapshots(context.state, snapshots);
+
+    await Promise.all(Array.from(
+      { length: Math.min(QUEUE_RECONCILE_CONCURRENCY, tasks.length) },
+      () => searchWorker()
+    ));
+    context.state = DownloadQueue.applyDownloadSnapshots(context.state, snapshots.filter(Boolean));
     for (const job of context.state.jobs) {
       for (const task of job.tasks) {
         const previousSignature = taskSignatures.get(task.id);
@@ -1604,6 +1617,9 @@
       }
     }
     for (const task of missingTasks) {
+      if (!task) {
+        continue;
+      }
       if (["complete", "interrupted", "cancelled"].includes(task.status)) {
         context.state = DownloadQueue.applyDownloadSnapshot(context.state, {
           id: task.downloadId,
@@ -1632,9 +1648,11 @@
     context.state = DownloadQueue.hydrate(stored && stored[QUEUE_STORAGE_KEY], {
       recoverInFlight: true
     });
-    await reconcileQueueLocked(context, true);
-    await recordCompletedLedgerTasksLocked(context);
-    await persistQueueLocked(context);
+    const reconciled = await reconcileQueueLocked(context, true);
+    const ledgerChanged = await recordCompletedLedgerTasksLocked(context);
+    if (reconciled || ledgerChanged || context.dirty) {
+      await persistQueueLocked(context);
+    }
   }
 
   function findQueueTask(state, taskId) {
@@ -1768,9 +1786,8 @@
     }
   }
 
-  function queueDashboardSnapshot(state) {
-    const summary = DownloadQueue.progressSummary(state) || {};
-    const mapSummary = (value) => ({
+  function queueProgressSnapshot(value) {
+    return {
       total: Number(value && value.total) || 0,
       queued: Number(value && value.queued) || 0,
       starting: Number(value && value.starting) || 0,
@@ -1783,8 +1800,11 @@
         (Number(value && value.starting) || 0) +
         (Number(value && value.in_progress) || 0) +
         (Number(value && value.paused) || 0)
-    });
-    const totals = mapSummary(summary);
+    };
+  }
+
+  function queueDashboardSnapshot(state) {
+    const totals = queueProgressSnapshot(DownloadQueue.progressSummary(state));
     const stats = state.stats || {};
     const lifetime = stats.lifetime || {};
     const storedToday = stats.today || {};
@@ -1794,7 +1814,7 @@
       .slice()
       .sort((left, right) => right.createdAt - left.createdAt)
       .map((job) => {
-        const counts = mapSummary(DownloadQueue.progressSummary(state, job.id));
+        const counts = queueProgressSnapshot(DownloadQueue.progressSummary(state, job.id));
         return {
           id: job.id,
           label: job.label,
@@ -2968,13 +2988,36 @@
     return undefined;
   }
 
+  function queueRelevantDownloadChange(change) {
+    return Boolean(change && [
+      "state",
+      "paused",
+      "bytesReceived",
+      "totalBytes",
+      "fileSize",
+      "endTime",
+      "filename",
+      "error"
+    ].some((key) => Object.prototype.hasOwnProperty.call(change, key)));
+  }
+
+  function queueChangeNeedsImmediatePersistence(change) {
+    return Boolean(change && ["state", "paused", "error"].some((key) =>
+      Object.prototype.hasOwnProperty.call(change, key)
+    ));
+  }
+
   async function updateQueueForDownload(incognito, change) {
     return queueOperation(incognito, async (context) => {
       const downloadId = change && change.id;
-      const found = context.state.jobs.some((job) =>
-        job.tasks.some((task) => task.downloadId === downloadId)
-      );
-      if (!found) {
+      let matchedTask = null;
+      for (const job of context.state.jobs) {
+        matchedTask = job.tasks.find((task) => task.downloadId === downloadId) || null;
+        if (matchedTask) {
+          break;
+        }
+      }
+      if (!matchedTask) {
         return false;
       }
       let appliedSnapshot = false;
@@ -2999,6 +3042,21 @@
           withoutLocalFilenameChange(change)
         );
       }
+
+      const terminalMetadata = ["complete", "interrupted", "cancelled"]
+        .includes(matchedTask.status);
+      if (
+        !queueChangeNeedsImmediatePersistence(change) &&
+        !terminalMetadata &&
+        !context.dirty
+      ) {
+        // Byte counters can fire many times per second. Keep them current for
+        // this background lifetime, but avoid rewriting the entire durable
+        // queue for every progress tick. Startup/dashboard reconciliation
+        // restores them after a suspended background context.
+        return true;
+      }
+
       await recordCompletedLedgerTasksLocked(context);
       await pumpQueueLocked(context, true);
       return true;
@@ -3006,7 +3064,12 @@
   }
 
   async function handleQueuedDownloadChange(change) {
-    if (!DownloadQueue || !change || !Number.isInteger(change.id)) {
+    if (
+      !DownloadQueue ||
+      !change ||
+      !Number.isInteger(change.id) ||
+      !queueRelevantDownloadChange(change)
+    ) {
       return;
     }
     if (await updateQueueForDownload(false, change)) {
@@ -3149,8 +3212,17 @@
     });
   }
 
-  async function getDownloadDashboard(incognito) {
+  async function getDownloadDashboard(incognito, options) {
+    const settings = Object.assign({ summaryOnly: false }, options || {});
     return queueOperation(Boolean(incognito), async (context) => {
+      if (settings.summaryOnly) {
+        return {
+          ok: true,
+          snapshot: {
+            summary: queueProgressSnapshot(DownloadQueue.progressSummary(context.state))
+          }
+        };
+      }
       const reconciled = await reconcileQueueLocked(context, true);
       const ledgerChanged = await recordCompletedLedgerTasksLocked(context);
       await pumpQueueLocked(context, reconciled || ledgerChanged);
@@ -3582,7 +3654,9 @@
     }
 
     if (message.type === "GET_DOWNLOAD_DASHBOARD") {
-      return getDownloadDashboard(Boolean(message.incognito)).catch((error) => ({
+      return getDownloadDashboard(Boolean(message.incognito), {
+        summaryOnly: message.summaryOnly === true
+      }).catch((error) => ({
         ok: false,
         error: error && error.message ? error.message : String(error)
       }));

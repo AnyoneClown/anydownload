@@ -291,6 +291,21 @@ assert.deepEqual(hostPermissionPatternsForImages([]), []);
   assert.deepEqual(instagramAccumulated.images.map((image) => image.url), [
     instagramRefreshed.url
   ]);
+
+  const mutable = { url: initial.url };
+  const firstMutableKey = mediaIdentityKey(mutable);
+  mutable.url = differentTransform.url;
+  assert.notEqual(
+    mediaIdentityKey(mutable),
+    firstMutableKey,
+    "The identity cache must invalidate when a record URL changes"
+  );
+  mutable.identityKey = "instagram:post:alice:MUTABLE:1";
+  assert.equal(
+    mediaIdentityKey(mutable),
+    "identity:instagram:post:alice:MUTABLE:1",
+    "An explicit identity added to a cached record must take precedence"
+  );
 }
 
 function createHarness(options = {}) {
