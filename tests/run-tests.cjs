@@ -81,6 +81,7 @@ assert.deepEqual(
     "shared/filters.js",
     "shared/templates.js",
     "shared/tracker.js",
+    "shared/download-ledger.js",
     "shared/download-queue.js",
     "background.js"
   ]
@@ -194,6 +195,7 @@ assert.match(popupCss, /\.folder-toolbar\s*\{[^}]*display:\s*flex;[^}]*flex-wrap
 assert.match(popupCss, /\.folder-options\s*\{[^}]*display:\s*flex;[^}]*flex:\s*1 1 auto;[^}]*flex-wrap:\s*wrap;/s);
 assert.match(popupHtml, /id="ignored-button"[^>]*aria-pressed="false"/);
 assert.match(popupHtml, /id="clear-ignored-button"/);
+assert.match(popupHtml, /id="downloaded-button"[^>]*aria-pressed="false"/);
 assert.match(popupHtml, /src="\.\.\/shared\/collector\.js"/);
 assert.match(popupHtml, /src="\.\.\/shared\/youtube\.js"/);
 assert.match(popupHtml, /src="\.\.\/shared\/filters\.js"/);
@@ -229,7 +231,11 @@ assert.match(popupHtml, /id="smart-filters-button"[^>]*aria-expanded="false"[^>]
 assert.match(popupHtml, /id="tracker-button"[^>]*aria-controls="tracker-panel"[^>]*disabled/);
 assert.match(popupHtml, /id="tracker-panel"[^>]*hidden/);
 assert.match(popupHtml, /id="tracker-download-initial-input"[^>]*type="checkbox"/);
+for (const trackerAction of ["review", "notify", "download"]) {
+  assert.match(popupHtml, new RegExp(`<option value=["']${trackerAction}["']`));
+}
 for (const trackerControlId of [
+  "tracker-action-select",
   "tracker-include-text-input",
   "tracker-exclude-text-input",
   "tracker-include-patterns-input",
@@ -349,6 +355,9 @@ assert.match(popupJs, /elements\["archive-footer-button"\]\.addEventListener\("c
 assert.match(popupJs, /elements\["download-button"\]\.addEventListener\("click", downloadSelectedImages\)/);
 assert.match(popupJs, /function hostPermissionPatternsForImages\(images\)/);
 assert.match(popupJs, /browser\.permissions\.request\(\{ origins \}\)/);
+assert.match(popupJs, /type:\s*"GET_MEDIA_DOWNLOAD_STATUS"/);
+assert.match(popupJs, /downloadStatusFor/);
+assert.match(popupJs, /explicitRedownloads/);
 assert.match(popupJs, /type:\s*"UPSERT_TRACKER"/);
 assert.match(popupJs, /type:\s*"RUN_TRACKER"/);
 assert.match(popupJs, /type:\s*"SET_TRACKER_ENABLED"/);
@@ -440,6 +449,9 @@ assert.match(backgroundJs, /targetElementId/);
 assert.doesNotMatch(backgroundJs, /browser\.action\.onClicked\.addListener/);
 assert.match(backgroundJs, /message\.type === "OPEN_MANAGER_WINDOW"/);
 assert.match(backgroundJs, /const Tracker = globalThis\.AnyDownloadTracker/);
+assert.match(backgroundJs, /const DownloadLedger = globalThis\.AnyDownloadLedger/);
+assert.match(backgroundJs, /GET_MEDIA_DOWNLOAD_STATUS/);
+assert.match(backgroundJs, /TRACKER_REVIEW_ACTION/);
 assert.match(backgroundJs, /browser\.alarms\.onAlarm\.addListener/);
 assert.match(backgroundJs, /credentials:\s*"include"/);
 assert.match(backgroundJs, /Tracker\.extractMediaFromDocument/);
@@ -545,7 +557,9 @@ assert.match(trackingHtml, /<title>AnyDownload — Tracking<\/title>/);
 assert.match(trackingHtml, /id="total-stat"/);
 assert.match(trackingHtml, /id="active-stat"/);
 assert.match(trackingHtml, /id="issues-stat"/);
-assert.match(trackingHtml, /id="queued-stat"/);
+assert.match(trackingHtml, /id="pending-stat"/);
+assert.match(trackingHtml, /id="review-list"[^>]*aria-live="polite"/);
+assert.match(trackingJs, /TRACKER_REVIEW_ACTION/);
 assert.match(trackingHtml, /id="tracker-list"[^>]*aria-live="polite"/);
 assert.match(trackingHtml, /id="pause-all-button"/);
 assert.match(trackingHtml, /id="resume-all-button"/);

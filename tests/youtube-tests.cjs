@@ -118,6 +118,7 @@ assert.equal(YouTube.isYouTubeUrl("javascript:alert(1)"), false);
   assert.equal(video.height, 360);
   assert.equal(video.duration, 213.4);
   assert.equal(video.hasAudio, true);
+  assert.equal(video.identityKey, `youtube:${VIDEO_ID}:18`);
   assert.equal(video.protectedPlaybackMetadata, true);
   assert.match(video.filename, /^A _ useful_ test video - 360p\.mp4$/);
   assert.deepEqual(video.kinds, ["YouTube direct file", "360p video + audio"]);

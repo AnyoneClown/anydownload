@@ -442,6 +442,7 @@ html:not(.responsive-surface) .selection-actions {
 }
 
 .ignored-view-button.active,
+.downloaded-view-button.active,
 .filter-toggle-button.active,
 .tracker-button.active {
   color: var(--brand-ink);
@@ -666,6 +667,24 @@ html:not(.responsive-surface) .selection-actions {
 
 .tracker-interval-field select {
   background: var(--surface-raised);
+}
+
+.tracker-action-field {
+  margin-top: 9px;
+}
+
+.tracker-action-field select {
+  min-height: 30px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  outline: 0;
+  color: var(--ink);
+  background: var(--surface-raised);
+}
+
+.tracker-action-field select:focus {
+  border-color: var(--brand);
 }
 
 .tracker-initial-option {
@@ -893,7 +912,8 @@ html:not(.responsive-surface) .selection-actions {
   font-weight: 680;
 }
 
-.media-type-badge {
+.media-type-badge,
+.download-status-badge {
   display: inline-block;
   margin-left: 6px;
   padding: 2px 5px;
@@ -904,6 +924,30 @@ html:not(.responsive-surface) .selection-actions {
   font-weight: 760;
   letter-spacing: .03em;
   vertical-align: 1px;
+}
+
+.download-status-badge {
+  color: var(--ink-muted);
+  background: var(--surface-subtle);
+}
+
+.download-status-badge.downloaded {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.download-status-badge.queued {
+  color: var(--brand-ink);
+  background: var(--brand-soft);
+}
+
+.download-status-badge.failed {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.image-row.downloaded {
+  border-color: color-mix(in srgb, var(--success) 30%, var(--line));
 }
 
 .image-url {

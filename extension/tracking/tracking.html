@@ -41,10 +41,23 @@
           <small id="issues-detail">No recent errors</small>
         </article>
         <article class="stat-card">
-          <span>Queued last checks</span>
-          <strong id="queued-stat">0</strong>
-          <small id="queued-detail">No new matches queued</small>
+          <span>Pending review</span>
+          <strong id="pending-stat">0</strong>
+          <small id="pending-detail">Review inbox is empty</small>
         </article>
+      </section>
+
+      <section class="card review-card" aria-labelledby="review-heading">
+        <div class="section-heading">
+          <div>
+            <p class="section-label">Approval inbox</p>
+            <h2 id="review-heading">Pending review</h2>
+          </div>
+          <span id="review-count" class="review-count">0 items</span>
+        </div>
+        <p class="review-intro">Approve an item to add it to Downloads, or dismiss it without downloading. Items remain local to this Firefox profile.</p>
+        <div id="review-empty" class="review-empty">No tracker matches are waiting for review.</div>
+        <div id="review-list" class="review-list" aria-live="polite"></div>
       </section>
 
       <section class="card tracker-card" aria-labelledby="trackers-heading">

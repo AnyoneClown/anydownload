@@ -93,7 +93,13 @@ assert.deepEqual(empty, {
 });
 
 const firstBatch = Queue.enqueueBatch(empty, [
-  { url: "https://images.example/one.jpg#preview", filename: "one.jpg" },
+  {
+    url: "https://images.example/one.jpg#preview",
+    filename: "one.jpg",
+    siteKey: "https://gallery.example/page",
+    mediaFingerprint: "0123456789abcdef",
+    mediaType: "image"
+  },
   { url: "javascript:alert(1)", filename: "bad.jpg" },
   { url: "data:image/png;base64,AA==", filename: "embedded.png" }
 ], {
@@ -110,6 +116,9 @@ assert.equal(firstBatch.rejected.length, 1);
 assert.equal(firstBatch.rejected[0].index, 1);
 assert.equal(empty.jobs.length, 0, "Transitions must not mutate the input state");
 assert.equal(firstBatch.state.jobs[0].tasks[0].url, "https://images.example/one.jpg");
+assert.equal(firstBatch.state.jobs[0].tasks[0].siteKey, "https://gallery.example");
+assert.equal(firstBatch.state.jobs[0].tasks[0].mediaFingerprint, "0123456789abcdef");
+assert.equal(firstBatch.state.jobs[0].tasks[0].ledgerRecorded, false);
 assert.equal(firstBatch.state.jobs[0].label.length, 200);
 assert.equal(firstBatch.state.jobs[0].folder.length, 240);
 assert.equal(firstBatch.state.jobs[0].source.length, 500);

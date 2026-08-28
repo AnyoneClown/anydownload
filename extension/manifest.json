@@ -47,6 +47,7 @@
       "shared/filters.js",
       "shared/templates.js",
       "shared/tracker.js",
+      "shared/download-ledger.js",
       "shared/download-queue.js",
       "background.js"
     ]

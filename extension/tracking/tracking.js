@@ -15,16 +15,20 @@
     return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
   }
 
-  function summarizeTrackers(trackers) {
+  function summarizeTrackers(trackers, reviews) {
     const values = Array.isArray(trackers) ? trackers : [];
-    return values.reduce((summary, tracker) => {
-      summary.total += 1;
-      summary.active += tracker && tracker.enabled ? 1 : 0;
-      summary.paused += tracker && !tracker.enabled ? 1 : 0;
-      summary.issues += tracker && tracker.lastError ? 1 : 0;
-      summary.queued += count(tracker && tracker.lastQueued);
-      return summary;
-    }, { total: 0, active: 0, paused: 0, issues: 0, queued: 0 });
+    const summary = values.reduce((result, tracker) => {
+      result.total += 1;
+      result.active += tracker && tracker.enabled ? 1 : 0;
+      result.paused += tracker && !tracker.enabled ? 1 : 0;
+      result.issues += tracker && tracker.lastError ? 1 : 0;
+      result.queued += count(tracker && tracker.lastQueued);
+      result.reviewed += count(tracker && tracker.lastReviewed);
+      result.discovered += count(tracker && tracker.lastDiscovered);
+      return result;
+    }, { total: 0, active: 0, paused: 0, issues: 0, queued: 0, reviewed: 0, discovered: 0, pending: 0 });
+    summary.pending = Array.isArray(reviews) ? reviews.length : 0;
+    return summary;
   }
 
   function trackerStatus(tracker) {
@@ -56,6 +60,8 @@
       tracker && tracker.pageTitle,
       tracker && tracker.url,
       tracker && tracker.folder,
+      tracker && tracker.action,
+      describeAction(tracker),
       tracker && tracker.query,
       tracker && tracker.matching && tracker.matching.includeText,
       tracker && tracker.matching && tracker.matching.excludeText,
@@ -123,6 +129,17 @@
     return parts.filter(Boolean).join(" · ");
   }
 
+  function describeAction(tracker) {
+    const action = tracker && tracker.action;
+    if (action === "review") {
+      return "Add to review";
+    }
+    if (action === "notify") {
+      return "Notify only";
+    }
+    return "Download automatically";
+  }
+
   function describePagination(tracker) {
     const pagination = tracker && tracker.pagination || {};
     if (pagination.mode === "next-link") {
@@ -182,7 +199,9 @@
     const document = root.document;
     const elements = {};
     const busyIds = new Set();
+    const reviewBusyIds = new Set();
     let trackers = [];
+    let reviews = [];
     let maxTrackers = 20;
     let refreshing = false;
     let refreshPending = false;
@@ -202,9 +221,12 @@
         "issues-detail",
         "issues-stat",
         "pause-all-button",
-        "queued-detail",
-        "queued-stat",
+        "pending-detail",
+        "pending-stat",
         "refresh-button",
+        "review-count",
+        "review-empty",
+        "review-list",
         "resume-all-button",
         "search-input",
         "status-filter",
@@ -291,7 +313,7 @@
       if (!tracker || busyIds.has(tracker.id) || globalBusy) {
         return;
       }
-      if (type === "DELETE_TRACKER" && !root.confirm("Remove this background tracker? Its download history will be kept.")) {
+      if (type === "DELETE_TRACKER" && !root.confirm("Remove this background tracker? Its pending review items will be removed; download history will be kept.")) {
         return;
       }
       busyIds.add(tracker.id);
@@ -304,6 +326,7 @@
         }
         if (type === "DELETE_TRACKER") {
           trackers = trackers.filter((item) => item.id !== tracker.id);
+          reviews = reviews.filter((item) => item.trackerId !== tracker.id);
           expandedActivity.delete(tracker.id);
         } else {
           mergeTracker(response.tracker);
@@ -346,6 +369,7 @@
       details.append(
         createDetail("Schedule", intervalLabel(tracker.intervalMinutes)),
         createDetail("Destination", `Downloads/${tracker.folder || ""}`),
+        createDetail("Action", describeAction(tracker)),
         createDetail("Matching", describeMatching(tracker)),
         createDetail("Pagination", describePagination(tracker))
       );
@@ -363,10 +387,15 @@
       }
       const lastRun = tracker.lastRunAt || tracker.lastSuccessAt;
       const pagesChecked = count(tracker.lastPagesChecked) || 1;
+      const actionResult = tracker.action === "review"
+        ? `${count(tracker.lastReviewed).toLocaleString()} added to review · ${count(tracker.pendingReviewCount).toLocaleString()} pending`
+        : tracker.action === "notify"
+          ? `${count(tracker.lastDiscovered).toLocaleString()} notified · nothing queued`
+          : `${count(tracker.lastQueued).toLocaleString()} queued`;
       result.textContent = tracker.lastError
-        ? `Last check ${formatDate(lastRun)} failed: ${tracker.lastError}${reliability.length ? ` · ${reliability.join(" · ")}` : ""}`
+        ? `Last check ${formatDate(lastRun)} reported an issue: ${tracker.lastError}${reliability.length ? ` · ${reliability.join(" · ")}` : ""}`
         : tracker.lastSuccessAt
-          ? `Checked ${formatDate(lastRun)} · ${pagesChecked} page${pagesChecked === 1 ? "" : "s"} · ${count(tracker.lastFound).toLocaleString()} matched · ${count(tracker.lastQueued).toLocaleString()} queued · ${formatDuration(tracker.lastDurationMs)}`
+          ? `Checked ${formatDate(lastRun)} · ${pagesChecked} page${pagesChecked === 1 ? "" : "s"} · ${count(tracker.lastFound).toLocaleString()} matched · ${actionResult} · ${formatDuration(tracker.lastDurationMs)}`
           : "Waiting for the first successful check.";
 
       const actions = document.createElement("div");
@@ -420,7 +449,14 @@
           date.textContent = formatDate(record.startedAt);
           heading.append(activityPill, date);
           const metrics = document.createElement("p");
-          metrics.textContent = `${count(record.pagesChecked)} page${count(record.pagesChecked) === 1 ? "" : "s"} · ${count(record.found)} matched · ${count(record.queued)} queued · ${formatDuration(record.durationMs)} · ${record.reason || "alarm"}`;
+          const actionMetrics = count(record.reviewed)
+            ? `${count(record.reviewed)} reviewed`
+            : count(record.queued)
+              ? `${count(record.queued)} queued`
+              : count(record.discovered)
+                ? `${count(record.discovered)} notified`
+                : "0 acted on";
+          metrics.textContent = `${count(record.pagesChecked)} page${count(record.pagesChecked) === 1 ? "" : "s"} · ${count(record.found)} matched · ${count(record.discovered)} new · ${actionMetrics} · ${formatDuration(record.durationMs)} · ${record.reason || "alarm"}`;
           row.append(heading, metrics);
           if (record.message) {
             const message = document.createElement("p");
@@ -435,6 +471,97 @@
       return card;
     }
 
+    async function performReviewAction(review, action) {
+      if (!review || reviewBusyIds.has(review.id) || globalBusy) {
+        return;
+      }
+      reviewBusyIds.add(review.id);
+      setError("");
+      render();
+      try {
+        const response = await browser.runtime.sendMessage({
+          type: "TRACKER_REVIEW_ACTION",
+          action,
+          id: review.id
+        });
+        if (!response || !response.ok || !Array.isArray(response.reviews)) {
+          throw new Error(response && response.error || "Firefox could not update the review inbox.");
+        }
+        reviews = response.reviews;
+        for (const tracker of trackers) {
+          tracker.pendingReviewCount = reviews.filter((item) => item.trackerId === tracker.id).length;
+        }
+      } catch (error) {
+        setError(error && error.message ? error.message : String(error));
+      } finally {
+        reviewBusyIds.delete(review.id);
+        render();
+      }
+    }
+
+    function renderReviewItem(review) {
+      const card = document.createElement("article");
+      const busy = reviewBusyIds.has(review.id);
+      card.className = "review-item";
+      card.setAttribute("aria-busy", String(busy));
+
+      const preview = document.createElement("div");
+      preview.className = `review-preview${review.mediaType === "video" ? " video" : ""}`;
+      const previewUrl = review.previewUrl || (review.mediaType === "image" ? review.url : "");
+      if (previewUrl) {
+        const image = document.createElement("img");
+        image.src = previewUrl;
+        image.alt = "";
+        image.loading = "lazy";
+        image.referrerPolicy = "no-referrer";
+        preview.append(image);
+      } else if (review.mediaType !== "video") {
+        preview.textContent = "Media";
+      }
+
+      const copy = document.createElement("div");
+      copy.className = "review-copy";
+      const title = document.createElement("strong");
+      title.textContent = review.filename || review.alt || "Tracked media";
+      title.title = title.textContent;
+      const sourceTracker = trackers.find((tracker) => tracker.id === review.trackerId);
+      const source = document.createElement("span");
+      source.textContent = `${sourceTracker && sourceTracker.pageTitle || review.pageTitle || "Tracked page"} · ${formatDate(review.detectedAt)}`;
+      const url = document.createElement("span");
+      url.className = "review-url";
+      url.textContent = review.url || "";
+      url.title = review.url || "";
+      copy.append(title, source, url);
+
+      const actions = document.createElement("div");
+      actions.className = "review-actions";
+      const open = createButton("Preview", "tracker-button", async () => {
+        try {
+          await browser.tabs.create({ active: true, url: review.url });
+        } catch (error) {
+          setError(`Firefox could not open this media. (${error.message || error})`);
+        }
+      });
+      const approve = createButton(busy ? "Adding…" : "Approve", "tracker-button approve-button", () =>
+        performReviewAction(review, "approve")
+      );
+      const dismiss = createButton("Dismiss", "tracker-button", () =>
+        performReviewAction(review, "dismiss")
+      );
+      open.disabled = busy || globalBusy;
+      approve.disabled = busy || globalBusy;
+      dismiss.disabled = busy || globalBusy;
+      actions.append(open, approve, dismiss);
+      card.append(preview, copy, actions);
+      return card;
+    }
+
+    function renderReviews() {
+      elements["review-count"].textContent = `${reviews.length.toLocaleString()} item${reviews.length === 1 ? "" : "s"}`;
+      elements["review-empty"].hidden = reviews.length > 0;
+      elements["review-list"].replaceChildren(...reviews.map(renderReviewItem));
+    }
+
     function sortedVisibleTrackers() {
       const filter = elements["status-filter"].value;
       const query = elements["search-input"].value;
@@ -447,7 +574,7 @@
     }
 
     function render() {
-      const summary = summarizeTrackers(trackers);
+      const summary = summarizeTrackers(trackers, reviews);
       elements["total-stat"].textContent = summary.total.toLocaleString();
       elements["total-detail"].textContent = `${Math.max(0, maxTrackers - summary.total).toLocaleString()} of ${maxTrackers.toLocaleString()} slots available`;
       elements["active-stat"].textContent = summary.active.toLocaleString();
@@ -458,10 +585,10 @@
       elements["issues-detail"].textContent = summary.issues
         ? `${summary.issues.toLocaleString()} tracker${summary.issues === 1 ? "" : "s"} reported an error`
         : "No recent errors";
-      elements["queued-stat"].textContent = summary.queued.toLocaleString();
-      elements["queued-detail"].textContent = summary.queued
-        ? "From each tracker’s latest check"
-        : "No new matches queued";
+      elements["pending-stat"].textContent = summary.pending.toLocaleString();
+      elements["pending-detail"].textContent = summary.pending
+        ? `${summary.pending.toLocaleString()} item${summary.pending === 1 ? "" : "s"} awaiting approval`
+        : "Review inbox is empty";
       elements["dashboard-subtitle"].textContent = summary.total
         ? `${summary.active.toLocaleString()} active of ${summary.total.toLocaleString()} tracked page${summary.total === 1 ? "" : "s"}`
         : "No pages are being monitored yet";
@@ -478,6 +605,7 @@
         elements["dashboard-subtitle"].textContent = "Background tracking is unavailable in private windows";
       }
 
+      renderReviews();
       const visible = sortedVisibleTrackers();
       elements["tracker-list"].replaceChildren(...visible.map(renderTracker));
       const hasTrackers = summary.total > 0;
@@ -510,6 +638,7 @@
           throw new Error(response && response.error || "Firefox could not load background trackers.");
         }
         trackers = response.trackers;
+        reviews = Array.isArray(response.reviews) ? response.reviews : [];
         maxTrackers = Math.max(1, count(response.maxTrackers) || 20);
       } catch (error) {
         setError(error && error.message ? error.message : String(error));
@@ -555,7 +684,13 @@
       elements["status-filter"].addEventListener("change", render);
       if (browser.storage && browser.storage.onChanged) {
         browser.storage.onChanged.addListener((changes, areaName) => {
-          if (areaName === "local" && changes && changes["mediaTrackers:v1"] && !privateContext && !globalBusy) {
+          if (
+            areaName === "local" &&
+            changes &&
+            (changes["mediaTrackers:v1"] || changes["trackerReviewItems:v1"]) &&
+            !privateContext &&
+            !globalBusy
+          ) {
             refreshTrackers();
           }
         });
@@ -577,6 +712,7 @@
 
   return Object.freeze({
     activityStatusLabel,
+    describeAction,
     describeFilters,
     describeMatching,
     describePagination,

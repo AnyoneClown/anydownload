@@ -13,6 +13,7 @@ const SCRIPT_PATHS = [
   "../extension/shared/core.js",
   "../extension/shared/youtube.js",
   "../extension/shared/templates.js",
+  "../extension/shared/download-ledger.js",
   "../extension/shared/download-queue.js",
   "../extension/background.js"
 ];
@@ -1406,6 +1407,72 @@ async function testBulkRetryLeavesCancelledTasksAlone() {
   assert.equal(tasks.find((task) => task.id === otherCancelledTaskId).status, "cancelled");
 }
 
+async function testCompletedDownloadLedgerAndStatusLookup() {
+  const harness = createHarness();
+  const queued = await harness.send({
+    type: "DOWNLOAD_BATCH",
+    folder: "AnyDownload/ledger",
+    pageTitle: "Ledger gallery",
+    pageUrl: "https://gallery.example.test/page",
+    items: [{
+      url: "https://cdn.example.test/photo.jpg?size=large&token=first&expires=100",
+      filename: "photo.jpg",
+      identityKey: "gallery-photo-1"
+    }]
+  });
+  assert.equal(queued.ok, true);
+
+  let status = await harness.send({
+    type: "GET_MEDIA_DOWNLOAD_STATUS",
+    pageUrl: "https://gallery.example.test/other",
+    incognito: false,
+    items: [{
+      url: "https://cdn.example.test/refreshed.jpg?token=second",
+      identityKey: "gallery-photo-1"
+    }]
+  });
+  assert.equal(status.ok, true);
+  assert.equal(status.statuses[0].status, "queued");
+  assert.match(status.statuses[0].fingerprint, /^[a-f0-9]{16}$/);
+
+  await harness.emitDownloadChange(1, {
+    state: "complete",
+    bytesReceived: 4096,
+    totalBytes: 4096,
+    filename: "/Users/tester/Downloads/AnyDownload/ledger/final-photo.jpg"
+  });
+  await waitFor(
+    () => Boolean(harness.local.dump()["downloadLedger:v1"]),
+    "A completed queue task must be written to the download ledger"
+  );
+
+  status = await harness.send({
+    type: "GET_MEDIA_DOWNLOAD_STATUS",
+    pageUrl: "https://gallery.example.test/page-two",
+    incognito: false,
+    items: [{
+      url: "https://cdn.example.test/another-signed-url.jpg?expires=999",
+      identityKey: "gallery-photo-1"
+    }]
+  });
+  assert.equal(status.statuses[0].status, "downloaded");
+  assert.equal(status.statuses[0].filename, "final-photo.jpg");
+  assert.ok(status.statuses[0].completedAt > 0);
+
+  const ledgerJson = JSON.stringify(harness.local.dump()["downloadLedger:v1"]);
+  assert.doesNotMatch(ledgerJson, /cdn\.example\.test|token=|expires=/, "The ledger must store fingerprints rather than media URLs");
+  const privateStatus = await harness.send({
+    type: "GET_MEDIA_DOWNLOAD_STATUS",
+    pageUrl: "https://gallery.example.test/page",
+    incognito: true,
+    items: [{
+      url: "https://cdn.example.test/photo.jpg",
+      identityKey: "gallery-photo-1"
+    }]
+  });
+  assert.equal(privateStatus.statuses[0].status, "new", "Normal completion state must not leak into private windows");
+}
+
 (async () => {
   await testQueueConcurrencyProgressAndStatistics();
   await testDirectVideoSingleAndBulkPassthrough();
@@ -1422,6 +1489,7 @@ async function testBulkRetryLeavesCancelledTasksAlone() {
   await testFinishedDetailsMakeRoomWithoutLosingHistory();
   await testBulkControlsAtQueueLimit();
   await testBulkRetryLeavesCancelledTasksAlone();
+  await testCompletedDownloadLedgerAndStatusLookup();
   console.log("All background queue integration checks passed.");
 })().catch((error) => {
   console.error(error);

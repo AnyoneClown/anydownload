@@ -576,7 +576,8 @@
     return (Array.isArray(images) ? images : []).map((image, index) => ({
       url: image && typeof image.url === "string" ? image.url : "",
       filename: filenameForImage(image, index, usedNames),
-      mediaType: image && image.mediaType === "video" ? "video" : "image"
+      mediaType: image && image.mediaType === "video" ? "video" : "image",
+      identityKey: normalizedMediaIdentity(image && image.identityKey)
     }));
   }
 
@@ -650,8 +651,10 @@
     scanWarnings: [],
     busy: false,
     hasStoredFolder: false,
+    hideDownloaded: false,
     incognito: false,
     ignoredKeys: new Set(),
+    explicitRedownloads: new Set(),
     filenameTemplate: Templates.DEFAULT_TEMPLATE,
     filenamePreviewByUrl: new Map(),
     instagramCollectionMode: false,
@@ -679,6 +682,8 @@
   const visibleDimensionRows = new Map();
   let thumbnailObserver = null;
   let dimensionObserver = null;
+  let downloadStatusGeneration = 0;
+  let downloadStatusRefreshTimer = null;
   let ignoreWriteQueue = Promise.resolve();
   let liveCaptureTimer = null;
   let liveCaptureGeneration = 0;
@@ -723,6 +728,7 @@
       "backgrounds-input",
       "clear-ignored-button",
       "download-button",
+      "downloaded-button",
       "filter-input",
       "filename-template-button",
       "filename-template-help",
@@ -755,6 +761,7 @@
       "summary-label",
       "tracking-dashboard-button",
       "tracker-button",
+      "tracker-action-select",
       "tracker-delete-button",
       "tracker-download-initial-input",
       "tracker-exclude-patterns-input",
@@ -821,6 +828,7 @@
       "tracker-run-button",
       "tracker-pause-button",
       "tracker-delete-button",
+      "tracker-action-select",
       "tracker-interval-select",
       "tracker-download-initial-input",
       "tracker-exclude-patterns-input",
@@ -838,6 +846,7 @@
       elements[id].disabled = state.trackerBusy;
     }
     elements["tracker-button"].disabled = state.trackerBusy || state.incognito || !state.pageUrl;
+    updateTrackerActionFields();
     if (status) {
       elements["tracker-status"].textContent = status;
       elements["tracker-status"].classList.remove("error");
@@ -849,6 +858,15 @@
     elements["tracker-max-pages-field"].hidden = mode === "none";
     elements["tracker-next-selector-field"].hidden = mode !== "next-link";
     elements["tracker-url-template-field"].hidden = mode !== "url-template";
+  }
+
+  function updateTrackerActionFields() {
+    const notifyOnly = elements["tracker-action-select"].value === "notify";
+    if (notifyOnly) {
+      elements["tracker-notify-matches-input"].checked = true;
+    }
+    elements["tracker-notify-matches-input"].disabled = state.trackerBusy ||
+      state.incognito || !state.pageUrl || notifyOnly;
   }
 
   function populateTrackerControls(tracker) {
@@ -870,9 +888,11 @@
     elements["tracker-max-pages-select"].value = String(pagination.maxPages || 3);
     elements["tracker-next-selector-input"].value = pagination.nextSelector || "";
     elements["tracker-url-template-input"].value = pagination.urlTemplate || "";
+    elements["tracker-action-select"].value = tracker && tracker.action || "review";
     elements["tracker-notify-matches-input"].checked = notifications.newMatches !== false;
     elements["tracker-notify-errors-input"].checked = notifications.errors !== false;
     updateTrackerPaginationFields();
+    updateTrackerActionFields();
   }
 
   function updateTrackerUi() {
@@ -884,12 +904,13 @@
     elements["tracker-button"].textContent = tracker ? "Tracking" : "Track page";
     elements["tracker-button"].title = state.incognito
       ? "Background trackers are unavailable in private windows"
-      : "Check this URL regularly and queue newly discovered matches";
+      : "Check this URL regularly and notify, review, or download newly discovered matches";
     for (const id of [
       "tracker-save-button",
       "tracker-run-button",
       "tracker-pause-button",
       "tracker-delete-button",
+      "tracker-action-select",
       "tracker-interval-select",
       "tracker-exclude-patterns-input",
       "tracker-exclude-text-input",
@@ -914,6 +935,7 @@
     elements["tracker-pause-button"].hidden = !tracker;
     elements["tracker-delete-button"].hidden = !tracker;
     elements["tracker-pause-button"].textContent = tracker && tracker.enabled ? "Pause" : "Resume";
+    updateTrackerActionFields();
 
     if (tracker) {
       const interval = String(tracker.intervalMinutes || 60);
@@ -929,10 +951,15 @@
           : tracker.backoffUntil > Date.now()
             ? ` · Retry after ${formatTrackerTime(tracker.backoffUntil)}`
             : "";
-        elements["tracker-status"].textContent = `Last check failed: ${tracker.lastError}${reliability}`;
+        elements["tracker-status"].textContent = `Last check reported an issue: ${tracker.lastError}${reliability}`;
       } else if (tracker.lastSuccessAt) {
+        const actionResult = tracker.action === "review"
+          ? `${Number(tracker.lastReviewed || 0).toLocaleString()} added to review · ${Number(tracker.pendingReviewCount || 0).toLocaleString()} pending`
+          : tracker.action === "notify"
+            ? `${Number(tracker.lastDiscovered || 0).toLocaleString()} notified · nothing queued`
+            : `${Number(tracker.lastQueued || 0).toLocaleString()} queued`;
         elements["tracker-status"].textContent =
-          `Checked ${formatTrackerTime(tracker.lastSuccessAt)} · ${Number(tracker.lastPagesChecked || 1).toLocaleString()} page${tracker.lastPagesChecked === 1 ? "" : "s"} · ${Number(tracker.lastFound || 0).toLocaleString()} matched · ${Number(tracker.lastQueued || 0).toLocaleString()} queued.`;
+          `Checked ${formatTrackerTime(tracker.lastSuccessAt)} · ${Number(tracker.lastPagesChecked || 1).toLocaleString()} page${tracker.lastPagesChecked === 1 ? "" : "s"} · ${Number(tracker.lastFound || 0).toLocaleString()} matched · ${actionResult}.`;
       } else {
         elements["tracker-status"].textContent = "Waiting for the first check.";
       }
@@ -972,6 +999,29 @@
     state.trackerPageUrl = requestedUrl;
     populateTrackerControls(state.tracker);
     updateTrackerUi();
+  }
+
+  function trackerOutcomeNotice(tracker, saved) {
+    if (!tracker) {
+      return saved ? "Tracker saved." : "Tracker is up to date.";
+    }
+    if (tracker.action === "review" && Number(tracker.lastReviewed)) {
+      return `${saved ? "Tracker saved and added" : "Added"} ${Number(tracker.lastReviewed).toLocaleString()} new match${tracker.lastReviewed === 1 ? "" : "es"} to review.`;
+    }
+    if (tracker.action === "notify" && Number(tracker.lastDiscovered)) {
+      return `${saved ? "Tracker saved and found" : "Found"} ${Number(tracker.lastDiscovered).toLocaleString()} new match${tracker.lastDiscovered === 1 ? "" : "es"}; nothing was downloaded.`;
+    }
+    if (Number(tracker.lastQueued)) {
+      return `${saved ? "Tracker saved and queued" : "Queued"} ${Number(tracker.lastQueued).toLocaleString()} new match${tracker.lastQueued === 1 ? "" : "es"}.`;
+    }
+    if (saved) {
+      return tracker.action === "review"
+        ? "Tracker saved. New matches will wait in Tracking for review."
+        : tracker.action === "notify"
+          ? "Tracker saved. New matches will trigger a notification without downloading."
+          : "Tracker saved. New matches will be added to the download queue in the background.";
+    }
+    return "Tracker is up to date; no new matches required action.";
   }
 
   async function saveTracker() {
@@ -1057,6 +1107,7 @@
             excludePatterns: elements["tracker-exclude-patterns-input"].value.split(/\n+/),
             maxDownloadsPerRun: Number(elements["tracker-max-downloads-select"].value)
           },
+          action: elements["tracker-action-select"].value,
           pagination: {
             mode: paginationMode,
             maxPages: Number(elements["tracker-max-pages-select"].value),
@@ -1064,7 +1115,8 @@
             urlTemplate: paginationTemplate
           },
           notifications: {
-            newMatches: elements["tracker-notify-matches-input"].checked,
+            newMatches: elements["tracker-action-select"].value === "notify" ||
+              elements["tracker-notify-matches-input"].checked,
             errors: elements["tracker-notify-errors-input"].checked
           },
           filenameTemplate: template.value,
@@ -1085,12 +1137,10 @@
       });
       setNotice(
         state.tracker && state.tracker.lastError
-          ? `Tracker saved, but its first check failed. (${state.tracker.lastError})`
+          ? `Tracker saved, but its first check needs attention. (${state.tracker.lastError})`
           : state.tracker && !state.tracker.enabled
             ? "Tracker updated and remains paused."
-          : state.tracker && state.tracker.lastQueued
-            ? `Tracker saved and queued ${Number(state.tracker.lastQueued).toLocaleString()} current match${state.tracker.lastQueued === 1 ? "" : "es"}.`
-            : "Tracker saved. New matches will be added to the download queue in the background.",
+          : trackerOutcomeNotice(state.tracker, true),
         state.tracker && state.tracker.lastError ? "error" : "success"
       );
     } catch (error) {
@@ -1118,10 +1168,8 @@
       populateTrackerControls(state.tracker);
       setNotice(
         state.tracker.lastError
-          ? `Tracker check failed. (${state.tracker.lastError})`
-          : state.tracker.lastQueued
-            ? `Queued ${Number(state.tracker.lastQueued).toLocaleString()} new match${state.tracker.lastQueued === 1 ? "" : "es"}.`
-            : "Tracker is up to date; no new matches were queued.",
+          ? `Tracker check needs attention. (${state.tracker.lastError})`
+          : trackerOutcomeNotice(state.tracker, false),
         state.tracker.lastError ? "error" : "success"
       );
     } catch (error) {
@@ -1159,7 +1207,7 @@
   }
 
   async function deleteTracker() {
-    if (!state.tracker || state.trackerBusy || !window.confirm("Remove this background tracker? Its download history will be kept.")) {
+    if (!state.tracker || state.trackerBusy || !window.confirm("Remove this background tracker? Its pending review items will be removed; download history will be kept.")) {
       return;
     }
     setTrackerBusy(true, "Removing tracker…");
@@ -1336,7 +1384,12 @@
         }
         record.label.textContent = filename;
         record.container.title = image.alt || filename;
-        record.checkbox.setAttribute("aria-label", `Select ${filename}`);
+        record.checkbox.setAttribute(
+          "aria-label",
+          downloadStatusFor(image) === "downloaded"
+            ? `Select ${filename} to download it again`
+            : `Select ${filename}`
+        );
         record.previewButton.setAttribute("aria-label", `Preview ${filename} in a new tab`);
       }
       if (!records.size) {
@@ -1501,6 +1554,8 @@
   function resetSidebarPageState(label, notice, noticeType) {
     state.images = [];
     state.selected.clear();
+    state.explicitRedownloads.clear();
+    downloadStatusGeneration += 1;
     state.scanWarnings = [];
     state.pageTitle = "";
     state.pageUrl = "";
@@ -2215,10 +2270,112 @@
     }, 50);
   }
 
+  function downloadStatusFor(image) {
+    return ["queued", "downloaded", "failed"].includes(image && image.downloadStatus)
+      ? image.downloadStatus
+      : "new";
+  }
+
+  function imageCanBeSelected(image) {
+    const status = downloadStatusFor(image);
+    if (status === "queued") {
+      return false;
+    }
+    if (status === "downloaded") {
+      return Boolean(image.downloadFingerprint) && state.explicitRedownloads.has(image.downloadFingerprint);
+    }
+    return true;
+  }
+
+  async function refreshDownloadStatuses(options) {
+    const settings = Object.assign({ render: true }, options || {});
+    if (!state.pageUrl || !state.images.length) {
+      return false;
+    }
+    const generation = ++downloadStatusGeneration;
+    const requestedPageUrl = state.pageUrl;
+    const requested = state.images.map((image) => ({
+      key: mediaIdentityKey(image),
+      url: image.url,
+      identityKey: normalizedMediaIdentity(image.identityKey)
+    }));
+    const response = await browser.runtime.sendMessage({
+      type: "GET_MEDIA_DOWNLOAD_STATUS",
+      incognito: state.incognito,
+      pageUrl: requestedPageUrl,
+      items: requested.map(({ url, identityKey }) => ({ url, identityKey }))
+    });
+    if (
+      generation !== downloadStatusGeneration ||
+      requestedPageUrl !== state.pageUrl ||
+      !response ||
+      !response.ok ||
+      !Array.isArray(response.statuses)
+    ) {
+      if (response && response.ok === false) {
+        throw new Error(response.error || "Firefox could not read completed-download status.");
+      }
+      return false;
+    }
+    const byIdentity = new Map();
+    response.statuses.forEach((status, index) => {
+      const request = requested[index];
+      if (request) {
+        byIdentity.set(request.key, status || {});
+      }
+    });
+    for (const image of state.images) {
+      const status = byIdentity.get(mediaIdentityKey(image)) || {};
+      image.downloadStatus = ["queued", "downloaded", "failed"].includes(status.status)
+        ? status.status
+        : "new";
+      image.downloadFingerprint = String(status.fingerprint || "");
+      image.downloadedAt = Number(status.completedAt) || 0;
+      image.downloadedFilename = String(status.filename || "");
+      if (!imageCanBeSelected(image)) {
+        state.selected.delete(image.url);
+      }
+    }
+    if (settings.render) {
+      renderImages();
+    }
+    return true;
+  }
+
+  function scheduleDownloadStatusRefresh() {
+    if (downloadStatusRefreshTimer !== null) {
+      clearTimeout(downloadStatusRefreshTimer);
+    }
+    downloadStatusRefreshTimer = setTimeout(() => {
+      downloadStatusRefreshTimer = null;
+      if (state.busy) {
+        scheduleDownloadStatusRefresh();
+        return;
+      }
+      refreshDownloadStatuses().catch((error) => {
+        console.error("AnyDownload could not refresh completed-download status.", error);
+      });
+    }, 120);
+  }
+
+  function handleDownloadStatusStorageChanges(changes, areaName) {
+    const expectedArea = state.incognito ? "session" : "local";
+    if (
+      areaName !== expectedArea ||
+      !changes ||
+      (!changes["downloadLedger:v1"] && !changes["downloadQueueState:v1"]) ||
+      !state.pageUrl
+    ) {
+      return;
+    }
+    scheduleDownloadStatusRefresh();
+  }
+
   function filteredImages() {
     const query = elements["filter-input"].value.trim().toLocaleLowerCase();
     const inCurrentView = state.images.filter((image) =>
       isImageIgnored(image) === state.showIgnored &&
+      (!state.hideDownloaded || state.showIgnored || downloadStatusFor(image) !== "downloaded") &&
       imageMatchesSmartFilters(image) &&
       imageMatchesInstagramCollectionFilter(image)
     );
@@ -2234,6 +2391,7 @@
   function selectedDownloadableImages() {
     return state.images.filter((image) =>
       state.selected.has(image.url) &&
+      imageCanBeSelected(image) &&
       !isImageIgnored(image) &&
       Filters.matchesSmartFilters(image, state.smartFilters) &&
       imageMatchesInstagramCollectionFilter(image)
@@ -2422,12 +2580,19 @@
     const ignoredCount = state.images.filter(isImageIgnored).length;
     const storedIgnoredCount = state.ignoredKeys.size;
     const availableCount = total - ignoredCount;
+    const downloadedCount = state.images.filter((image) =>
+      !isImageIgnored(image) && downloadStatusFor(image) === "downloaded"
+    ).length;
+    const queuedCount = state.images.filter((image) =>
+      !isImageIgnored(image) && downloadStatusFor(image) === "queued"
+    ).length;
     const selectedItems = selectedDownloadableImages();
     const selected = selectedItems.length;
     const selectedHasVideo = selectedItems.some((item) => mediaTypeFor(item) === "video");
     const visible = filteredImages();
     const hasFilter = Boolean(elements["filter-input"].value.trim()) ||
       (!state.showIgnored && (
+        state.hideDownloaded ||
         Filters.hasActiveSmartFilters(state.smartFilters) ||
         state.instagramCollectionFilter !== "all"
       ));
@@ -2447,6 +2612,13 @@
     elements["ignored-button"].setAttribute("aria-pressed", String(state.showIgnored));
     elements["clear-ignored-button"].hidden = !state.showIgnored || !storedIgnoredCount;
     elements["clear-ignored-button"].disabled = state.busy;
+    elements["downloaded-button"].hidden = state.showIgnored;
+    elements["downloaded-button"].disabled = state.busy || downloadedCount === 0;
+    elements["downloaded-button"].textContent = state.hideDownloaded
+      ? `Show downloaded (${downloadedCount.toLocaleString()})`
+      : `Hide downloaded (${downloadedCount.toLocaleString()})`;
+    elements["downloaded-button"].classList.toggle("active", state.hideDownloaded);
+    elements["downloaded-button"].setAttribute("aria-pressed", String(state.hideDownloaded));
     elements["select-all-button"].hidden = state.showIgnored;
     elements["select-none-button"].hidden = state.showIgnored;
     elements["select-all-button"].textContent = hasFilter ? "Select matches only" : "Select all";
@@ -2464,7 +2636,11 @@
         ? template.ok
           ? `Ready for Downloads/${folder.ok ? folder.value : "…"}`
           : template.error
-        : "Choose files to download";
+        : queuedCount
+          ? `${queuedCount.toLocaleString()} item${queuedCount === 1 ? " is" : "s are"} already queued`
+          : downloadedCount
+            ? `${downloadedCount.toLocaleString()} previously downloaded · check one to download again`
+            : "Choose files to download";
     elements["download-button"].textContent = selected === 1
       ? `Download ${mediaTypeFor(selectedItems[0])}`
       : "Download selected";
@@ -2484,19 +2660,32 @@
   function makeImageRow(image) {
     const ignored = isImageIgnored(image);
     const video = mediaTypeFor(image) === "video";
+    const downloadStatus = downloadStatusFor(image);
     const row = document.createElement("article");
-    row.className = `image-row${video ? " video" : ""}${ignored ? " ignored" : ""}`;
+    row.className = `image-row${video ? " video" : ""}${ignored ? " ignored" : ""}${downloadStatus === "downloaded" ? " downloaded" : ""}`;
     row.setAttribute("role", "listitem");
 
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
-    checkbox.checked = state.selected.has(image.url);
-    checkbox.setAttribute("aria-label", `Select ${friendlyFilename(image)}`);
+    checkbox.checked = state.selected.has(image.url) && imageCanBeSelected(image);
+    checkbox.disabled = state.busy || downloadStatus === "queued";
+    checkbox.setAttribute(
+      "aria-label",
+      downloadStatus === "downloaded"
+        ? `Select ${friendlyFilename(image)} to download it again`
+        : `Select ${friendlyFilename(image)}`
+    );
     checkbox.addEventListener("change", () => {
       if (checkbox.checked) {
+        if (downloadStatus === "downloaded" && image.downloadFingerprint) {
+          state.explicitRedownloads.add(image.downloadFingerprint);
+        }
         state.selected.add(image.url);
       } else {
         state.selected.delete(image.url);
+        if (image.downloadFingerprint) {
+          state.explicitRedownloads.delete(image.downloadFingerprint);
+        }
       }
       refreshRenderedFilenamePreviews();
       updateSummary();
@@ -2542,6 +2731,23 @@
       mediaBadge.title = "Direct video file";
       name.append(mediaBadge);
     }
+    const statusBadge = document.createElement("span");
+    statusBadge.className = `download-status-badge ${downloadStatus}`;
+    statusBadge.textContent = downloadStatus === "downloaded"
+      ? "Downloaded"
+      : downloadStatus === "queued"
+        ? "Queued"
+        : downloadStatus === "failed"
+          ? "Failed"
+          : "New";
+    statusBadge.title = downloadStatus === "downloaded" && image.downloadedAt
+      ? `Completed ${new Date(image.downloadedAt).toLocaleString()}`
+      : downloadStatus === "queued"
+        ? "This media is already in the download queue"
+        : downloadStatus === "failed"
+          ? "The latest queued attempt failed"
+          : "This media has not completed through AnyDownload on this website";
+    name.append(statusBadge);
     let nameRecords = renderedNameNodes.get(image.url);
     if (!nameRecords) {
       nameRecords = new Set();
@@ -2603,10 +2809,20 @@
       const download = document.createElement("button");
       download.type = "button";
       download.className = "row-action-button download";
-      download.textContent = "Save";
-      download.title = `Download only this ${video ? "video" : "image"}`;
-      download.disabled = state.busy;
-      download.addEventListener("click", () => requestDownloads([image]));
+      download.textContent = downloadStatus === "downloaded"
+        ? "Again"
+        : downloadStatus === "queued"
+          ? "Queued"
+          : downloadStatus === "failed"
+            ? "Retry"
+            : "Save";
+      download.title = downloadStatus === "downloaded"
+        ? `Download this ${video ? "video" : "image"} again`
+        : `Download only this ${video ? "video" : "image"}`;
+      download.disabled = state.busy || downloadStatus === "queued";
+      download.addEventListener("click", () => requestDownloads([image], {
+        allowRedownload: downloadStatus === "downloaded"
+      }));
       actions.append(ignore, download);
       row.append(checkbox, thumbnailFrame, copy, actions);
     }
@@ -2777,6 +2993,8 @@
     if (!settings.preserveSelection) {
       state.images = [];
       state.selected.clear();
+      state.explicitRedownloads.clear();
+      downloadStatusGeneration += 1;
       state.showIgnored = false;
       state.siteKey = "";
       state.ignoredKeys.clear();
@@ -3142,6 +3360,12 @@
       elements["page-label"].textContent = merged.page.pageTitle || hostname;
       updateFilenameTemplateUi();
 
+      try {
+        await refreshDownloadStatuses({ render: false });
+      } catch (error) {
+        merged.warnings.push(`Completed-download status is temporarily unavailable: ${error.message || error}`);
+      }
+
       if (!state.hasStoredFolder) {
         const safeHost = Core.sanitizePathSegment(hostname, "page");
         elements["folder-input"].value = `${Core.DEFAULT_FOLDER}/${safeHost}`;
@@ -3183,6 +3407,8 @@
       if (!settings.preserveSelection) {
         state.images = [];
         state.selected.clear();
+        state.explicitRedownloads.clear();
+        downloadStatusGeneration += 1;
         state.siteKey = "";
         state.ignoredKeys.clear();
         state.sourceWindowId = null;
@@ -3227,12 +3453,18 @@
     return succeeded;
   }
 
-  async function requestDownloads(images) {
-    images = images.filter((image) =>
-      !isImageIgnored(image) &&
-      Filters.matchesSmartFilters(image, state.smartFilters) &&
-      matchesInstagramCollectionFilter(image, state.instagramCollectionFilter)
-    );
+  async function requestDownloads(images, options) {
+    const settings = Object.assign({ allowRedownload: false }, options || {});
+    images = images.filter((image) => {
+      const status = downloadStatusFor(image);
+      const redownloadAllowed = settings.allowRedownload ||
+        Boolean(image.downloadFingerprint) && state.explicitRedownloads.has(image.downloadFingerprint);
+      return status !== "queued" &&
+        (status !== "downloaded" || redownloadAllowed) &&
+        !isImageIgnored(image) &&
+        Filters.matchesSmartFilters(image, state.smartFilters) &&
+        matchesInstagramCollectionFilter(image, state.instagramCollectionFilter);
+    });
     if (state.busy || !images.length) {
       if (!state.busy) {
         setNotice("No downloadable media files are selected.", "error");
@@ -3295,11 +3527,16 @@
           state.selected.delete(image.url);
         }
       }
-      images = images.filter((image) =>
-        !isImageIgnored(image) &&
-        Filters.matchesSmartFilters(image, state.smartFilters) &&
-        imageMatchesInstagramCollectionFilter(image)
-      );
+      images = images.filter((image) => {
+        const status = downloadStatusFor(image);
+        const redownloadAllowed = settings.allowRedownload ||
+          Boolean(image.downloadFingerprint) && state.explicitRedownloads.has(image.downloadFingerprint);
+        return status !== "queued" &&
+          (status !== "downloaded" || redownloadAllowed) &&
+          !isImageIgnored(image) &&
+          Filters.matchesSmartFilters(image, state.smartFilters) &&
+          imageMatchesInstagramCollectionFilter(image);
+      });
       if (!images.length) {
         setNotice("No downloadable media files are selected.", "error");
         return;
@@ -3331,6 +3568,21 @@
           : `Started ${result.started.toLocaleString()} download${result.started === 1 ? "" : "s"} in Downloads/${result.folder}.`;
         setNotice(message, result.failed ? "error" : "success");
       }
+      const acceptedIndexes = Array.isArray(result.acceptedIndexes)
+        ? result.acceptedIndexes
+        : images.map((_image, index) => index);
+      for (const index of acceptedIndexes) {
+        const image = images[index];
+        if (!image) {
+          continue;
+        }
+        state.selected.delete(image.url);
+        if (image.downloadFingerprint) {
+          state.explicitRedownloads.delete(image.downloadFingerprint);
+        }
+        image.downloadStatus = "queued";
+      }
+      await refreshDownloadStatuses({ render: false }).catch(() => undefined);
       refreshQueueBadge();
     } catch (error) {
       setNotice(error && error.message ? error.message : String(error), "error");
@@ -4028,6 +4280,7 @@
       }
     });
     elements["tracker-save-button"].addEventListener("click", saveTracker);
+    elements["tracker-action-select"].addEventListener("change", updateTrackerActionFields);
     elements["tracker-pagination-mode-select"].addEventListener("change", updateTrackerPaginationFields);
     elements["tracker-run-button"].addEventListener("click", runTrackerNow);
     elements["tracker-pause-button"].addEventListener("click", toggleTrackerEnabled);
@@ -4107,9 +4360,26 @@
       state.showIgnored = !state.showIgnored;
       renderImages();
     });
+    elements["downloaded-button"].addEventListener("click", () => {
+      state.hideDownloaded = !state.hideDownloaded;
+      if (state.hideDownloaded) {
+        for (const image of state.images) {
+          if (downloadStatusFor(image) === "downloaded") {
+            state.selected.delete(image.url);
+            if (image.downloadFingerprint) {
+              state.explicitRedownloads.delete(image.downloadFingerprint);
+            }
+          }
+        }
+      }
+      renderImages();
+    });
     elements["clear-ignored-button"].addEventListener("click", restoreAllIgnoredImages);
     elements["select-all-button"].addEventListener("click", () => {
-      state.selected = new Set(filteredImages().map((image) => image.url));
+      state.selected = new Set(filteredImages()
+        .filter((image) => downloadStatusFor(image) !== "downloaded" && imageCanBeSelected(image))
+        .map((image) => image.url));
+      state.explicitRedownloads.clear();
       renderImages();
     });
     elements["select-none-button"].addEventListener("click", () => {
@@ -4120,9 +4390,13 @@
       ) {
         for (const image of filteredImages()) {
           state.selected.delete(image.url);
+          if (image.downloadFingerprint) {
+            state.explicitRedownloads.delete(image.downloadFingerprint);
+          }
         }
       } else {
         state.selected.clear();
+        state.explicitRedownloads.clear();
       }
       renderImages();
     });
@@ -4181,6 +4455,7 @@
     wireSidebarPermissionLifecycle();
     browser.storage.onChanged.addListener(handleIgnoredStorageChanges);
     browser.storage.onChanged.addListener(handleTrackerStorageChanges);
+    browser.storage.onChanged.addListener(handleDownloadStatusStorageChanges);
     try {
       const stored = await browser.storage.local.get([
         "destinationFolder",

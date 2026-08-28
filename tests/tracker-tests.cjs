@@ -189,10 +189,48 @@ assert.equal(normalized.matching.maxDownloadsPerRun, Tracker.MAX_DOWNLOADS_PER_R
 assert.equal(normalized.pagination.mode, "url-template");
 assert.equal(normalized.pagination.maxPages, Tracker.MAX_PAGES_PER_RUN);
 assert.equal(normalized.pagination.urlTemplate, "/gallery?page={page}");
+assert.equal(normalized.action, "download");
 assert.deepEqual(normalized.notifications, { newMatches: false, errors: true });
 assert.equal(normalized.activity.length, Tracker.MAX_ACTIVITY);
 assert.equal(normalized.activity[0].message, "Run 5");
 assert.equal(normalized.activity[normalized.activity.length - 1].reason, "permission");
+
+const notifyOnly = Tracker.normalizeTracker({
+  ...normalized,
+  action: "notify",
+  notifications: { newMatches: false, errors: false }
+}, now);
+assert.equal(notifyOnly.action, "notify");
+assert.equal(notifyOnly.notifications.newMatches, true);
+assert.equal(notifyOnly.notifications.errors, false);
+assert.equal(Tracker.normalizeAction("review"), "review");
+assert.equal(Tracker.normalizeAction("unexpected"), "download");
+
+const reviewFingerprint = Tracker.mediaFingerprint({ url: "https://example.test/review.jpg" });
+const reviewAddition = Tracker.addReviewItems([], [{
+  trackerId: normalized.id,
+  fingerprint: reviewFingerprint,
+  url: "https://example.test/review.jpg",
+  previewUrl: "https://example.test/review-preview.jpg",
+  filename: "review.jpg",
+  mediaType: "image",
+  detectedAt: now,
+  pageTitle: "Example gallery",
+  pageUrl: normalized.url
+}], now);
+assert.equal(reviewAddition.items.length, 1);
+assert.equal(reviewAddition.acceptedIds.length, 1);
+assert.equal(reviewAddition.items[0].id, `${normalized.id}:${reviewFingerprint}`);
+const duplicateReview = Tracker.addReviewItems(reviewAddition.items, [{
+  ...reviewAddition.items[0],
+  url: "https://example.test/review-refreshed.jpg"
+}], now + 1);
+assert.equal(duplicateReview.items.length, 1);
+assert.equal(duplicateReview.items[0].url, "https://example.test/review-refreshed.jpg");
+assert.deepEqual(
+  Tracker.removeReviewItems(duplicateReview.items, duplicateReview.items[0].id),
+  []
+);
 
 const invalidPagination = Tracker.normalizePagination({
   mode: "url-template",

@@ -16,6 +16,7 @@
   const MAX_FILENAME_LENGTH = 180;
   const MAX_ERROR_LENGTH = 500;
   const MAX_SOURCE_LENGTH = 500;
+  const MAX_SITE_KEY_LENGTH = 300;
   const TERMINAL_STATUSES = new Set(["complete", "interrupted", "cancelled"]);
   const TASK_STATUSES = new Set([
     "queued",
@@ -204,6 +205,23 @@
     return Number.isInteger(value) && value >= 0 ? value : null;
   }
 
+  function normalizeSiteKey(value) {
+    const candidate = boundedString(value, MAX_SITE_KEY_LENGTH, "");
+    try {
+      const parsed = new URL(candidate);
+      return ["http:", "https:"].includes(parsed.protocol) && parsed.hostname
+        ? parsed.origin.slice(0, MAX_SITE_KEY_LENGTH)
+        : "";
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function normalizeMediaFingerprint(value) {
+    const fingerprint = boundedString(value, 40, "").toLowerCase();
+    return /^[a-f0-9]{16}$/.test(fingerprint) ? fingerprint : "";
+  }
+
   function normalizeTask(value, jobId, fallbackNow, usedTaskIds, recoverInFlight) {
     if (!isRecord(value)) {
       return null;
@@ -240,6 +258,12 @@
       jobId,
       url: urlResult.value,
       filename: boundedString(read(value, "filename", ""), MAX_FILENAME_LENGTH, ""),
+      siteKey: normalizeSiteKey(read(value, "siteKey", "")),
+      mediaFingerprint: normalizeMediaFingerprint(read(value, "mediaFingerprint", "")),
+      mediaType: boundedString(read(value, "mediaType", "image"), 20, "image") === "video"
+        ? "video"
+        : "image",
+      ledgerRecorded: Boolean(read(value, "ledgerRecorded", false)) && status === "complete",
       status,
       downloadId,
       attempt,
@@ -541,7 +565,12 @@
       acceptedItems.push({
         originalIndex: index,
         url: result.value,
-        filename: boundedString(read(input, "filename", ""), MAX_FILENAME_LENGTH, "")
+        filename: boundedString(read(input, "filename", ""), MAX_FILENAME_LENGTH, ""),
+        siteKey: normalizeSiteKey(read(input, "siteKey", "")),
+        mediaFingerprint: normalizeMediaFingerprint(read(input, "mediaFingerprint", "")),
+        mediaType: boundedString(read(input, "mediaType", "image"), 20, "image") === "video"
+          ? "video"
+          : "image"
       });
     }
     if (items.length > limit) {
@@ -563,6 +592,10 @@
       jobId,
       url: item.url,
       filename: item.filename,
+      siteKey: item.siteKey,
+      mediaFingerprint: item.mediaFingerprint,
+      mediaType: item.mediaType,
+      ledgerRecorded: false,
       status: "queued",
       downloadId: null,
       attempt: 1,
@@ -1119,6 +1152,7 @@
     task.error = "";
     task.updatedAt = now;
     task.completedAt = 0;
+    task.ledgerRecorded = false;
     return true;
   }
 

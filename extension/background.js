@@ -15,6 +15,7 @@
   const Filters = globalThis.ImageDownloaderFilters;
   const Templates = globalThis.ImageDownloaderTemplates;
   const Tracker = globalThis.AnyDownloadTracker;
+  const DownloadLedger = globalThis.AnyDownloadLedger;
   const DownloadQueue = globalThis.ImageDownloaderDownloadQueue;
   const MAX_CONCURRENCY = 5;
   const QUEUE_CONCURRENCY = 3;
@@ -940,6 +941,9 @@
     const items = [];
     const validationErrors = [];
     const usedNames = new Set();
+    const siteKey = DownloadLedger
+      ? DownloadLedger.siteKeyForUrl(message.pageUrl)
+      : Core.siteKeyForUrl(message.pageUrl);
     let totalUrlLength = 0;
     message.items.forEach((item, index) => {
       const validateMediaUrl = Core.validateMediaUrl || Core.validateDownloadUrl;
@@ -969,7 +973,19 @@
         ? Core.sanitizeFilename(item.filename, fallbackName)
         : fallbackName;
       const filename = Core.uniquifyFilename(suppliedName, usedNames);
-      items.push({ url: queuedUrl, filename, mediaType, originalIndex: index });
+      const identityKey = typeof (item && item.identityKey) === "string"
+        ? item.identityKey.trim().replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 300)
+        : "";
+      items.push({
+        url: queuedUrl,
+        filename,
+        mediaType,
+        originalIndex: index,
+        siteKey,
+        mediaFingerprint: DownloadLedger
+          ? DownloadLedger.mediaFingerprint({ url: queuedUrl, identityKey })
+          : ""
+      });
     });
 
     if (!items.length) {
@@ -1377,6 +1393,81 @@
     };
   }
 
+  function downloadLedgerArea(incognito) {
+    return incognito ? browser.storage.session : browser.storage.local;
+  }
+
+  async function loadDownloadLedger(incognito) {
+    if (!DownloadLedger) {
+      return null;
+    }
+    const area = downloadLedgerArea(incognito);
+    const stored = await area.get(DownloadLedger.STORAGE_KEY);
+    return DownloadLedger.hydrate(stored && stored[DownloadLedger.STORAGE_KEY]);
+  }
+
+  async function saveDownloadLedger(incognito, state) {
+    if (!DownloadLedger) {
+      return;
+    }
+    await downloadLedgerArea(incognito).set({
+      [DownloadLedger.STORAGE_KEY]: DownloadLedger.hydrate(state)
+    });
+  }
+
+  function ledgerIdentityForQueueTask(job, task) {
+    if (!DownloadLedger || !task) {
+      return { siteKey: "", fingerprint: "" };
+    }
+    const siteKey = DownloadLedger.siteKeyForUrl(task.siteKey || job && job.source);
+    const fingerprint = DownloadLedger.normalizeFingerprint(task.mediaFingerprint) ||
+      DownloadLedger.mediaFingerprint({ url: task.url });
+    return { siteKey, fingerprint };
+  }
+
+  async function recordCompletedLedgerTasksLocked(context) {
+    if (!DownloadLedger || !context || !context.state) {
+      return false;
+    }
+    const completed = [];
+    const markable = [];
+    for (const job of context.state.jobs) {
+      for (const task of job.tasks) {
+        if (task.status !== "complete" || task.ledgerRecorded === true) {
+          continue;
+        }
+        const identity = ledgerIdentityForQueueTask(job, task);
+        markable.push(task);
+        if (identity.siteKey && identity.fingerprint) {
+          completed.push({
+            ...identity,
+            completedAt: task.completedAt || task.updatedAt || Date.now(),
+            filename: task.filename,
+            mediaType: task.mediaType
+          });
+        }
+      }
+    }
+    if (!markable.length) {
+      return false;
+    }
+    try {
+      if (completed.length) {
+        const current = await loadDownloadLedger(context.incognito);
+        const updated = DownloadLedger.recordCompletions(current, completed);
+        await saveDownloadLedger(context.incognito, updated);
+      }
+      for (const task of markable) {
+        task.ledgerRecorded = true;
+      }
+      context.dirty = true;
+      return true;
+    } catch (error) {
+      console.error("AnyDownload could not update its completed-download ledger.", error);
+      return false;
+    }
+  }
+
   function queueContext(incognito) {
     const key = incognito ? "private" : "normal";
     if (!downloadQueueContexts.has(key)) {
@@ -1428,7 +1519,8 @@
       task.totalBytes,
       task.filename,
       task.error,
-      task.completedAt
+      task.completedAt,
+      task.ledgerRecorded === true
     ]);
   }
 
@@ -1541,6 +1633,7 @@
       recoverInFlight: true
     });
     await reconcileQueueLocked(context, true);
+    await recordCompletedLedgerTasksLocked(context);
     await persistQueueLocked(context);
   }
 
@@ -1878,6 +1971,20 @@
     return { ...snapshot, seenCount: Array.isArray(tracker.seen) ? tracker.seen.length : 0 };
   }
 
+  async function trackerSnapshotWithReviewCount(tracker) {
+    const snapshot = tracker && Object.prototype.hasOwnProperty.call(tracker, "seenCount")
+      ? { ...tracker }
+      : trackerPublicSnapshot(tracker);
+    if (!snapshot || !Tracker) {
+      return snapshot;
+    }
+    const reviews = await loadTrackerReviews();
+    return {
+      ...snapshot,
+      pendingReviewCount: reviews.filter((item) => item.trackerId === snapshot.id).length
+    };
+  }
+
   async function loadTrackers() {
     if (!Tracker) {
       return [];
@@ -1890,6 +1997,24 @@
     await browser.storage.local.set({
       [Tracker.STORAGE_KEY]: Tracker.normalizeTrackers(trackers, Date.now())
     });
+  }
+
+  async function loadTrackerReviews() {
+    if (!Tracker) {
+      return [];
+    }
+    const stored = await browser.storage.local.get(Tracker.REVIEW_STORAGE_KEY);
+    return Tracker.normalizeReviewItems(stored && stored[Tracker.REVIEW_STORAGE_KEY]);
+  }
+
+  async function saveTrackerReviews(items) {
+    await browser.storage.local.set({
+      [Tracker.REVIEW_STORAGE_KEY]: Tracker.normalizeReviewItems(items)
+    });
+  }
+
+  function trackerReviewPublicSnapshot(item) {
+    return item ? { ...item } : null;
   }
 
   function queueTrackerMutation(callback) {
@@ -2223,6 +2348,60 @@
     });
   }
 
+  async function addTrackerReviewMatches(tracker, entries, pageTitle) {
+    return queueTrackerMutation(async () => {
+      const current = await loadTrackerReviews();
+      const rendered = trackerDownloadItems(
+        { ...tracker, pageTitle: pageTitle || tracker.pageTitle },
+        entries.map((entry) => entry.item)
+      );
+      const additions = entries.map((entry, index) => ({
+        ...rendered[index],
+        sourceFilename: entry.item.filename || (Core.filenameForMedia || Core.filenameForImage)(
+          entry.item.url,
+          index,
+          entry.item.mediaType
+        ),
+        trackerId: tracker.id,
+        fingerprint: entry.fingerprint,
+        detectedAt: Date.now(),
+        pageTitle: pageTitle || tracker.pageTitle,
+        pageUrl: tracker.url
+      }));
+      const added = Tracker.addReviewItems(current, additions, Date.now());
+      await saveTrackerReviews(added.items);
+      const acceptedIds = new Set(added.acceptedIds);
+      return {
+        reviews: added.items,
+        acceptedFingerprints: additions
+          .filter((item) => acceptedIds.has(`${tracker.id}:${item.fingerprint}`))
+          .map((item) => item.fingerprint),
+        rejected: added.rejected
+      };
+    });
+  }
+
+  async function refreshPendingTrackerReviews(tracker, entries, pageTitle) {
+    if (Tracker.normalizeAction(tracker && tracker.action) !== "review") {
+      return new Set();
+    }
+    const current = await loadTrackerReviews();
+    const pending = new Map(current
+      .filter((item) => item.trackerId === tracker.id)
+      .map((item) => [item.fingerprint, item]));
+    const refreshed = entries.filter((entry) => {
+      const existing = pending.get(entry.fingerprint);
+      return existing && (
+        existing.url !== entry.item.url ||
+        existing.previewUrl !== String(entry.item.previewUrl || "")
+      );
+    });
+    if (refreshed.length) {
+      await addTrackerReviewMatches(tracker, refreshed, pageTitle);
+    }
+    return new Set(pending.keys());
+  }
+
   async function performTrackerRun(id, reason) {
     const trackers = await loadTrackers();
     const tracker = trackers.find((candidate) => candidate.id === id);
@@ -2268,6 +2447,11 @@
         fingerprinted.push({ item, fingerprint });
       }
       const seen = new Set(tracker.seen);
+      const pendingReviewFingerprints = await refreshPendingTrackerReviews(
+        tracker,
+        fingerprinted,
+        pageTitle
+      );
 
       if (!tracker.initialized && !tracker.downloadInitial) {
         const baseline = fingerprinted.map((entry) => entry.fingerprint);
@@ -2283,6 +2467,8 @@
           consecutiveAuthorizationErrors: 0,
           autoPausedReason: "",
           lastFound: fingerprinted.length,
+          lastDiscovered: 0,
+          lastReviewed: 0,
           lastQueued: 0,
           lastPagesChecked: pagesChecked,
           lastError: ""
@@ -2290,6 +2476,8 @@
           status: "baseline",
           pagesChecked,
           found: fingerprinted.length,
+          discovered: 0,
+          reviewed: 0,
           queued: 0,
           message: `Baseline recorded with ${fingerprinted.length} matching item${fingerprinted.length === 1 ? "" : "s"}.`
         });
@@ -2297,7 +2485,9 @@
       }
 
       const fresh = fingerprinted
-        .filter((entry) => !seen.has(entry.fingerprint))
+        .filter((entry) =>
+          !seen.has(entry.fingerprint) && !pendingReviewFingerprints.has(entry.fingerprint)
+        )
         .slice(0, tracker.matching.maxDownloadsPerRun);
       if (!fresh.length) {
         const finishedAt = Date.now();
@@ -2311,6 +2501,8 @@
           consecutiveAuthorizationErrors: 0,
           autoPausedReason: "",
           lastFound: fingerprinted.length,
+          lastDiscovered: 0,
+          lastReviewed: 0,
           lastQueued: 0,
           lastPagesChecked: pagesChecked,
           lastError: ""
@@ -2318,42 +2510,112 @@
           status: "success",
           pagesChecked,
           found: fingerprinted.length,
+          discovered: 0,
+          reviewed: 0,
           queued: 0,
           message: "No unseen matching media was found."
         });
         return trackerPublicSnapshot(updated);
       }
 
-      const downloadItems = trackerDownloadItems(tracker, fresh.map((entry) => entry.item));
-      const queueResult = await enqueueDownloadBatch(validateBatch({
-        type: "DOWNLOAD_BATCH",
-        folder: tracker.folder,
-        saveAs: false,
-        incognito: false,
-        pageTitle,
-        pageUrl: tracker.url,
-        items: downloadItems
-      }));
-      const acceptedIndexes = Array.isArray(queueResult.acceptedIndexes)
-        ? queueResult.acceptedIndexes
-        : [];
-      const acceptedFingerprints = acceptedIndexes
-        .map((index) => fresh[index] && fresh[index].fingerprint)
-        .filter(Boolean);
-      if (!queueResult.ok || !acceptedFingerprints.length) {
-        throw trackerRunError(
-          queueResult.error || "No new tracker matches could be queued.",
-          "queue"
-        );
+      const alreadyDownloaded = await downloadedFingerprintSet(false, tracker.url, fresh);
+      const downloadedFingerprints = fresh
+        .map((entry) => entry.fingerprint)
+        .filter((fingerprint) => alreadyDownloaded.has(fingerprint));
+      const actionable = fresh.filter((entry) => !alreadyDownloaded.has(entry.fingerprint));
+      if (!actionable.length) {
+        const finishedAt = Date.now();
+        const updated = await finishTrackerRun(id, startedAt, reason, {
+          pageTitle,
+          initialized: true,
+          seen: Tracker.recordSeen(tracker.seen, downloadedFingerprints),
+          lastSuccessAt: finishedAt,
+          nextRunAt: finishedAt + tracker.intervalMinutes * 60000,
+          backoffUntil: 0,
+          consecutiveErrors: 0,
+          consecutiveAuthorizationErrors: 0,
+          autoPausedReason: "",
+          lastFound: fingerprinted.length,
+          lastDiscovered: 0,
+          lastReviewed: 0,
+          lastQueued: 0,
+          lastPagesChecked: pagesChecked,
+          lastError: ""
+        }, {
+          status: "success",
+          pagesChecked,
+          found: fingerprinted.length,
+          discovered: 0,
+          reviewed: 0,
+          queued: 0,
+          message: `${downloadedFingerprints.length} unseen tracker match${downloadedFingerprints.length === 1 ? " was" : "es were"} already downloaded or queued.`
+        });
+        return trackerPublicSnapshot(updated);
       }
-      const partialError = queueResult.failed
-        ? `${queueResult.failed} new match${queueResult.failed === 1 ? "" : "es"} could not be queued and will be retried.`
-        : "";
+
+      const action = Tracker.normalizeAction(tracker.action);
+      let acceptedFingerprints = [];
+      let reviewed = 0;
+      let queued = 0;
+      let partialError = "";
+      let successMessage = "";
+      let notificationMessage = "";
+
+      if (action === "notify") {
+        acceptedFingerprints = actionable.map((entry) => entry.fingerprint);
+        successMessage = `Found ${acceptedFingerprints.length} new match${acceptedFingerprints.length === 1 ? "" : "es"}; notification-only mode queued nothing.`;
+        notificationMessage = `${acceptedFingerprints.length} new match${acceptedFingerprints.length === 1 ? " was" : "es were"} found on ${pageTitle}. Nothing was downloaded.`;
+      } else if (action === "review") {
+        const reviewResult = await addTrackerReviewMatches(tracker, actionable, pageTitle);
+        acceptedFingerprints = reviewResult.acceptedFingerprints;
+        reviewed = acceptedFingerprints.length;
+        const rejectedCount = actionable.length - acceptedFingerprints.length;
+        partialError = rejectedCount
+          ? `${rejectedCount} new match${rejectedCount === 1 ? "" : "es"} could not fit in the review inbox and will be retried.`
+          : "";
+        successMessage = partialError || `Added ${reviewed} new match${reviewed === 1 ? "" : "es"} to review.`;
+        if (reviewed) {
+          notificationMessage = `${reviewed} new match${reviewed === 1 ? " is" : "es are"} waiting for review from ${pageTitle}.`;
+        }
+      } else {
+        const downloadItems = trackerDownloadItems(tracker, actionable.map((entry) => entry.item));
+        const queueResult = await enqueueDownloadBatch(validateBatch({
+          type: "DOWNLOAD_BATCH",
+          folder: tracker.folder,
+          saveAs: false,
+          incognito: false,
+          pageTitle,
+          pageUrl: tracker.url,
+          items: downloadItems
+        }));
+        const acceptedIndexes = Array.isArray(queueResult.acceptedIndexes)
+          ? queueResult.acceptedIndexes
+          : [];
+        acceptedFingerprints = acceptedIndexes
+          .map((index) => actionable[index] && actionable[index].fingerprint)
+          .filter(Boolean);
+        if (!queueResult.ok || !acceptedFingerprints.length) {
+          throw trackerRunError(
+            queueResult.error || "No new tracker matches could be queued.",
+            "queue"
+          );
+        }
+        queued = acceptedFingerprints.length;
+        partialError = queueResult.failed
+          ? `${queueResult.failed} new match${queueResult.failed === 1 ? "" : "es"} could not be queued and will be retried.`
+          : "";
+        successMessage = partialError || `Queued ${queued} new match${queued === 1 ? "" : "es"}.`;
+        notificationMessage = `${queued} new match${queued === 1 ? " was" : "es were"} added to Downloads from ${pageTitle}.`;
+      }
+
       const finishedAt = Date.now();
       const updated = await finishTrackerRun(id, startedAt, reason, {
         pageTitle,
         initialized: true,
-        seen: Tracker.recordSeen(tracker.seen, acceptedFingerprints),
+        seen: Tracker.recordSeen(
+          tracker.seen,
+          [...downloadedFingerprints, ...acceptedFingerprints]
+        ),
         lastSuccessAt: finishedAt,
         nextRunAt: finishedAt + tracker.intervalMinutes * 60000,
         backoffUntil: 0,
@@ -2361,21 +2623,23 @@
         consecutiveAuthorizationErrors: 0,
         autoPausedReason: "",
         lastFound: fingerprinted.length,
-        lastQueued: acceptedFingerprints.length,
+        lastDiscovered: actionable.length,
+        lastReviewed: reviewed,
+        lastQueued: queued,
         lastPagesChecked: pagesChecked,
         lastError: partialError
       }, {
         status: partialError ? "partial" : "success",
         pagesChecked,
         found: fingerprinted.length,
-        queued: acceptedFingerprints.length,
-        message: partialError || `Queued ${acceptedFingerprints.length} new match${acceptedFingerprints.length === 1 ? "" : "es"}.`
+        discovered: actionable.length,
+        reviewed,
+        queued,
+        message: successMessage
       });
-      await notifyTracker(
-        updated,
-        "matches",
-        `${acceptedFingerprints.length} new match${acceptedFingerprints.length === 1 ? " was" : "es were"} added to Downloads from ${updated.pageTitle}.`
-      ).catch(() => undefined);
+      if (notificationMessage) {
+        await notifyTracker(updated, "matches", notificationMessage).catch(() => undefined);
+      }
       return trackerPublicSnapshot(updated);
     } catch (error) {
       const message = error && error.name === "AbortError"
@@ -2409,6 +2673,8 @@
         consecutiveAuthorizationErrors,
         autoPausedReason,
         lastFound: 0,
+        lastDiscovered: 0,
+        lastReviewed: 0,
         lastQueued: 0,
         lastPagesChecked: pagesChecked,
         lastError: displayMessage
@@ -2416,6 +2682,8 @@
         status: "error",
         pagesChecked,
         found: 0,
+        discovered: 0,
+        reviewed: 0,
         queued: 0,
         message: displayMessage
       });
@@ -2528,6 +2796,84 @@
     return stored.enabled ? runTracker(stored.id, "save") : trackerPublicSnapshot(stored);
   }
 
+  async function trackerReviewAction(message) {
+    const action = String(message && message.action || "");
+    const id = String(message && message.id || "").slice(0, 160);
+    if (!["approve", "dismiss"].includes(action) || !id) {
+      throw new Error("The review action is invalid.");
+    }
+    const snapshot = await queueTrackerMutation(async () => {
+      const reviews = await loadTrackerReviews();
+      const review = reviews.find((item) => item.id === id);
+      if (!review) {
+        throw new Error("This review item no longer exists.");
+      }
+      if (action === "dismiss") {
+        const updated = Tracker.removeReviewItems(reviews, [id]);
+        await saveTrackerReviews(updated);
+        return { review, tracker: null, reviews: updated };
+      }
+      const trackers = await loadTrackers();
+      const tracker = trackers.find((item) => item.id === review.trackerId);
+      if (!tracker) {
+        throw new Error("The tracker for this review item no longer exists. Dismiss the item instead.");
+      }
+      return { review, tracker, reviews };
+    });
+    if (action === "dismiss") {
+      return {
+        ok: true,
+        action,
+        queued: 0,
+        reviews: snapshot.reviews.map(trackerReviewPublicSnapshot)
+      };
+    }
+
+    const alreadyDownloaded = await downloadedFingerprintSet(
+      false,
+      snapshot.tracker.url,
+      [snapshot.review.fingerprint]
+    );
+    let queueResult = null;
+    if (!alreadyDownloaded.has(snapshot.review.fingerprint)) {
+      const [approvedItem] = trackerDownloadItems(
+        {
+          ...snapshot.tracker,
+          pageTitle: snapshot.review.pageTitle || snapshot.tracker.pageTitle
+        },
+        [{
+          ...snapshot.review,
+          filename: snapshot.review.sourceFilename || snapshot.review.filename
+        }]
+      );
+      queueResult = await enqueueDownloadBatch(validateBatch({
+        type: "DOWNLOAD_BATCH",
+        folder: snapshot.tracker.folder,
+        saveAs: false,
+        incognito: false,
+        pageTitle: snapshot.review.pageTitle || snapshot.tracker.pageTitle,
+        pageUrl: snapshot.tracker.url,
+        items: [approvedItem]
+      }));
+      if (!queueResult.ok || !queueResult.queued) {
+        throw new Error(queueResult.error || "The review item could not be queued.");
+      }
+    }
+    const reviews = await queueTrackerMutation(async () => {
+      const current = await loadTrackerReviews();
+      const updated = Tracker.removeReviewItems(current, [id]);
+      await saveTrackerReviews(updated);
+      return updated;
+    });
+    return {
+      ok: true,
+      action,
+      queued: queueResult ? Number(queueResult.queued) || 0 : 0,
+      alreadyDownloaded: !queueResult,
+      reviews: reviews.map(trackerReviewPublicSnapshot)
+    };
+  }
+
   async function trackerMessage(message) {
     if (!Tracker) {
       throw new Error("The tracker engine is unavailable.");
@@ -2535,22 +2881,36 @@
     if (message.type === "GET_TRACKER") {
       const url = Tracker.normalizePageUrl(message.url);
       const trackers = await loadTrackers();
-      return { ok: true, tracker: trackerPublicSnapshot(trackers.find((item) => item.url === url)) };
+      const tracker = trackers.find((item) => item.url === url);
+      const reviews = tracker ? await loadTrackerReviews() : [];
+      const snapshot = trackerPublicSnapshot(tracker);
+      return {
+        ok: true,
+        tracker: snapshot
+          ? { ...snapshot, pendingReviewCount: reviews.filter((item) => item.trackerId === tracker.id).length }
+          : null
+      };
     }
     if (message.type === "GET_TRACKERS") {
       const trackers = await loadTrackers();
+      const reviews = await loadTrackerReviews();
       return {
         ok: true,
-        trackers: trackers.map(trackerPublicSnapshot),
-        maxTrackers: Tracker.MAX_TRACKERS
+        trackers: trackers.map((tracker) => ({
+          ...trackerPublicSnapshot(tracker),
+          pendingReviewCount: reviews.filter((item) => item.trackerId === tracker.id).length
+        })),
+        reviews: reviews.map(trackerReviewPublicSnapshot),
+        maxTrackers: Tracker.MAX_TRACKERS,
+        maxReviews: Tracker.MAX_REVIEW_ITEMS
       };
     }
     if (message.type === "UPSERT_TRACKER") {
-      return { ok: true, tracker: await upsertTracker(message) };
+      return { ok: true, tracker: await trackerSnapshotWithReviewCount(await upsertTracker(message)) };
     }
     if (message.type === "RUN_TRACKER") {
       const id = String(message.id || "");
-      return { ok: true, tracker: await runTracker(id, "manual") };
+      return { ok: true, tracker: await trackerSnapshotWithReviewCount(await runTracker(id, "manual")) };
     }
     if (message.type === "SET_TRACKER_ENABLED") {
       const enabled = Boolean(message.enabled);
@@ -2568,7 +2928,7 @@
         throw new Error("This tracker no longer exists.");
       }
       await syncTrackerAlarm(updated);
-      return { ok: true, tracker: trackerPublicSnapshot(updated) };
+      return { ok: true, tracker: await trackerSnapshotWithReviewCount(updated) };
     }
     if (message.type === "SET_ALL_TRACKERS_ENABLED") {
       const enabled = Boolean(message.enabled);
@@ -2594,7 +2954,11 @@
       const id = String(message.id || "");
       await queueTrackerMutation(async () => {
         const trackers = await loadTrackers();
-        await saveTrackers(trackers.filter((tracker) => tracker.id !== id));
+        const reviews = await loadTrackerReviews();
+        await Promise.all([
+          saveTrackers(trackers.filter((tracker) => tracker.id !== id)),
+          saveTrackerReviews(reviews.filter((item) => item.trackerId !== id))
+        ]);
       });
       if (browser.alarms) {
         await browser.alarms.clear(trackerAlarmName(id));
@@ -2635,6 +2999,7 @@
           withoutLocalFilenameChange(change)
         );
       }
+      await recordCompletedLedgerTasksLocked(context);
       await pumpQueueLocked(context, true);
       return true;
     });
@@ -2787,8 +3152,173 @@
   async function getDownloadDashboard(incognito) {
     return queueOperation(Boolean(incognito), async (context) => {
       const reconciled = await reconcileQueueLocked(context, true);
-      await pumpQueueLocked(context, reconciled);
+      const ledgerChanged = await recordCompletedLedgerTasksLocked(context);
+      await pumpQueueLocked(context, reconciled || ledgerChanged);
       return { ok: true, snapshot: queueDashboardSnapshot(context.state) };
+    });
+  }
+
+  async function downloadedFingerprintSet(incognito, siteKeyValue, entries) {
+    const downloaded = new Set();
+    if (!DownloadLedger) {
+      return downloaded;
+    }
+    const siteKey = DownloadLedger.siteKeyForUrl(siteKeyValue);
+    if (!siteKey) {
+      return downloaded;
+    }
+    const ledger = await loadDownloadLedger(incognito);
+    const wanted = new Set((Array.isArray(entries) ? entries : [])
+      .map((entry) => DownloadLedger.normalizeFingerprint(
+        typeof entry === "string" ? entry : entry && entry.fingerprint
+      ))
+      .filter(Boolean));
+    for (const entry of ledger && ledger.entries || []) {
+      if (entry.siteKey === siteKey && wanted.has(entry.fingerprint)) {
+        downloaded.add(entry.fingerprint);
+      }
+    }
+    if (DownloadQueue && wanted.size) {
+      await queueOperation(Boolean(incognito), async (context) => {
+        for (const job of context.state.jobs) {
+          for (const task of job.tasks) {
+            if (!["queued", "starting", "in_progress", "paused", "complete"].includes(task.status)) {
+              continue;
+            }
+            const identity = ledgerIdentityForQueueTask(job, task);
+            if (identity.siteKey === siteKey && wanted.has(identity.fingerprint)) {
+              downloaded.add(identity.fingerprint);
+            }
+          }
+        }
+      });
+    }
+    return downloaded;
+  }
+
+  async function getMediaDownloadStatuses(message) {
+    if (!DownloadLedger || !DownloadQueue) {
+      return {
+        ok: true,
+        statuses: (Array.isArray(message && message.items) ? message.items : []).map(() => ({
+          fingerprint: "",
+          status: "new",
+          completedAt: 0,
+          filename: ""
+        }))
+      };
+    }
+    const rawItems = Array.isArray(message && message.items) ? message.items : [];
+    if (rawItems.length > Core.MAX_BATCH_SIZE) {
+      throw new Error(`At most ${Core.MAX_BATCH_SIZE} media statuses can be requested at once.`);
+    }
+    const siteKey = DownloadLedger.siteKeyForUrl(message && message.pageUrl);
+    let payloadLength = 0;
+    const items = rawItems.map((item) => {
+      const url = typeof (item && item.url) === "string" ? item.url : "";
+      const identityKey = typeof (item && item.identityKey) === "string"
+        ? item.identityKey.slice(0, 300)
+        : "";
+      payloadLength += url.length + identityKey.length;
+      return {
+        fingerprint: DownloadLedger.mediaFingerprint({ url, identityKey })
+      };
+    });
+    if (payloadLength > Core.MAX_BATCH_TOTAL_URL_LENGTH) {
+      throw new Error("The media status request is too large.");
+    }
+    if (!siteKey) {
+      return {
+        ok: true,
+        statuses: items.map((item) => ({
+          fingerprint: item.fingerprint,
+          status: "new",
+          completedAt: 0,
+          filename: ""
+        }))
+      };
+    }
+
+    return queueOperation(Boolean(message && message.incognito), async (context) => {
+      const reconciled = await reconcileQueueLocked(context, true);
+      const ledgerChanged = await recordCompletedLedgerTasksLocked(context);
+      if (reconciled || ledgerChanged || context.dirty) {
+        await persistQueueLocked(context);
+      }
+      const ledger = await loadDownloadLedger(context.incognito);
+      const completedByFingerprint = new Map();
+      for (const entry of ledger && ledger.entries || []) {
+        if (entry.siteKey === siteKey && !completedByFingerprint.has(entry.fingerprint)) {
+          completedByFingerprint.set(entry.fingerprint, entry);
+        }
+      }
+
+      const queueByFingerprint = new Map();
+      const statusPriority = {
+        queued: 4,
+        starting: 4,
+        in_progress: 4,
+        paused: 4,
+        complete: 3,
+        interrupted: 2,
+        cancelled: 1
+      };
+      for (const job of context.state.jobs) {
+        for (const task of job.tasks) {
+          const identity = ledgerIdentityForQueueTask(job, task);
+          if (identity.siteKey !== siteKey || !identity.fingerprint) {
+            continue;
+          }
+          const current = queueByFingerprint.get(identity.fingerprint);
+          const priority = statusPriority[task.status] || 0;
+          const currentPriority = current ? statusPriority[current.status] || 0 : -1;
+          if (
+            !current ||
+            priority > currentPriority ||
+            (priority === currentPriority && Number(task.updatedAt) > Number(current.updatedAt))
+          ) {
+            queueByFingerprint.set(identity.fingerprint, task);
+          }
+        }
+      }
+
+      return {
+        ok: true,
+        statuses: items.map((item) => {
+          const task = queueByFingerprint.get(item.fingerprint);
+          const ledgerEntry = completedByFingerprint.get(item.fingerprint);
+          if (task && ["queued", "starting", "in_progress", "paused"].includes(task.status)) {
+            return {
+              fingerprint: item.fingerprint,
+              status: "queued",
+              completedAt: 0,
+              filename: task.filename || ""
+            };
+          }
+          if (ledgerEntry || task && task.status === "complete") {
+            return {
+              fingerprint: item.fingerprint,
+              status: "downloaded",
+              completedAt: Number(ledgerEntry && ledgerEntry.completedAt || task && task.completedAt) || 0,
+              filename: String(ledgerEntry && ledgerEntry.filename || task && task.filename || "")
+            };
+          }
+          if (task && task.status === "interrupted") {
+            return {
+              fingerprint: item.fingerprint,
+              status: "failed",
+              completedAt: Number(task.completedAt) || 0,
+              filename: task.filename || ""
+            };
+          }
+          return {
+            fingerprint: item.fingerprint,
+            status: "new",
+            completedAt: 0,
+            filename: ""
+          };
+        })
+      };
     });
   }
 
@@ -3034,6 +3564,13 @@
       }));
     }
 
+    if (message.type === "TRACKER_REVIEW_ACTION") {
+      return trackerReviewAction(message).catch((error) => ({
+        ok: false,
+        error: error && error.message ? error.message : String(error)
+      }));
+    }
+
     if (message.type === "DOWNLOAD_ARCHIVE") {
       try {
         return startArchive(validateArchive(message)).catch((error) =>
@@ -3046,6 +3583,13 @@
 
     if (message.type === "GET_DOWNLOAD_DASHBOARD") {
       return getDownloadDashboard(Boolean(message.incognito)).catch((error) => ({
+        ok: false,
+        error: error && error.message ? error.message : String(error)
+      }));
+    }
+
+    if (message.type === "GET_MEDIA_DOWNLOAD_STATUS") {
+      return getMediaDownloadStatuses(message).catch((error) => ({
         ok: false,
         error: error && error.message ? error.message : String(error)
       }));

@@ -44,8 +44,12 @@ assert.deepEqual(Tracking.summarizeTrackers(trackers), {
   active: 2,
   paused: 1,
   issues: 1,
-  queued: 4
+  queued: 4,
+  reviewed: 0,
+  discovered: 0,
+  pending: 0
 });
+assert.equal(Tracking.summarizeTrackers(trackers, [{ id: "review-1" }]).pending, 1);
 assert.equal(Tracking.intervalLabel(15), "Every 15 minutes");
 assert.equal(Tracking.intervalLabel(60), "Every 1 hour");
 assert.equal(Tracking.intervalLabel(360), "Every 6 hours");
@@ -57,6 +61,9 @@ assert.equal(
 );
 assert.equal(Tracking.describeFilters(trackers[1]), "Videos · MP4");
 assert.equal(Tracking.describeFilters(trackers[2]), "Images & videos");
+assert.equal(Tracking.describeAction({ action: "download" }), "Download automatically");
+assert.equal(Tracking.describeAction({ action: "review" }), "Add to review");
+assert.equal(Tracking.describeAction({ action: "notify" }), "Notify only");
 assert.equal(Tracking.describePagination(trackers[0]), "First page only");
 assert.equal(
   Tracking.describePagination({ pagination: { mode: "next-link", maxPages: 5 } }),

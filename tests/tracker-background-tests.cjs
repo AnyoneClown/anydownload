@@ -8,6 +8,7 @@ const Core = require("../extension/shared/core.js");
 const Filters = require("../extension/shared/filters.js");
 const Templates = require("../extension/shared/templates.js");
 const Tracker = require("../extension/shared/tracker.js");
+const DownloadLedger = require("../extension/shared/download-ledger.js");
 const DownloadQueue = require("../extension/shared/download-queue.js");
 
 function storageArea() {
@@ -230,6 +231,7 @@ function errorResponse(url, status, retryAfter) {
   const sandbox = {
     AbortController: AbortControllerFixture,
     AnyDownloadTracker: Tracker,
+    AnyDownloadLedger: DownloadLedger,
     Blob: class BlobFixture {},
     DOMParser: DOMParserFixture,
     Date,
@@ -284,6 +286,7 @@ function errorResponse(url, status, retryAfter) {
   });
   assert.equal(created.ok, true);
   assert.equal(created.tracker.initialized, true);
+  assert.equal(created.tracker.action, "download", "Existing tracker payloads must keep automatic-download behavior");
   assert.equal(created.tracker.seenCount, 1);
   assert.equal(created.tracker.lastQueued, 0, "The default first check only records a baseline");
   assert.equal(created.tracker.activity.length, 1);
@@ -456,6 +459,141 @@ function errorResponse(url, status, retryAfter) {
   assert.equal(removed.tracker, null);
   const fetchedTracker = await runtimeMessage({ type: "GET_TRACKER", url: trackedUrl });
   assert.equal(fetchedTracker.tracker, null);
+
+  pageHtml = "<!doctype html><title>Review gallery</title><img src='/media/review-baseline.jpg' alt='baseline'>";
+  const reviewTracker = await runtimeMessage({
+    type: "UPSERT_TRACKER",
+    incognito: false,
+    tracker: {
+      url: trackedUrl,
+      pageTitle: "Review gallery",
+      folder: "Tracked/review",
+      intervalMinutes: 15,
+      filters: { mediaType: "image", photosOnly: false, format: "jpeg" },
+      action: "review",
+      notifications: { newMatches: true, errors: true },
+      filenameTemplate: "{index}-{filename}",
+      downloadInitial: false
+    }
+  });
+  assert.equal(reviewTracker.ok, true);
+  assert.equal(reviewTracker.tracker.action, "review");
+  assert.equal(reviewTracker.tracker.pendingReviewCount, 0);
+  const downloadsBeforeReview = downloadRequests.length;
+  pageHtml += "<img src='/media/review-me.jpg?token=one' alt='review me'>";
+  const reviewed = await runtimeMessage({ type: "RUN_TRACKER", id: reviewTracker.tracker.id });
+  assert.equal(reviewed.tracker.lastReviewed, 1);
+  assert.equal(reviewed.tracker.lastQueued, 0);
+  assert.equal(reviewed.tracker.pendingReviewCount, 1);
+  assert.equal(downloadRequests.length, downloadsBeforeReview, "Review mode must not download before approval");
+
+  pageHtml = pageHtml.replace("token=one", "token=two");
+  const refreshedReview = await runtimeMessage({ type: "RUN_TRACKER", id: reviewTracker.tracker.id });
+  assert.equal(refreshedReview.tracker.lastReviewed, 0, "Refreshing a pending signed URL must not create another review action");
+  let reviewList = await runtimeMessage({ type: "GET_TRACKERS" });
+  assert.equal(reviewList.reviews.length, 1);
+  assert.equal(reviewList.reviews[0].url, "https://example.test/media/review-me.jpg?token=two");
+  assert.equal(reviewList.trackers[0].pendingReviewCount, 1);
+  const approved = await runtimeMessage({
+    type: "TRACKER_REVIEW_ACTION",
+    action: "approve",
+    id: reviewList.reviews[0].id
+  });
+  assert.equal(approved.ok, true);
+  assert.equal(approved.queued, 1);
+  assert.equal(approved.reviews.length, 0);
+  const approvedTask = local.data["downloadQueueState:v1"].jobs
+    .flatMap((job) => job.tasks)
+    .find((task) => task.url === "https://example.test/media/review-me.jpg?token=two");
+  assert.ok(
+    approvedTask,
+    "Approving a review item must persist it in the durable queue even when all start slots are occupied"
+  );
+  assert.equal(approvedTask.filename, "0001-review-me.jpg", "Approval must render the current template exactly once");
+
+  const notifyTracker = await runtimeMessage({
+    type: "UPSERT_TRACKER",
+    tracker: {
+      url: trackedUrl,
+      pageTitle: "Review gallery",
+      folder: "Tracked/review",
+      intervalMinutes: 15,
+      filters: { mediaType: "image", photosOnly: false, format: "jpeg" },
+      action: "notify",
+      notifications: { newMatches: false, errors: true },
+      filenameTemplate: "{index}-{filename}",
+      downloadInitial: false
+    }
+  });
+  assert.equal(notifyTracker.tracker.action, "notify");
+  assert.equal(notifyTracker.tracker.notifications.newMatches, true, "Notify-only mode must keep match notifications enabled");
+  pageHtml += "<img src='/media/notify-me.jpg' alt='notify me'>";
+  const downloadsBeforeNotify = downloadRequests.length;
+  const notified = await runtimeMessage({ type: "RUN_TRACKER", id: notifyTracker.tracker.id });
+  assert.equal(notified.tracker.lastDiscovered, 1);
+  assert.equal(notified.tracker.lastQueued, 0);
+  assert.equal(downloadRequests.length, downloadsBeforeNotify, "Notify-only mode must never enqueue media");
+  assert.match(notificationRequests[notificationRequests.length - 1].details.message, /Nothing was downloaded/);
+
+  await runtimeMessage({
+    type: "UPSERT_TRACKER",
+    tracker: {
+      url: trackedUrl,
+      pageTitle: "Review gallery",
+      folder: "Tracked/review",
+      intervalMinutes: 15,
+      filters: { mediaType: "image", photosOnly: false, format: "jpeg" },
+      action: "review",
+      filenameTemplate: "{index}-{filename}",
+      downloadInitial: false
+    }
+  });
+  pageHtml += "<img src='/media/dismiss-me.jpg' alt='dismiss me'>";
+  await runtimeMessage({ type: "RUN_TRACKER", id: notifyTracker.tracker.id });
+  reviewList = await runtimeMessage({ type: "GET_TRACKERS" });
+  assert.equal(reviewList.reviews.length, 1);
+  const dismissed = await runtimeMessage({
+    type: "TRACKER_REVIEW_ACTION",
+    action: "dismiss",
+    id: reviewList.reviews[0].id
+  });
+  assert.equal(dismissed.ok, true);
+  assert.equal(dismissed.queued, 0);
+  assert.equal(dismissed.reviews.length, 0);
+
+  const autoTracker = await runtimeMessage({
+    type: "UPSERT_TRACKER",
+    tracker: {
+      url: trackedUrl,
+      pageTitle: "Review gallery",
+      folder: "Tracked/review",
+      intervalMinutes: 15,
+      filters: { mediaType: "image", photosOnly: false, format: "jpeg" },
+      action: "download",
+      filenameTemplate: "{index}-{filename}",
+      downloadInitial: false
+    }
+  });
+  const completedUrl = "https://example.test/media/already-downloaded.jpg";
+  const completedFingerprint = Tracker.mediaFingerprint({ url: completedUrl });
+  local.data[DownloadLedger.STORAGE_KEY] = DownloadLedger.recordCompletions(
+    DownloadLedger.emptyState(),
+    [{
+      siteKey: trackedUrl,
+      fingerprint: completedFingerprint,
+      filename: "already-downloaded.jpg",
+      completedAt: Date.now()
+    }]
+  );
+  const queueTasksBeforeCompletedMatch = local.data["downloadQueueState:v1"].jobs
+    .reduce((total, job) => total + job.tasks.length, 0);
+  pageHtml += "<img src='/media/already-downloaded.jpg' alt='already downloaded'>";
+  const skippedCompleted = await runtimeMessage({ type: "RUN_TRACKER", id: autoTracker.tracker.id });
+  const queueTasksAfterCompletedMatch = local.data["downloadQueueState:v1"].jobs
+    .reduce((total, job) => total + job.tasks.length, 0);
+  assert.equal(skippedCompleted.tracker.lastQueued, 0);
+  assert.equal(skippedCompleted.tracker.lastDiscovered, 0);
+  assert.equal(queueTasksAfterCompletedMatch, queueTasksBeforeCompletedMatch, "Trackers must not enqueue media already completed manually");
 
   console.log("Background tracker integration tests passed.");
 })().catch((error) => {

@@ -4,6 +4,17 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- A bounded, site-scoped completed-download ledger that stores compact stable fingerprints instead of media URLs. Manager rows now show New, Queued, Downloaded, or Failed state; completed items are skipped by default selection, can be hidden, and remain available through an explicit Download again action.
+- Three tracker actions: **Add to review**, **Notify only**, and **Download automatically**. New trackers default to review, while existing tracker records retain automatic-download behavior.
+- A local review inbox on the Tracking dashboard with media previews and individual Approve or Dismiss actions. Approval uses the tracker’s current destination and durable queue; pending signed URLs are refreshed whenever the tracked page exposes them again.
+
+### Privacy and boundaries
+
+- The normal completed ledger retains at most 5,000 fingerprints and 500 per source website; private-window completion state stays in session storage. Filenames and completion times are retained, but source media URLs are not.
+- Review mode necessarily retains the pending media URL and bounded display metadata in local extension storage. The inbox is limited to 500 items and 2 MB of review payload, is unavailable in private windows, and is removed per tracker when that tracker is deleted.
+
 ## [1.11.0] - 2026-08-23
 
 ### Added

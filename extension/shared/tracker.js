@@ -17,12 +17,15 @@
   "use strict";
 
   const STORAGE_KEY = "mediaTrackers:v1";
+  const REVIEW_STORAGE_KEY = "trackerReviewItems:v1";
   const ALARM_PREFIX = "mediaTracker:";
   const MAX_TRACKERS = 20;
   const MAX_SEEN = 5000;
   const MAX_ITEMS_PER_SCAN = 500;
   const MAX_DOWNLOADS_PER_RUN = 100;
   const MAX_ACTIVITY = 40;
+  const MAX_REVIEW_ITEMS = 500;
+  const MAX_REVIEW_PAYLOAD_LENGTH = 2 * 1024 * 1024;
   const MAX_PATTERNS = 20;
   const MAX_PAGES_PER_RUN = 10;
   const MIN_INTERVAL_MINUTES = 15;
@@ -157,6 +160,11 @@
     };
   }
 
+  function normalizeAction(value) {
+    const action = safeText(value, 20).toLowerCase();
+    return ["download", "review", "notify"].includes(action) ? action : "download";
+  }
+
   function normalizePagination(value, baseUrl) {
     const requestedMode = safeText(safeProperty(value, "mode"), 30).toLowerCase();
     let mode = ["next-link", "url-template"].includes(requestedMode) ? requestedMode : "none";
@@ -211,6 +219,8 @@
           : "error",
         pagesChecked: finiteInteger(safeProperty(raw, "pagesChecked"), 0, 0, MAX_PAGES_PER_RUN),
         found: finiteInteger(safeProperty(raw, "found"), 0, 0, MAX_ITEMS_PER_SCAN),
+        discovered: finiteInteger(safeProperty(raw, "discovered"), 0, 0, MAX_DOWNLOADS_PER_RUN),
+        reviewed: finiteInteger(safeProperty(raw, "reviewed"), 0, 0, MAX_DOWNLOADS_PER_RUN),
         queued: finiteInteger(safeProperty(raw, "queued"), 0, 0, MAX_DOWNLOADS_PER_RUN),
         message: safeText(safeProperty(raw, "message"), 500)
       });
@@ -234,6 +244,11 @@
       return null;
     }
     const matching = normalizeMatching(safeProperty(value, "matching"), safeProperty(value, "query"));
+    const action = normalizeAction(safeProperty(value, "action"));
+    const notifications = normalizeNotifications(safeProperty(value, "notifications"));
+    if (action === "notify") {
+      notifications.newMatches = true;
+    }
     return {
       id,
       url,
@@ -251,7 +266,8 @@
       query: matching.includeText,
       matching,
       pagination: normalizePagination(safeProperty(value, "pagination"), url),
-      notifications: normalizeNotifications(safeProperty(value, "notifications")),
+      action,
+      notifications,
       filenameTemplate: templateResult,
       downloadInitial: safeProperty(value, "downloadInitial") === true,
       enabled: safeProperty(value, "enabled") !== false,
@@ -272,6 +288,8 @@
       ),
       autoPausedReason: safeText(safeProperty(value, "autoPausedReason"), 500),
       lastFound: finiteInteger(safeProperty(value, "lastFound"), 0, 0, MAX_ITEMS_PER_SCAN),
+      lastDiscovered: finiteInteger(safeProperty(value, "lastDiscovered"), 0, 0, MAX_DOWNLOADS_PER_RUN),
+      lastReviewed: finiteInteger(safeProperty(value, "lastReviewed"), 0, 0, MAX_DOWNLOADS_PER_RUN),
       lastQueued: finiteInteger(safeProperty(value, "lastQueued"), 0, 0, MAX_DOWNLOADS_PER_RUN),
       lastPagesChecked: finiteInteger(safeProperty(value, "lastPagesChecked"), 0, 0, MAX_PAGES_PER_RUN),
       lastDurationMs: finiteInteger(safeProperty(value, "lastDurationMs"), 0, 0, 24 * 60 * 60 * 1000),
@@ -621,14 +639,136 @@
     return Array.from(found.values());
   }
 
+  function normalizeReviewItem(value, fallbackTime) {
+    const tracker = trackerId(safeProperty(value, "trackerId"));
+    const fingerprint = safeText(safeProperty(value, "fingerprint"), 40).toLowerCase();
+    const url = normalizePageUrl(safeProperty(value, "url"));
+    if (!tracker || !/^[a-f0-9]{16}$/.test(fingerprint) || !url) {
+      return null;
+    }
+    const previewUrl = normalizePageUrl(safeProperty(value, "previewUrl"));
+    return {
+      id: `${tracker}:${fingerprint}`,
+      trackerId: tracker,
+      fingerprint,
+      url,
+      previewUrl,
+      identityKey: safeText(safeProperty(value, "identityKey"), 300),
+      mediaType: safeText(safeProperty(value, "mediaType"), 20).toLowerCase() === "video"
+        ? "video"
+        : "image",
+      filename: safeText(safeProperty(value, "filename"), 180),
+      sourceFilename: safeText(safeProperty(value, "sourceFilename"), 180),
+      alt: safeText(safeProperty(value, "alt"), 500),
+      title: safeText(safeProperty(value, "title"), 500),
+      width: finiteInteger(safeProperty(value, "width"), 0, 0, 1000000),
+      height: finiteInteger(safeProperty(value, "height"), 0, 0, 1000000),
+      mimeType: safeText(safeProperty(value, "mimeType"), 100),
+      detectedAt: boundedTime(safeProperty(value, "detectedAt")) || boundedTime(fallbackTime) || Date.now(),
+      pageTitle: safeText(safeProperty(value, "pageTitle"), 300),
+      pageUrl: normalizePageUrl(safeProperty(value, "pageUrl"))
+    };
+  }
+
+  function reviewPayloadLength(item) {
+    return [
+      item.url,
+      item.previewUrl,
+      item.identityKey,
+      item.filename,
+      item.sourceFilename,
+      item.alt,
+      item.title,
+      item.pageTitle,
+      item.pageUrl
+    ].reduce((total, value) => total + String(value || "").length, 0);
+  }
+
+  function normalizeReviewItems(value) {
+    const items = [];
+    const ids = new Set();
+    let payloadLength = 0;
+    const normalized = (Array.isArray(value) ? value : [])
+      .map((item) => normalizeReviewItem(item, 0))
+      .filter(Boolean)
+      .sort((left, right) => right.detectedAt - left.detectedAt);
+    for (const item of normalized) {
+      const length = reviewPayloadLength(item);
+      if (
+        ids.has(item.id) ||
+        items.length >= MAX_REVIEW_ITEMS ||
+        payloadLength + length > MAX_REVIEW_PAYLOAD_LENGTH
+      ) {
+        continue;
+      }
+      ids.add(item.id);
+      payloadLength += length;
+      items.push(item);
+    }
+    return items;
+  }
+
+  function addReviewItems(existing, additions, nowValue) {
+    const now = boundedTime(nowValue) || Date.now();
+    const items = normalizeReviewItems(existing);
+    const byId = new Map(items.map((item, index) => [item.id, index]));
+    let payloadLength = items.reduce((total, item) => total + reviewPayloadLength(item), 0);
+    const acceptedIds = [];
+    const rejected = [];
+    for (const raw of Array.isArray(additions) ? additions : []) {
+      const item = normalizeReviewItem(raw, now);
+      if (!item) {
+        rejected.push({ id: "", error: "The review item is invalid." });
+        continue;
+      }
+      const existingIndex = byId.get(item.id);
+      if (existingIndex !== undefined) {
+        const previous = items[existingIndex];
+        payloadLength -= reviewPayloadLength(previous);
+        item.detectedAt = previous.detectedAt;
+        if (payloadLength + reviewPayloadLength(item) > MAX_REVIEW_PAYLOAD_LENGTH) {
+          payloadLength += reviewPayloadLength(previous);
+          rejected.push({ id: item.id, error: "The review inbox URL limit was reached." });
+          continue;
+        }
+        items[existingIndex] = item;
+        payloadLength += reviewPayloadLength(item);
+        acceptedIds.push(item.id);
+        continue;
+      }
+      const length = reviewPayloadLength(item);
+      if (items.length >= MAX_REVIEW_ITEMS || payloadLength + length > MAX_REVIEW_PAYLOAD_LENGTH) {
+        rejected.push({ id: item.id, error: "The review inbox is full." });
+        continue;
+      }
+      byId.set(item.id, items.length);
+      items.push(item);
+      payloadLength += length;
+      acceptedIds.push(item.id);
+    }
+    return {
+      items: normalizeReviewItems(items),
+      acceptedIds,
+      rejected
+    };
+  }
+
+  function removeReviewItems(existing, ids) {
+    const remove = new Set((Array.isArray(ids) ? ids : [ids]).map((id) => safeText(id, 160)));
+    return normalizeReviewItems(existing).filter((item) => !remove.has(item.id));
+  }
+
   return Object.freeze({
     STORAGE_KEY,
+    REVIEW_STORAGE_KEY,
     ALARM_PREFIX,
     MAX_TRACKERS,
     MAX_SEEN,
     MAX_ITEMS_PER_SCAN,
     MAX_DOWNLOADS_PER_RUN,
     MAX_ACTIVITY,
+    MAX_REVIEW_ITEMS,
+    MAX_REVIEW_PAYLOAD_LENGTH,
     MAX_PATTERNS,
     MAX_PAGES_PER_RUN,
     MIN_INTERVAL_MINUTES,
@@ -642,6 +782,7 @@
     normalizeMatching,
     normalizePagination,
     normalizeNotifications,
+    normalizeAction,
     normalizeActivity,
     appendActivity,
     stableMediaValue,
@@ -652,6 +793,10 @@
     matchesTrackerRules,
     pageUrlFromTemplate,
     extractNextPageUrl,
-    extractMediaFromDocument
+    extractMediaFromDocument,
+    normalizeReviewItem,
+    normalizeReviewItems,
+    addReviewItems,
+    removeReviewItems
   });
 });

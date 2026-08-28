@@ -751,6 +751,7 @@
         filename: suggestedFilename(metadata, candidate),
         kinds: ["YouTube direct file", `${quality} ${trackDescription}`],
         sourceProvider: "youtube",
+        identityKey: `youtube:${metadata.videoId}:${candidate.itag}`,
         videoId: metadata.videoId,
         qualityLabel: quality,
         hasAudio: candidate.hasAudio,
