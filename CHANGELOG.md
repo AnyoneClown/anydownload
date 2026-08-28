@@ -4,8 +4,11 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-08-28
+
 ### Added
 
+- A tag-driven release workflow that tests, lints, and packages the extension, submits listed updates to AMO, and creates checksummed GitHub release assets.
 - A bounded, site-scoped completed-download ledger that stores compact stable fingerprints instead of media URLs. Manager rows now show New, Queued, Downloaded, or Failed state; completed items are skipped by default selection, can be hidden, and remain available through an explicit Download again action.
 - Three tracker actions: **Add to review**, **Notify only**, and **Download automatically**. New trackers default to review, while existing tracker records retain automatic-download behavior.
 - A local review inbox on the Tracking dashboard with media previews and individual Approve or Dismiss actions. Approval uses the tracker’s current destination and durable queue; pending signed URLs are refreshed whenever the tracked page exposes them again.

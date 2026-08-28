@@ -1,0 +1,127 @@
+name: Release Firefox add-on
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, submit to AMO, and publish GitHub release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate tag and package versions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          manifest_version="$(node -p "require('./extension/manifest.json').version")"
+          package_version="$(node -p "require('./package.json').version")"
+
+          if [[ "${tag}" != "v${manifest_version}" ]]; then
+            echo "Tag ${tag} does not match extension/manifest.json version ${manifest_version}." >&2
+            exit 1
+          fi
+
+          if [[ "${package_version}" != "${manifest_version}" ]]; then
+            echo "package.json version ${package_version} does not match manifest version ${manifest_version}." >&2
+            exit 1
+          fi
+
+          echo "RELEASE_VERSION=${version}" >> "${GITHUB_ENV}"
+
+      - name: Check AMO credentials
+        shell: bash
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
+          WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${WEB_EXT_API_KEY}" || -z "${WEB_EXT_API_SECRET}" ]]; then
+            echo "AMO_JWT_ISSUER and AMO_JWT_SECRET repository secrets are required." >&2
+            exit 1
+          fi
+
+      - name: Run tests
+        run: npm test
+
+      - name: Lint extension
+        run: npx --yes web-ext@10.6.0 lint --source-dir extension
+
+      - name: Build extension package
+        run: |
+          npx --yes web-ext@10.6.0 build \
+            --source-dir extension \
+            --artifacts-dir release-artifacts
+
+      - name: Create checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-artifacts
+          shopt -s nullglob
+          archives=(*.zip)
+
+          if (( ${#archives[@]} != 1 )); then
+            echo "Expected one extension ZIP, found ${#archives[@]}." >&2
+            exit 1
+          fi
+
+          sha256sum "${archives[@]}" > SHA256SUMS.txt
+
+      - name: Submit listed update to Firefox Add-ons
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
+          WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          npx --yes web-ext@10.6.0 sign \
+            --source-dir extension \
+            --artifacts-dir amo-artifacts \
+            --channel listed \
+            --approval-timeout 0 \
+            --no-input
+
+      - name: Create GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          assets=(release-artifacts/*.zip release-artifacts/SHA256SUMS.txt)
+
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" "${assets[@]}" --clobber
+            exit 0
+          fi
+
+          release_options=()
+          if [[ "${RELEASE_VERSION}" == *-* ]]; then
+            release_options+=(--prerelease)
+          fi
+
+          gh release create "${tag}" "${assets[@]}" \
+            --verify-tag \
+            --title "AnyDownload ${RELEASE_VERSION}" \
+            --generate-notes \
+            "${release_options[@]}"

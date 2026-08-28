@@ -224,6 +224,7 @@ The `activeTab` permission is granted only after the user invokes the toolbar ac
 
 ## Version history
 
+- **1.12.0** — Adds a site-scoped completed-download ledger, explicit review/notify/automatic tracker actions, a local approval inbox, and substantial queue, manager, dashboard, and Instagram collection performance improvements.
 - **1.11.0** — Adds bounded background tracking with exact-site permission, baseline/new-match detection, include/exclude matching rules, per-check limits, incremental same-origin static pagination, retry/backoff and auto-pause behavior, system notifications, a 40-run activity history, durable queue handoff, and a dedicated all-trackers dashboard. Instagram profile-grid carousels now recover every exposed item when the profile feed API is unavailable. JavaScript-driven and AJAX “More” pagination remain intentionally out of scope.
 - **1.10.0** — Introduces the redesigned AnyDownload interface and illustrated Firefox icon, unifies all extension surfaces under one restrained light/dark theme, makes live updates automatic, simplifies filters and download actions, removes heuristic duplicate tooling, adds bounded FapFolder group-video collection, and improves signed-in Instagram profile pagination and collection filters.
 - **1.9.0** — Adds ordered Instagram carousel expansion, active-story and highlight extraction, and an explicit profile-owner **Stories & highlights** collector that reuses the current Instagram session without persisting credentials. It also adds basic public YouTube progressive-video resolution, usually 240p/360p with audio, with anonymous player requests and just-in-time queue refreshes that never persist signed Googlevideo URLs.
@@ -257,11 +258,23 @@ web-ext build --source-dir extension
 
 `web-ext run` launches a temporary Firefox profile and reloads the add-on when source files change. `web-ext build` creates a submission ZIP. See Mozilla's [Getting started with web-ext](https://extensionworkshop.com/documentation/develop/getting-started-with-web-ext/).
 
+## Tagged GitHub releases
+
+Pushing a `v*` tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml). The workflow requires the tag, `extension/manifest.json`, and `package.json` to contain the same version; runs the tests and `web-ext lint`; builds the extension ZIP; generates `SHA256SUMS.txt`; submits the listed update to AMO; and creates a GitHub release with generated notes and both files attached.
+
+```bash
+# After updating both version fields and committing the release:
+git tag -a v1.12.0 -m "AnyDownload 1.12.0"
+git push origin v1.12.0
+```
+
+AMO submission requires the `AMO_JWT_ISSUER` and `AMO_JWT_SECRET` repository secrets. The workflow submits without waiting for review; after Mozilla approves the version, Firefox distributes it through normal automatic update checks. The attached GitHub ZIP remains an unsigned source package rather than the installable AMO build.
+
 ## Package and install permanently
 
-Normal Firefox Release and Beta builds require Mozilla signing for permanent installation.
+Normal Firefox Release and Beta builds require Mozilla signing for permanent installation. The tagged workflow automates listed updates for an existing AMO add-on. For a first or manual publication:
 
-1. Change `browser_specific_settings.gecko.id` in `manifest.json` to your own stable, unique email-style ID.
+1. Before the first publication, set `browser_specific_settings.gecko.id` in `manifest.json` to a stable, unique email-style ID. Never change the ID after publication.
 2. Run the tests and `web-ext lint`.
 3. Build a ZIP with `web-ext build --source-dir extension`.
 4. Submit it through the [Firefox Add-on Developer Hub](https://addons.mozilla.org/developers/) as a listed add-on, or use Mozilla's unlisted signing channel for private distribution.
