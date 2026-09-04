@@ -464,7 +464,8 @@
     function profilePkFromObject(object) {
       return normalizedProfilePk(
         safeProperty(object, "pk") || safeProperty(object, "user_id") ||
-          safeProperty(object, "userId") || safeProperty(object, "id")
+          safeProperty(object, "userId") || safeProperty(object, "userID") ||
+          safeProperty(object, "id")
       );
     }
 
@@ -2155,7 +2156,7 @@
       }
     }
 
-    function exactRuntimeRoots() {
+    function runtimeRoots() {
       const roots = [];
       const seen = new Set();
       const add = (node) => {
@@ -2167,11 +2168,6 @@
       try {
         add(document.body);
         add(document.documentElement);
-        const all = document.querySelectorAll("*");
-        const maximum = Math.min(Number(all && all.length) || 0, 128);
-        for (let index = 0; index < maximum; index += 1) {
-          add(all[index]);
-        }
       } catch (_error) {
         // Synthetic or partially loaded documents may omit these roots.
       }
@@ -2200,16 +2196,27 @@
           }
         }
       }
+      try {
+        const all = document.querySelectorAll("*");
+        const maximum = Math.min(Number(all && all.length) || 0, 128);
+        for (let index = 0; index < maximum; index += 1) {
+          add(all[index]);
+        }
+      } catch (_error) {
+        // Targeted runtime roots above are sufficient when broad traversal fails.
+      }
       return roots;
     }
 
-    function processExactRuntimeData() {
-      if (exactStructuredPostComplete || !["post", "reel"].includes(route.kind)) {
+    function processRuntimeData() {
+      const exactRoute = ["post", "reel"].includes(route.kind);
+      const complete = () => exactRoute ? exactStructuredPostComplete : Boolean(profilePk());
+      if ((!exactRoute && route.kind !== "profile") || complete()) {
         return;
       }
       const values = [];
       const seenValues = typeof WeakSet === "function" ? new WeakSet() : null;
-      for (const node of exactRuntimeRoots()) {
+      for (const node of runtimeRoots()) {
         let pageNode = node;
         try {
           const unwrapped = safeProperty(node, "wrappedJSObject");
@@ -2249,7 +2256,7 @@
       const visited = typeof WeakSet === "function" ? new WeakSet() : null;
       let visitedCount = 0;
       function walk(value, depth) {
-        if (exactStructuredPostComplete || !value || typeof value !== "object" || depth > 32 ||
+        if (complete() || !value || typeof value !== "object" || depth > 32 ||
           visitedCount >= 40000) {
           return;
         }
@@ -2260,7 +2267,9 @@
           visited.add(value);
         }
         visitedCount += 1;
-        if (exactItemMatches(value) && addExactItem(value, route.pageUrl)) {
+        if (route.kind === "profile") {
+          registerMatchingProfile(value, route.username);
+        } else if (exactItemMatches(value) && addExactItem(value, route.pageUrl)) {
           return;
         }
         let entries = [];
@@ -2273,14 +2282,14 @@
         }
         for (const [, child] of entries) {
           walk(child, depth + 1);
-          if (exactStructuredPostComplete) {
+          if (complete()) {
             break;
           }
         }
       }
       for (const value of values) {
         walk(value, 0);
-        if (exactStructuredPostComplete) {
+        if (complete()) {
           break;
         }
       }
@@ -2881,12 +2890,13 @@
       // SPA post modals do not replace the profile document's original
       // scripts. Recover the exact React item when exposed, otherwise request
       // only this canonical shortcode with the active Instagram session.
-      processExactRuntimeData();
+      processRuntimeData();
       await collectExactPostNetworkFallback();
       processExactViewerDom();
     }
 
     if (route.kind === "profile") {
+      processRuntimeData();
       const pk = await discoverProfilePk();
       await collectProfileFeed(pk);
       await collectProfileGridCarousels();

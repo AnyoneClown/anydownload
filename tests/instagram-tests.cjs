@@ -690,6 +690,40 @@ async function run() {
     assert.ok(requests.every((item) => item.init.credentials === "include"));
   }
 
+  // Modern profile pages keep the target user ID in React route props while
+  // rejecting the legacy profile-info endpoint. Reuse that ID for stories.
+  {
+    const runtimeNode = fakeDomElement("main");
+    runtimeNode["__reactProps$fixture"] = {
+      route: { username: "alice", userID: "42" }
+    };
+    const requests = [];
+    const result = await scan("https://www.instagram.com/alice/", {
+      elements: [
+        ...Array.from({ length: 130 }, () => fakeDomElement("div")),
+        runtimeNode
+      ]
+    }, {
+      includeProfilePosts: false,
+      includeStories: true,
+      includeHighlights: false
+    }, async (url) => {
+      requests.push(url);
+      const parsed = new URL(url);
+      assert.equal(parsed.pathname, "/api/v1/feed/reels_media/");
+      assert.equal(parsed.searchParams.get("reel_ids"), "42");
+      return jsonResponse(url, { reels: { "42": {
+        id: "42",
+        user: { username: "alice" },
+        items: [imageNode("runtime-story", "https://scontent.cdninstagram.com/runtime-story.jpg")]
+      } } });
+    });
+    assert.equal(requests.length, 1);
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://scontent.cdninstagram.com/runtime-story.jpg"
+    ]);
+  }
+
   // A partial active-slide hydration does not suppress the exact API fallback;
   // the full carousel replaces that incomplete view without related media.
   {

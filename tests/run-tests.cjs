@@ -64,7 +64,7 @@ const trackingJs = fs.readFileSync(path.join(root, "tracking/tracking.js"), "utf
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.name, "AnyDownload — Page Media Downloader");
-assert.equal(manifest.version, "1.12.0");
+assert.equal(manifest.version, "1.12.1");
 assert.equal(manifest.action.default_title, "Download page media");
 assert.equal(Core.MAX_BATCH_TOTAL_URL_LENGTH, 2000000);
 assert.deepEqual(manifest.permissions.sort(), ["activeTab", "alarms", "downloads", "menus", "notifications", "scripting", "storage"]);
@@ -388,6 +388,7 @@ assert.match(popupJs, /func:\s*collectFapFolderMediaFromPage/);
 assert.match(popupJs, /maxPosts:\s*64/);
 assert.match(popupJs, /fapFolderCollectionSucceeded/);
 assert.match(popupJs, /collectInstagramMediaFromPage/);
+assert.match(popupJs, /world:\s*"MAIN",\s*func:\s*collectInstagramMediaFromPage/);
 assert.match(popupJs, /includeProfilePosts:\s*!settings\.instagramCollections/);
 assert.match(popupJs, /includeStories:\s*Boolean\(settings\.instagramCollections\)/);
 assert.match(popupJs, /includeHighlights:\s*Boolean\(settings\.instagramCollections\)/);
@@ -440,6 +441,7 @@ assert.match(backgroundJs, /const collectFapFolderMediaFromPage = globalThis\.An
 assert.match(backgroundJs, /FapFolder\.isSupportedUrl\(tab\.url\)/);
 assert.match(backgroundJs, /func:\s*collectFapFolderMediaFromPage/);
 assert.match(backgroundJs, /const Instagram = globalThis\.ImageDownloaderInstagram/);
+assert.match(backgroundJs, /world:\s*"MAIN",\s*func:\s*collectInstagramMediaFromPage/);
 assert.match(backgroundJs, /func:\s*collectInstagramMediaFromPage/);
 assert.match(backgroundJs, /const YouTube = globalThis\.AnyDownloadYouTube/);
 assert.match(backgroundJs, /const collectYouTubeMediaFromPage = globalThis\.AnyDownloadYouTubeCollector/);

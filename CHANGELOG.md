@@ -4,6 +4,12 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.12.1] - 2026-09-04
+
+### Fixed
+
+- Private Instagram profile story collection now reuses the profile ID exposed by the signed-in page when Instagram rejects the legacy profile lookup, restoring active stories and highlights available to the current browser session.
+
 ## [1.12.0] - 2026-08-28
 
 ### Added

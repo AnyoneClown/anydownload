@@ -224,6 +224,7 @@ The `activeTab` permission is granted only after the user invokes the toolbar ac
 
 ## Version history
 
+- **1.12.1** — Restores active-story and highlight collection for signed-in private Instagram profiles when Instagram rejects its legacy profile lookup.
 - **1.12.0** — Adds a site-scoped completed-download ledger, explicit review/notify/automatic tracker actions, a local approval inbox, and substantial queue, manager, dashboard, and Instagram collection performance improvements.
 - **1.11.0** — Adds bounded background tracking with exact-site permission, baseline/new-match detection, include/exclude matching rules, per-check limits, incremental same-origin static pagination, retry/backoff and auto-pause behavior, system notifications, a 40-run activity history, durable queue handoff, and a dedicated all-trackers dashboard. Instagram profile-grid carousels now recover every exposed item when the profile feed API is unavailable. JavaScript-driven and AJAX “More” pagination remain intentionally out of scope.
 - **1.10.0** — Introduces the redesigned AnyDownload interface and illustrated Firefox icon, unifies all extension surfaces under one restrained light/dark theme, makes live updates automatic, simplifies filters and download actions, removes heuristic duplicate tooling, adds bounded FapFolder group-video collection, and improves signed-in Instagram profile pagination and collection filters.
@@ -264,8 +265,8 @@ Pushing a `v*` tag runs [`.github/workflows/release.yml`](.github/workflows/rele
 
 ```bash
 # After updating both version fields and committing the release:
-git tag -a v1.12.0 -m "AnyDownload 1.12.0"
-git push origin v1.12.0
+git tag -a v1.12.1 -m "AnyDownload 1.12.1"
+git push origin v1.12.1
 ```
 
 AMO submission requires the `AMO_JWT_ISSUER` and `AMO_JWT_SECRET` repository secrets. The workflow submits without waiting for review; after Mozilla approves the version, Firefox distributes it through normal automatic update checks. The attached GitHub ZIP remains an unsigned source package rather than the installable AMO build.

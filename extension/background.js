@@ -535,6 +535,7 @@
       try {
         const instagramResults = await browser.scripting.executeScript({
           target: { tabId: tab.id },
+          world: "MAIN",
           func: collectInstagramMediaFromPage,
           args: [{
             includeRelated: false,

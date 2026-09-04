@@ -545,6 +545,7 @@ function storageArea(initial = {}) {
   }, instagramTab);
   assert.equal(scriptingCalls.length, callsBeforeInstagram + 1);
   assert.equal(scriptingCalls[callsBeforeInstagram].func, instagramCollector);
+  assert.equal(scriptingCalls[callsBeforeInstagram].world, "MAIN");
   assert.equal(downloadRequests.length, downloadsBeforeInstagram + 1);
   assert.equal(downloadRequests[downloadsBeforeInstagram].url, instagramDirectUrl);
   assert.equal(
