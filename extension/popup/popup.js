@@ -479,23 +479,6 @@
     });
   }
 
-  function withoutInstagramCollectionTypes(images, excludedTypes) {
-    const excluded = new Set(excludedTypes || []);
-    const kept = [];
-    for (const image of images || []) {
-      const original = normalizedInstagramCollections(image && image.instagramCollections);
-      if (!original.length) {
-        kept.push(image);
-        continue;
-      }
-      const remaining = original.filter((collection) => !excluded.has(collection.type));
-      if (remaining.length) {
-        kept.push(Object.assign({}, image, { instagramCollections: remaining }));
-      }
-    }
-    return kept;
-  }
-
   function accumulateLiveImages(previousImages, scannedImages, options) {
     const settings = Object.assign({ maxImages: 1500, maxPayloadLength: 2000000 }, options || {});
     const byIdentity = new Map();
@@ -636,6 +619,8 @@
     YouTube && YouTube.collectYouTubeMediaFromPage;
   const Filters = globalThis.ImageDownloaderFilters;
   const Templates = globalThis.ImageDownloaderTemplates;
+  const Gallery = globalThis.AnyDownloadGallery;
+  const Tracker = globalThis.AnyDownloadTracker;
   const MAX_DISCOVERED_IMAGES = Core.MAX_BATCH_SIZE;
   const MAX_SCANNED_ELEMENTS = 10000;
   const MAX_RENDERED_ROWS = 350;
@@ -756,6 +741,11 @@
   let sidebarFollowRequest = null;
   let sidebarFollowRunning = false;
   let smartFilterRefreshTimer = null;
+  let galleryContext = null;
+  let gallerySaveTimer = null;
+  let galleryWritePromise = Promise.resolve();
+  let galleryCollection = null;
+  let sourceRescanTimer = null;
 
   function markFilenamePreviewsDirty() {
     filenamePreviewsDirty = true;
@@ -791,6 +781,11 @@
       "ask-single-input",
       "backgrounds-input",
       "clear-ignored-button",
+      "clear-gallery-button",
+      "collect-gallery-button",
+      "stop-gallery-button",
+      "gallery-pages-select",
+      "gallery-status",
       "download-button",
       "downloaded-button",
       "filter-input",
@@ -1330,8 +1325,8 @@
     return {
       filename: baseFilenameForMedia(image, index),
       url: image && image.url,
-      pageUrl: state.pageUrl,
-      pageTitle: state.pageTitle,
+      pageUrl: image && image.pageUrl || state.pageUrl,
+      pageTitle: image && image.pageTitle || state.pageTitle,
       width: image && image.width,
       height: image && image.height,
       mimeType: image && (image.mimeType || image.type),
@@ -1365,11 +1360,12 @@
       throw new Error(template.error);
     }
     const batchDate = jobDate instanceof Date ? jobDate : new Date();
-    return renderFilenameBatch(images, (image, batchIndex, usedNames) => Templates.render(
+    const items = renderFilenameBatch(images, (image, batchIndex, usedNames) => Templates.render(
       template.value,
       filenameMetadata(image, batchIndex, batchDate),
       { usedNames }
     ));
+    return items.map((item, index) => ({ ...item, url: Gallery.youtubeUrl(images[index]) || item.url }));
   }
 
   function rebuildFilenamePreviews(templateResult, jobDate) {
@@ -1627,6 +1623,9 @@
   }
 
   function resetSidebarPageState(label, notice, noticeType) {
+    saveCurrentGallery();
+    stopGalleryCollection();
+    galleryContext = null;
     state.images = [];
     markFilenamePreviewsDirty();
     state.selected.clear();
@@ -2012,6 +2011,14 @@
   }
 
   async function openImagePreview(image) {
+    if (Gallery.youtubeUrl(image)) {
+      const createProperties = { active: true, url: `https://www.youtube.com/watch?v=${image.videoId}` };
+      if (Number.isInteger(state.sourceWindowId)) {
+        createProperties.windowId = state.sourceWindowId;
+      }
+      await browser.tabs.create(createProperties).catch((error) => setNotice(error.message, "error"));
+      return;
+    }
     const validateMediaUrl = Core.validateMediaUrl || Core.validateDownloadUrl;
     const urlResult = validateMediaUrl(image && image.url);
     if (!urlResult.ok) {
@@ -2116,6 +2123,8 @@
           totalUrlLength += previewUrl.length;
           byIdentity.set(recordKey, {
             url: normalizedUrl,
+            pageUrl: String(image.pageUrl || primaryPage.pageUrl || "").slice(0, 16384),
+            pageTitle: String(image.pageTitle || primaryPage.pageTitle || "").slice(0, 300),
             identityKey,
             previewUrl,
             filename: String(image.filename || "").slice(0, 500),
@@ -2680,6 +2689,8 @@
   }
 
   function updateSummary(visibleImages) {
+    updateGalleryControls();
+    scheduleGallerySave();
     const total = state.images.length;
     const ignoredCount = state.images.filter(isImageIgnored).length;
     const storedIgnoredCount = state.ignoredKeys.size;
@@ -2748,8 +2759,8 @@
     elements["download-button"].textContent = selected === 1
       ? `Download ${mediaTypeFor(selectedItems[0])}`
       : "Download selected";
-    elements["download-button"].disabled = state.busy || selected === 0 || !folder.ok || !template.ok;
-    elements["archive-footer-button"].disabled = state.busy || selected === 0 ||
+    elements["download-button"].disabled = state.busy || Boolean(galleryCollection) || selected === 0 || !folder.ok || !template.ok;
+    elements["archive-footer-button"].disabled = state.busy || Boolean(galleryCollection) || selected === 0 ||
       selectedHasVideo || !folder.ok || !template.ok;
     elements["archive-footer-button"].title = selectedHasVideo
       ? "ZIP archives currently support image-only selections"
@@ -2923,7 +2934,7 @@
       download.title = downloadStatus === "downloaded"
         ? `Download this ${video ? "video" : "image"} again`
         : `Download only this ${video ? "video" : "image"}`;
-      download.disabled = state.busy || downloadStatus === "queued";
+      download.disabled = state.busy || Boolean(galleryCollection) || downloadStatus === "queued";
       download.addEventListener("click", () => requestDownloads([image], {
         allowRedownload: downloadStatus === "downloaded"
       }));
@@ -3077,6 +3088,369 @@
     updateSummary(visible);
   }
 
+  function updateGalleryControls() {
+    const collecting = Boolean(galleryCollection);
+    elements["collect-gallery-button"].hidden = collecting;
+    elements["collect-gallery-button"].disabled = state.busy || !state.siteKey || !Number.isInteger(state.sourceTabId);
+    elements["stop-gallery-button"].hidden = !collecting;
+    elements["gallery-pages-select"].disabled = collecting;
+    elements["clear-gallery-button"].disabled = collecting || state.busy || !state.images.length;
+    if (!collecting) {
+      elements["gallery-status"].textContent = state.siteKey
+        ? `${hostFromUrl(state.siteKey)} · ${state.images.length.toLocaleString()} collected · ${state.incognito ? "private session only" : "saved on this device"}`
+        : "Galleries are saved separately for each website.";
+    }
+  }
+
+  function savedRecord(image) {
+    return Gallery.normalizeRecord({
+      ...image,
+      pageUrl: image.pageUrl || state.pageUrl,
+      pageTitle: image.pageTitle || state.pageTitle,
+      selected: state.selected.has(image.url)
+    }, state.siteKey);
+  }
+
+  function scheduleGallerySave() {
+    if (state.busy || !galleryContext || galleryContext.siteKey !== state.siteKey) {
+      return;
+    }
+    if (gallerySaveTimer !== null) {
+      clearTimeout(gallerySaveTimer);
+    }
+    gallerySaveTimer = setTimeout(saveCurrentGallery, 200);
+  }
+
+  function saveCurrentGallery() {
+    if (gallerySaveTimer !== null) {
+      clearTimeout(gallerySaveTimer);
+      gallerySaveTimer = null;
+    }
+    const context = galleryContext;
+    if (!context || context.siteKey !== state.siteKey || context.incognito !== state.incognito) {
+      return galleryWritePromise;
+    }
+    const records = [];
+    const changed = new Map();
+    for (const image of state.images) {
+      const record = savedRecord(image);
+      if (!record) {
+        continue;
+      }
+      const key = Gallery.recordKey(record);
+      const serialized = JSON.stringify(record);
+      if (context.sent.get(key) !== serialized) {
+        records.push(record);
+        changed.set(key, { before: context.sent.get(key), after: serialized });
+        context.sent.set(key, serialized);
+      }
+    }
+    if (!records.length) {
+      return galleryWritePromise;
+    }
+    context.pending += 1;
+    // Send only changed records so another tab's discoveries and selection edits survive.
+    galleryWritePromise = browser.runtime.sendMessage({
+      type: "SITE_GALLERY", action: "save", siteKey: context.siteKey,
+      incognito: context.incognito, epoch: context.epoch, records
+    }).then((result) => {
+      if (!result || !result.ok) {
+        throw new Error(result && result.error || "Firefox could not save the gallery.");
+      }
+      if (galleryContext === context && result.stale) {
+        applySavedGallery(result.gallery);
+      } else if (galleryContext === context && result.gallery.trimmed) {
+        stopGalleryCollection();
+        setNotice("This site's saved gallery reached its item or storage limit. Clear the saved gallery to make room.", "error");
+      }
+    }).catch((error) => {
+      for (const [key, value] of changed) {
+        if (context.sent.get(key) === value.after) {
+          context.sent.set(key, value.before);
+        }
+      }
+      if (galleryContext === context) {
+        setNotice(`Gallery changes are still visible but could not be saved. (${error.message || error})`, "error");
+      }
+    }).finally(() => { context.pending -= 1; });
+    return galleryWritePromise;
+  }
+
+  function applySavedGallery(gallery) {
+    const context = galleryContext;
+    if (!context || gallery.siteKey !== context.siteKey) {
+      return;
+    }
+    if (gallery.epoch !== context.epoch) {
+      stopGalleryCollection();
+      stopLiveCapture();
+      sourcePageGeneration += 1;
+      state.images = [];
+      state.selected.clear();
+      context.sent.clear();
+      context.epoch = gallery.epoch;
+    }
+    const current = new Map(state.images.map((image) => [Gallery.recordKey(image), image]));
+    for (const record of gallery.records) {
+      const key = Gallery.recordKey(record);
+      const existing = current.get(key);
+      const local = existing && savedRecord(existing);
+      if (!local || JSON.stringify(local) === context.sent.get(key)) {
+        const next = { ...record };
+        if (existing && Gallery.youtubeUrl(existing) && existing.url !== Gallery.youtubeUrl(existing)) {
+          next.url = existing.url;
+        }
+        if (existing) {
+          state.selected.delete(existing.url);
+        }
+        current.set(key, next);
+        if (record.selected && !isImageIgnored(next)) {
+          state.selected.add(next.url);
+        }
+      }
+      context.sent.set(key, JSON.stringify(record));
+    }
+    state.images = accumulateLiveImages([], Array.from(current.values())).images;
+    markFilenamePreviewsDirty();
+    renderImages();
+    refreshDownloadStatuses().catch(() => undefined);
+  }
+
+  async function restoreSiteGallery(tab, settings, generation) {
+    const siteKey = Core.siteKeyForUrl(tab.url);
+    if (!siteKey) {
+      return;
+    }
+    const sameContext = galleryContext && galleryContext.siteKey === siteKey &&
+      galleryContext.incognito === Boolean(tab.incognito);
+    if (sameContext && settings.live) {
+      return;
+    }
+    await saveCurrentGallery();
+    const result = await browser.runtime.sendMessage({
+      type: "SITE_GALLERY", action: "get", siteKey, incognito: Boolean(tab.incognito)
+    });
+    if (!scanSourceStillCurrent(settings, generation)) {
+      return;
+    }
+    if (!result || !result.ok) {
+      throw new Error(result && result.error || "Firefox could not restore this website's gallery.");
+    }
+    const gallery = Gallery.normalizeSite(result.gallery);
+    galleryContext = {
+      siteKey, incognito: Boolean(tab.incognito), epoch: gallery.epoch, pending: 0,
+      sent: new Map(gallery.records.map((record) => [Gallery.recordKey(record), JSON.stringify(record)]))
+    };
+    state.siteKey = siteKey;
+    state.pageUrl = tab.url;
+    state.pageTitle = tab.title || hostFromUrl(tab.url);
+    state.pageScopeKey = pageScopeKeyForUrl(tab.url);
+    state.images = gallery.records;
+    state.selected = new TrackedSelectionSet(gallery.records.filter((record) => record.selected).map((record) => record.url));
+    state.ignoredKeys = sameContext ? state.ignoredKeys : new Set();
+    state.explicitRedownloads.clear();
+    state.showIgnored = false;
+    state.instagramCollectionFilter = "all";
+    state.instagramCollectionMode = state.images.some((image) => image.instagramCollections.length);
+    elements["page-label"].textContent = state.pageTitle;
+    markFilenamePreviewsDirty();
+    renderImages();
+  }
+
+  async function clearSiteGallery() {
+    const context = galleryContext;
+    if (!context || state.busy || galleryCollection) {
+      return;
+    }
+    stopLiveCapture();
+    await saveCurrentGallery();
+    try {
+      const result = await browser.runtime.sendMessage({
+        type: "SITE_GALLERY", action: "clear", siteKey: context.siteKey, incognito: context.incognito
+      });
+      if (!result || !result.ok) {
+        throw new Error(result && result.error || "Firefox could not clear this gallery.");
+      }
+      if (galleryContext === context) {
+        applySavedGallery(result.gallery);
+        setNotice("Saved gallery cleared. Collect this page again or visit another page to add new media.");
+      }
+    } catch (error) {
+      setNotice(error.message || String(error), "error");
+    }
+  }
+
+  function handleGalleryStorageChanges(changes, areaName) {
+    if (!galleryContext || areaName !== (state.incognito ? "session" : "local") || !changes[Gallery.STORAGE_KEY]) {
+      return;
+    }
+    const gallery = Gallery.getSite(changes[Gallery.STORAGE_KEY].newValue, state.siteKey);
+    if (gallery && ((!state.busy && !galleryContext.pending) || gallery.epoch !== galleryContext.epoch)) {
+      applySavedGallery(gallery);
+    }
+  }
+
+  function stopGalleryCollection() {
+    if (galleryCollection) {
+      galleryCollection.stopped = true;
+      galleryCollection.wake?.();
+      elements["gallery-status"].textContent = "Stopping collection; collected media will be kept…";
+    }
+  }
+
+  async function collectGallery() {
+    if (state.busy || galleryCollection || !state.siteKey) {
+      return;
+    }
+    if (!responsiveSurface) {
+      await saveCurrentGallery();
+      const result = await browser.runtime.sendMessage({
+        type: "OPEN_MANAGER_WINDOW", sourceTabId: state.sourceTabId, collectGallery: true,
+        galleryPages: Number(elements["gallery-pages-select"].value)
+      });
+      if (!result || !result.ok) {
+        setNotice(result && result.error || "Firefox could not open the collection window.", "error");
+      }
+      return;
+    }
+    const run = {
+      stopped: false, tabId: state.sourceTabId, url: state.pageUrl,
+      generation: sourcePageGeneration, startedAt: Date.now(), pages: 1
+    };
+    galleryCollection = run;
+    stopLiveCapture();
+    updateGalleryControls();
+    const current = () => !run.stopped && galleryCollection === run &&
+      run.generation === sourcePageGeneration && run.tabId === state.sourceTabId;
+    const limitReached = () => state.images.length >= MAX_DISCOVERED_IMAGES ||
+      state.images.reduce((total, image) => total + image.url.length + String(image.previewUrl || "").length, 0) >= Core.MAX_BATCH_TOTAL_URL_LENGTH ||
+      Date.now() - run.startedAt >= Gallery.MAX_DURATION_MS;
+    let reason = "No more media or Next pages were exposed.";
+    let nextLinks = [];
+    try {
+      let stable = 0;
+      let lastPosition = "";
+      let exhaustedSteps = true;
+      let moreClicks = 0;
+      for (let step = 0; current() && step < Gallery.MAX_STEPS; step += 1) {
+        if (limitReached()) {
+          reason = "The collection reached its item, URL, or time limit.";
+          break;
+        }
+        const before = state.images.length;
+        const scanned = await scanPage({ preserveSelection: true, quiet: true, pinnedSource: true, live: true });
+        if (!current()) {
+          break;
+        }
+        if (!scanned) {
+          throw new Error("The source page could not be scanned. Collected media has been kept.");
+        }
+        const results = await browser.scripting.executeScript({
+          target: { tabId: run.tabId }, func: Gallery.scrollPage,
+          args: [run.url, moreClicks < 20 && step % 4 === 0, step === 0]
+        });
+        if (!current()) {
+          break;
+        }
+        const position = results && results[0] && results[0].result;
+        if (!position) {
+          throw new Error("Firefox could not scroll the source page.");
+        }
+        nextLinks = position.nextLinks || [];
+        const marker = `${position.top}:${position.height}:${state.images.length}`;
+        moreClicks += Number(Boolean(position.clickedMore));
+        stable = !position.clickedMore && position.bottom && marker === lastPosition && state.images.length === before ? stable + 1 : 0;
+        lastPosition = marker;
+        elements["gallery-status"].textContent = `Collecting ${hostFromUrl(run.url)} · ${state.images.length.toLocaleString()} media · scrolling page 1`;
+        if (stable >= 4) {
+          exhaustedSteps = false;
+          break;
+        }
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, 1200);
+          run.wake = () => { clearTimeout(timer); resolve(); };
+        });
+      }
+      if (exhaustedSteps && current()) {
+        reason = "Scrolling stopped at the collection safety limit.";
+      }
+      const visited = new Set([Gallery.pageUrl(run.url)]);
+      let nextUrl = nextLinks.filter((value) => typeof value === "string" && value.trim()).map((value) => {
+        try { return Gallery.pageUrl(new URL(value, run.url).href); } catch (_error) { return ""; }
+      }).find((url) => url && Core.siteKeyForUrl(url) === state.siteKey && !visited.has(url));
+      const maxPages = Math.min(Gallery.MAX_PAGES, Number(elements["gallery-pages-select"].value) || 1);
+      let fetchedBytes = 0;
+      while (current() && nextUrl && run.pages < maxPages && !limitReached()) {
+        visited.add(nextUrl);
+        elements["gallery-status"].textContent = `Collecting page ${run.pages + 1} · ${state.images.length.toLocaleString()} media`;
+        const results = await browser.scripting.executeScript({
+          target: { tabId: run.tabId }, func: Gallery.fetchPage, args: [nextUrl, run.url]
+        });
+        if (!current()) {
+          break;
+        }
+        const page = results && results[0] && results[0].result;
+        if (!page || typeof page.html !== "string") {
+          throw new Error("Firefox could not read the next gallery page.");
+        }
+        fetchedBytes += page.bytes;
+        if (fetchedBytes > 16 * 1024 * 1024) {
+          reason = "Pagination reached the 16 MB total page limit.";
+          break;
+        }
+        const parsed = new DOMParser().parseFromString(page.html, "text/html");
+        const base = parsed.querySelector("base") || parsed.head.appendChild(parsed.createElement("base"));
+        try { base.href = new URL(base.getAttribute("href") || nextUrl, nextUrl).href; } catch (_error) { base.href = nextUrl; }
+        const scan = collectImagesFromPage({
+          pageUrl: nextUrl, includeBackgrounds: elements["backgrounds-input"].checked,
+          maxImages: MAX_DISCOVERED_IMAGES, maxElements: MAX_SCANNED_ELEMENTS
+        }, parsed);
+        const merged = mergeScanResults([{ frameId: 0, result: scan }]);
+        const previous = state.images;
+        const accumulated = accumulateLiveImages(previous, merged.images);
+        state.images = accumulated.images;
+        state.selected = new TrackedSelectionSet(reconcileScanSelection(
+          state.images, previous, state.selected, true, (image) => imageCanBeSelected(image) &&
+            !isImageIgnored(image) && Filters.matchesSmartFilters(image, state.smartFilters) &&
+            matchesInstagramCollectionFilter(image, state.instagramCollectionFilter)
+        ));
+        run.pages += 1;
+        markFilenamePreviewsDirty();
+        renderImages();
+        await saveCurrentGallery();
+        if (accumulated.trimmed) {
+          reason = "The gallery reached its item or URL limit.";
+          break;
+        }
+        if (!merged.images.length) {
+          reason = "The next page exposed no media in its HTML; collection stopped there.";
+          break;
+        }
+        nextUrl = Tracker.extractNextPageUrl(parsed, nextUrl);
+        if (visited.has(nextUrl)) {
+          reason = "The Next link repeated an already collected page.";
+          break;
+        }
+      }
+      if (nextUrl && run.pages >= maxPages) {
+        reason = `Stopped at the ${maxPages}-page limit.`;
+      }
+    } catch (error) {
+      reason = error.message || String(error);
+    } finally {
+      if (galleryCollection === run) {
+        galleryCollection = null;
+        updateGalleryControls();
+        if (run.generation === sourcePageGeneration && run.tabId === state.sourceTabId) {
+          await saveCurrentGallery();
+          setNotice(`${run.stopped ? "Collection stopped." : reason} Kept ${state.images.length.toLocaleString()} media from ${run.pages} page${run.pages === 1 ? "" : "s"}. Review the selection, then download.`);
+          await refreshDownloadStatuses().catch(() => undefined);
+          await startLiveCapture({ skipInitialScan: true, quiet: true });
+        }
+      }
+    }
+  }
+
   async function scanPage(options) {
     const settings = Object.assign({
       preserveSelection: false,
@@ -3093,38 +3467,18 @@
     }
     const scanSourceGeneration = sourcePageGeneration;
 
-    const previousImages = state.images;
+    let previousImages = state.images;
     const previousByIdentity = new Map();
-    for (const image of previousImages) {
-      if (image && typeof image.url === "string" && image.url) {
-        previousByIdentity.set(mediaIdentityKey(image), image);
-      }
-    }
-    const previousSelected = new Set(state.selected);
-    const previousPageScopeKey = state.pageScopeKey;
-    const previousIgnoredKeys = new Set(state.ignoredKeys);
-    const previousInstagramCollectionMode = state.instagramCollectionMode;
+    let previousSelected = new Set(state.selected);
+    let previousPageScopeKey = state.pageScopeKey;
+    let previousSiteKey = state.siteKey;
+    let previousIgnoredKeys = new Set(state.ignoredKeys);
+    let previousInstagramCollectionMode = state.instagramCollectionMode;
     let scanTab = null;
     let succeeded = false;
     state.busy = true;
     updateOpenWindowButton();
-    if (!settings.preserveSelection) {
-      state.images = [];
-      markFilenamePreviewsDirty();
-      state.selected.clear();
-      state.explicitRedownloads.clear();
-      downloadStatusGeneration += 1;
-      state.showIgnored = false;
-      state.siteKey = "";
-      state.ignoredKeys.clear();
-      state.pageTitle = "";
-      state.pageUrl = "";
-      state.pageScopeKey = "";
-      state.instagramCollectionFilter = "all";
-      state.instagramCollectionMode = false;
-      updateInstagramCollectionFilterUi();
-      updateFilenameTemplateUi();
-      elements["image-list"].replaceChildren();
+    if (!settings.preserveSelection && !state.images.length) {
       elements["page-label"].textContent = "Scanning the current page…";
     }
     if (!settings.quiet) {
@@ -3140,6 +3494,19 @@
       scanTab = tab;
       if (!scanSourceStillCurrent(settings, scanSourceGeneration)) {
         return false;
+      }
+      await restoreSiteGallery(tab, settings, scanSourceGeneration);
+      if (!scanSourceStillCurrent(settings, scanSourceGeneration)) {
+        return false;
+      }
+      previousImages = state.images;
+      previousSelected = new Set(state.selected);
+      previousPageScopeKey = state.pageScopeKey;
+      previousSiteKey = state.siteKey;
+      previousIgnoredKeys = new Set(state.ignoredKeys);
+      previousInstagramCollectionMode = state.instagramCollectionMode;
+      for (const image of previousImages) {
+        previousByIdentity.set(mediaIdentityKey(image), image);
       }
       state.sourceTabId = tab.id;
       setIncognitoContext(tab.incognito);
@@ -3364,9 +3731,6 @@
         }
       }
       if (!scanSourceStillCurrent(settings, scanSourceGeneration)) {
-        state.siteKey = "";
-        state.pageScopeKey = "";
-        state.ignoredKeys.clear();
         return false;
       }
 
@@ -3389,8 +3753,7 @@
 
       const nextSiteKey = Core.siteKeyForUrl(merged.page.pageUrl);
       const nextPageScopeKey = pageScopeKeyForUrl(merged.page.pageUrl);
-      const preserveThisPage = settings.preserveSelection &&
-        nextPageScopeKey === previousPageScopeKey;
+      const preserveThisPage = Boolean(nextSiteKey) && nextSiteKey === previousSiteKey;
       state.siteKey = nextSiteKey;
       state.pageScopeKey = nextPageScopeKey;
       if (!preserveThisPage) {
@@ -3403,9 +3766,6 @@
         merged.warnings.push(`Firefox could not load ignored-media rules: ${error.message || error}`);
       }
       if (!scanSourceStillCurrent(settings, scanSourceGeneration)) {
-        state.siteKey = "";
-        state.pageScopeKey = "";
-        state.ignoredKeys.clear();
         return false;
       }
 
@@ -3437,8 +3797,7 @@
       }
 
       if (settings.instagramCollections && preserveThisPage) {
-        const retained = withoutInstagramCollectionTypes(previousImages, ["story", "highlight"]);
-        const accumulated = accumulateLiveImages(retained, merged.images, {
+        const accumulated = accumulateLiveImages(previousImages, merged.images, {
           maxImages: MAX_DISCOVERED_IMAGES,
           maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH
         });
@@ -3446,7 +3805,7 @@
           merged.warnings.push("Instagram collection results reached the 1,500-item or 2 MB safety limit.");
         }
         merged.images = accumulated.images;
-      } else if (settings.live && preserveThisPage) {
+      } else if (preserveThisPage) {
         const accumulated = accumulateLiveImages(previousImages, merged.images, {
           maxImages: MAX_DISCOVERED_IMAGES,
           maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH
@@ -3473,7 +3832,7 @@
       state.pageUrl = merged.page.pageUrl || "";
       state.instagramCollectionMode = Boolean(
         instagramCollectionSucceeded ||
-        (settings.live && preserveThisPage && previousInstagramCollectionMode) ||
+        (preserveThisPage && previousInstagramCollectionMode) ||
         (settings.instagramCollections && preservedInstagramFallback && previousInstagramCollectionMode)
       );
       updateInstagramCollectionFilterUi();
@@ -3525,7 +3884,7 @@
       if (!scanSourceStillCurrent(settings, scanSourceGeneration)) {
         return false;
       }
-      if (!settings.preserveSelection) {
+      if (!settings.preserveSelection && !galleryContext) {
         state.images = [];
         markFilenamePreviewsDirty();
         state.selected.clear();
@@ -3563,6 +3922,9 @@
       state.busy = false;
       updateOpenWindowButton();
       renderImages();
+      if (succeeded) {
+        await saveCurrentGallery();
+      }
       if (succeeded && state.trackerPageUrl !== state.pageUrl) {
         refreshTrackerStatus().catch((error) => {
           console.error("AnyDownload could not load the tracker for this page.", error);
@@ -4055,6 +4417,8 @@
   }
 
   function beginSidebarTransition(tabId, tab) {
+    saveCurrentGallery();
+    stopGalleryCollection();
     cancelScheduledSidebarFollow();
     sourcePageGeneration += 1;
     if (state.liveCapture) {
@@ -4272,12 +4636,34 @@
     }
   }
 
+  function scheduleSourceRescan(generation) {
+    if (sourceRescanTimer !== null) {
+      clearTimeout(sourceRescanTimer);
+    }
+    sourceRescanTimer = setTimeout(async () => {
+      sourceRescanTimer = null;
+      if (generation !== sourcePageGeneration) {
+        return;
+      }
+      if (state.busy) {
+        scheduleSourceRescan(generation);
+        return;
+      }
+      const scanned = await scanPage({ pinnedSource: true, preserveSelection: true });
+      if (scanned && generation === sourcePageGeneration) {
+        await startLiveCapture({ skipInitialScan: true, quiet: true });
+      }
+    }, SIDEBAR_SCAN_DEBOUNCE_MS);
+  }
+
   function wireSourceTabLifecycle() {
     if (browser.tabs && browser.tabs.onRemoved) {
       browser.tabs.onRemoved.addListener((tabId) => {
         if (tabId !== state.sourceTabId) {
           return;
         }
+        saveCurrentGallery();
+        stopGalleryCollection();
         sourcePageGeneration += 1;
         if (sidebarMode) {
           cancelScheduledSidebarFollow();
@@ -4331,14 +4717,28 @@
             return;
           }
           sourcePageGeneration += 1;
+          saveCurrentGallery();
+          stopGalleryCollection();
           if (state.liveCapture) {
             stopLiveCapture();
           }
-          resetSidebarPageState(
-            tab && tab.title ? tab.title : "The source page changed",
-            "The source page changed, so its previous media was cleared. Open AnyDownload on the loaded page to continue.",
-            "error"
-          );
+          if (state.siteKey && Core.siteKeyForUrl(nextUrl) === state.siteKey) {
+            state.pageUrl = nextUrl;
+            state.pageScopeKey = nextPageScopeKey;
+            state.pageTitle = tab && tab.title || state.pageTitle;
+            elements["page-label"].textContent = state.pageTitle;
+            setNotice("Saved gallery kept while the next page loads.");
+            renderImages();
+          } else {
+            resetSidebarPageState(
+              tab && tab.title ? tab.title : "The source page changed",
+              "The source page changed. Its gallery was saved for this website. Open AnyDownload on the loaded page if Firefox needs site access."
+            );
+          }
+        }
+        if (tabId === state.sourceTabId && (changeInfo.status === "complete" ||
+          changeInfo.url && tab && tab.status === "complete")) {
+          scheduleSourceRescan(sourcePageGeneration);
         }
       });
     }
@@ -4386,6 +4786,15 @@
   }
 
   function wireEvents() {
+    elements["collect-gallery-button"].addEventListener("click", () => {
+      collectGallery().catch((error) => setNotice(error.message || String(error), "error"));
+    });
+    elements["stop-gallery-button"].addEventListener("click", stopGalleryCollection);
+    elements["clear-gallery-button"].addEventListener("click", clearSiteGallery);
+    globalThis.addEventListener("pagehide", () => {
+      stopGalleryCollection();
+      saveCurrentGallery();
+    });
     elements["open-window-button"].addEventListener("click", openManagerWindow);
     elements["sidebar-button"].addEventListener("click", openFirefoxSidebar);
     elements["history-button"].addEventListener("click", openDownloadHistory);
@@ -4578,6 +4987,7 @@
     browser.storage.onChanged.addListener(handleIgnoredStorageChanges);
     browser.storage.onChanged.addListener(handleTrackerStorageChanges);
     browser.storage.onChanged.addListener(handleDownloadStatusStorageChanges);
+    browser.storage.onChanged.addListener(handleGalleryStorageChanges);
     try {
       const stored = await browser.storage.local.get([
         "destinationFolder",
@@ -4625,6 +5035,13 @@
     startQueueBadgePolling();
     if (scanned) {
       await startLiveCapture({ skipInitialScan: true, quiet: true });
+      if (new URL(launchUrl).searchParams.get("collect") === "1") {
+        const pages = new URL(launchUrl).searchParams.get("pages");
+        if (["1", "3", "10"].includes(pages)) {
+          elements["gallery-pages-select"].value = pages;
+        }
+        await collectGallery();
+      }
     }
   }
 

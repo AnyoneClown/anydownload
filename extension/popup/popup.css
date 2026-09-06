@@ -1143,3 +1143,19 @@ button:disabled {
     grid-column: 1 / -1;
   }
 }
+.gallery-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-bottom: 5px;
+}
+
+.gallery-toolbar .compact-field {
+  min-width: 0;
+}
+
+#gallery-status {
+  margin: 0 0 7px;
+  overflow-wrap: anywhere;
+}

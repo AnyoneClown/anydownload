@@ -14,6 +14,7 @@ const SCRIPT_PATHS = [
   "../extension/shared/youtube.js",
   "../extension/shared/templates.js",
   "../extension/shared/download-ledger.js",
+  "../extension/shared/gallery.js",
   "../extension/shared/download-queue.js",
   "../extension/background.js"
 ];
@@ -1552,6 +1553,25 @@ async function testCompletedDownloadLedgerAndStatusLookup() {
 }
 
 (async () => {
+  const galleries = createHarness();
+  const galleryMessage = { type: "SITE_GALLERY", siteKey: "https://gallery.test", epoch: 0 };
+  await Promise.all(["first", "second"].map((name) => galleries.send({
+    ...galleryMessage, action: "save", records: [{
+      url: `https://cdn.test/${name}.jpg`, pageUrl: `https://gallery.test/${name}`, selected: true
+    }]
+  })));
+  const savedGallery = await galleries.send({ ...galleryMessage, action: "get" });
+  assert.equal(savedGallery.gallery.records.length, 2, "Concurrent tabs must retain both discoveries");
+  const privateGallery = await galleries.send({ ...galleryMessage, action: "get", incognito: true });
+  assert.equal(privateGallery.gallery.records.length, 0, "Normal galleries must not appear in private windows");
+  await galleries.send({ ...galleryMessage, action: "save", incognito: true, records: [{
+    url: "https://cdn.test/private.jpg", pageUrl: "https://gallery.test/private", selected: false
+  }] });
+  assert.doesNotMatch(JSON.stringify(galleries.local.dump()), /private\.jpg/);
+  assert.match(JSON.stringify(galleries.session.dump()), /private\.jpg/);
+  await galleries.send({ ...galleryMessage, action: "clear" });
+  const staleGallery = await galleries.send({ ...galleryMessage, action: "save", records: savedGallery.gallery.records });
+  assert.equal(staleGallery.stale, true, "A stale tab must not resurrect a cleared gallery");
   await testEmptyQueueReadsDoNotWriteStorage();
   await testQueueConcurrencyProgressAndStatistics();
   await testDirectVideoSingleAndBulkPassthrough();

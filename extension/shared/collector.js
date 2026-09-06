@@ -1,7 +1,8 @@
 (function attachImageDownloaderCollector(root) {
   "use strict";
 
-  function collectImagesFromPage(options) {
+  function collectImagesFromPage(options, sourceDocument) {
+    const document = sourceDocument || globalThis.document;
     const settings = Object.assign(
       {
         includeBackgrounds: true,
@@ -1020,7 +1021,7 @@
 
       if (settings.includeBackgrounds && !truncated && !payloadLimitReached) {
         try {
-          const style = getComputedStyle(element);
+          const style = sourceDocument ? element.style : getComputedStyle(element);
           const values = [
             style.backgroundImage,
             style.borderImageSource,
@@ -1076,7 +1077,7 @@
     }
 
     return {
-      pageUrl: safeText(location.href, 16384),
+      pageUrl: safeText(settings.pageUrl || location.href, 16384),
       pageTitle: safeText(document.title, 300),
       embeddedFrameCount,
       images: Array.from(found.values()),

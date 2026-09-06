@@ -4,6 +4,16 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Collect gallery** automatically scrolls the source page, activates recognizable non-form Load/Show/See more buttons, and optionally follows up to ten same-origin Next pages. Progress, Stop, bounded requests, and partial-result retention keep collection reviewable before downloading.
+- A growing saved gallery for each website combines discoveries across its pages and tabs, preserves selections and source-page filename metadata, and restores when AnyDownload reopens. Normal galleries stay locally on the device; private galleries use session storage. **Clear saved gallery** removes one site's collection without changing downloaded files.
+
+### Privacy and boundaries
+
+- Saved galleries retain media URLs and bounded display metadata: at most 1,500 items and 2 MB of media URLs per site, 20 sites, and 4 MiB of gallery data per browsing context. Older sites are evicted at the shared limit. YouTube entries retain public video/format references rather than signed playback URLs; their previews open the public video page.
+- Collection is limited to 120 scroll steps, 20 Load more actions, about five minutes plus an in-flight request, 4 MiB per fetched HTML page, and 16 MiB of fetched HTML in total. Subsequent pages are parsed as static HTML; page scripts and arbitrary detail links are not followed. No additional permissions are required.
+
 ## [1.12.1] - 2026-09-04
 
 ### Fixed

@@ -64,6 +64,20 @@
       </section>
 
       <section class="controls" aria-label="Media controls">
+        <div class="gallery-toolbar">
+          <button id="collect-gallery-button" class="secondary-button" type="button" disabled>Collect gallery</button>
+          <button id="stop-gallery-button" class="secondary-button" type="button" hidden>Stop collecting</button>
+          <label class="compact-field">
+            <span class="visually-hidden">Gallery pagination limit</span>
+            <select id="gallery-pages-select" aria-label="Gallery pagination limit">
+              <option value="1">Scroll this page</option>
+              <option value="3">Up to 3 pages</option>
+              <option value="10" selected>Up to 10 pages</option>
+            </select>
+          </label>
+          <button id="clear-gallery-button" class="text-button danger-button" type="button" disabled>Clear saved gallery</button>
+        </div>
+        <p id="gallery-status" class="field-help" role="status" aria-live="polite">Galleries are saved separately for each website.</p>
         <div class="summary-row">
           <strong id="summary-label">0 media files</strong>
           <div id="selection-actions" class="selection-actions">
@@ -253,6 +267,9 @@
     <script src="../shared/youtube.js"></script>
     <script src="../shared/filters.js"></script>
     <script src="../shared/templates.js"></script>
+    <script src="../shared/tracker.js"></script>
+    <script src="../shared/download-ledger.js"></script>
+    <script src="../shared/gallery.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

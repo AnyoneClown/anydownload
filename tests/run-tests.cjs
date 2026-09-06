@@ -82,6 +82,7 @@ assert.deepEqual(
     "shared/templates.js",
     "shared/tracker.js",
     "shared/download-ledger.js",
+    "shared/gallery.js",
     "shared/download-queue.js",
     "background.js"
   ]
@@ -112,6 +113,9 @@ assert.deepEqual(
     "../shared/youtube.js",
     "../shared/filters.js",
     "../shared/templates.js",
+    "../shared/tracker.js",
+    "../shared/download-ledger.js",
+    "../shared/gallery.js",
     "popup.js"
   ],
   "Popup scripts must load in dependency order"
@@ -427,8 +431,8 @@ assert.match(
 );
 assert.match(
   popupJs,
-  /canRetainSameInstagramRoute\([\s\S]*state\.pageUrl = nextUrl;[\s\S]*resetSidebarPageState\([\s\S]*previous media was cleared/,
-  "Source navigation must preserve same-post index changes but clear stale cross-route results"
+  /canRetainSameInstagramRoute\([\s\S]*state\.pageUrl = nextUrl;[\s\S]*resetSidebarPageState\([\s\S]*gallery was saved/,
+  "Source navigation must preserve same-post index changes and save the old site's gallery"
 );
 assert.match(
   popupJs,

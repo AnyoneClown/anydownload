@@ -16,6 +16,7 @@
   const Templates = globalThis.ImageDownloaderTemplates;
   const Tracker = globalThis.AnyDownloadTracker;
   const DownloadLedger = globalThis.AnyDownloadLedger;
+  const Gallery = globalThis.AnyDownloadGallery;
   const DownloadQueue = globalThis.ImageDownloaderDownloadQueue;
   const MAX_CONCURRENCY = 5;
   const QUEUE_CONCURRENCY = 3;
@@ -51,6 +52,7 @@
   const youtubeResolutionCache = new Map();
   const trackerRuns = new Map();
   let trackerMutationQueue = Promise.resolve();
+  let galleryMutationQueue = Promise.resolve();
   let archiveInProgress = false;
 
   function acknowledgeMenuCreation() {
@@ -132,7 +134,7 @@
     return browser.tabs.create(createProperties);
   }
 
-  function openResizableImageWindow(tab) {
+  function openResizableImageWindow(tab, collectGallery) {
     if (!tab || !Number.isInteger(tab.id)) {
       return Promise.reject(new Error("Firefox did not identify the source tab."));
     }
@@ -141,7 +143,7 @@
     const storageKey = managerWindowStorageKey(incognito);
     const previous = managerWindowQueues.get(storageKey) || Promise.resolve();
     const queued = previous.catch(() => undefined).then(async () => {
-      const url = managerWindowUrl(tab.id);
+      const url = managerWindowUrl(tab.id) + (collectGallery ? `&collect=1&pages=${collectGallery}` : "");
       let stored = null;
       try {
         const values = await browser.storage.session.get(storageKey);
@@ -3614,12 +3616,40 @@
         });
       }
       return browser.tabs.get(message.sourceTabId)
-        .then((tab) => openResizableImageWindow(tab))
+        .then((tab) => openResizableImageWindow(tab, message.collectGallery === true
+          ? [1, 3, 10].includes(message.galleryPages) ? message.galleryPages : 10
+          : 0))
         .then((result) => ({ ok: true, ...result }))
         .catch((error) => ({
           ok: false,
           error: error && error.message ? error.message : String(error)
         }));
+    }
+
+    if (message.type === "SITE_GALLERY") {
+      // ponytail: one bounded storage record; split by site if writes contend.
+      const operation = galleryMutationQueue.catch(() => undefined).then(async () => {
+        if (!Gallery || !["get", "save", "clear"].includes(message.action)) {
+          throw new Error("Unknown gallery action.");
+        }
+        const siteKey = Core.siteKeyForUrl(Gallery.pageUrl(message.siteKey));
+        if (!siteKey) {
+          throw new Error("A gallery must belong to an HTTP(S) website.");
+        }
+        const area = message.incognito ? browser.storage.session : browser.storage.local;
+        const stored = await area.get(Gallery.STORAGE_KEY);
+        const sites = stored[Gallery.STORAGE_KEY];
+        if (message.action === "get") {
+          return { ok: true, gallery: Gallery.getSite(sites, siteKey) };
+        }
+        const result = Gallery.updateSites(sites, { ...message, siteKey });
+        if (!result.stale) {
+          await area.set({ [Gallery.STORAGE_KEY]: result.sites });
+        }
+        return { ok: true, gallery: result.gallery, stale: result.stale };
+      });
+      galleryMutationQueue = operation;
+      return operation.catch((error) => ({ ok: false, error: error.message || String(error) }));
     }
 
     if ([

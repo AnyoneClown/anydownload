@@ -878,4 +878,15 @@ function urls(result) {
   }
 }
 
+withFakePage([element("img", { src: "/current.jpg" })], () => {
+  const nextUrl = "https://gallery.test/next/page";
+  const nextDocument = new FakeDocument([
+    element("img", { src: "thumb.jpg", "data-original": "full.jpg" }),
+    element("video", { src: "clip.mp4" })
+  ], nextUrl);
+  const result = collectImagesFromPage({ pageUrl: nextUrl, includeBackgrounds: false }, nextDocument);
+  assert.deepEqual(urls(result), ["https://gallery.test/next/full.jpg", "https://gallery.test/next/clip.mp4"]);
+  assert.equal(result.pageUrl, nextUrl, "Fetched gallery pages must use their own document and base URL");
+});
+
 console.log("All collector fixture checks passed.");
