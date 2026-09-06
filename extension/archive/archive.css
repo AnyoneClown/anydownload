@@ -121,7 +121,6 @@ button:focus-visible {
   border-color: var(--brand);
   color: var(--brand-ink);
   background: var(--brand-soft);
-  outline: none;
 }
 
 button:hover:not(:disabled) {

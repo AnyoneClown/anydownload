@@ -10,12 +10,12 @@ The manifest targets Firefox desktop 140+ and Firefox for Android 142+. Firefox 
 2. Choose **This Firefox** → **Load Temporary Add-on**.
 3. Select `extension/manifest.json` from this project.
 4. Open a normal website containing images or video, an Instagram post/reel/story/highlight, a FapFolder group video listing, or a public YouTube video page and select the extension's toolbar button. Use the compact popup directly, choose **Open window** for a resizable manager, or choose the sidebar button to keep the manager beside the page.
-5. Expand **Filters** to choose **Images & videos**, **Images**, or **Videos**, enable **Photos only**, or select a format or Instagram profile collection.
-6. Expand **Filename template** to keep the default ordered name (`0001-photo.jpg`) or combine page, host, index, dimension, and date tokens; the live example shows the resulting safe filename.
-7. Click an image thumbnail, video poster, or video placeholder to preview it in a full browser tab; choose **Ignore** to hide unwanted media; or right-click a page image or video and open the **AnyDownload** submenu.
-8. Choose **Collect gallery** to scroll automatically, use recognizable Load more buttons, and optionally follow up to ten same-site Next pages. The compact popup opens the resizable manager for collection. Use **Stop collecting** at any time, review the accumulated selection, then download. Each website's gallery is saved when you switch tabs or visit another page.
-9. To monitor the current URL after the manager closes, choose **Track page**, select **Add to review**, **Notify only**, or **Download automatically**, choose an interval, and grant access to that exact website. The default first check records a baseline without acting on existing matches.
-10. Enter a relative destination such as `Website media/example.com`, select the images and videos you want, and use **Download selected** at the bottom. Use **Download ZIP** there only for image selections. The download-arrow button in the header opens the queue, history, progress, and statistics.
+5. Use **All media**, **Images**, or **Videos** beside the search field. Open **Filters** for **Photos only**, formats, Instagram collections, and ignored or downloaded media. Switch between **Grid view** and **List view**; your layout is remembered.
+6. Click the destination path at the bottom to open **Download settings**, then expand **Filename template** to keep the default ordered name (`0001-photo.jpg`) or combine page, host, index, dimension, and date tokens; the live example shows the resulting safe filename.
+7. Click anywhere on a media card except its buttons to toggle its download selection. Choose **Preview** to open it in a full browser tab, **Ignore** to hide it, or right-click a page image or video and open the **AnyDownload** submenu.
+8. Choose **Collect gallery** to scroll automatically, use recognizable Load more buttons, and optionally follow up to ten same-site Next pages. The compact popup opens the resizable manager for collection. Set the page limit in **Collection settings**. Use **Stop collecting** at any time, review the accumulated selection, then download. Each website's gallery is saved when you switch tabs or visit another page.
+9. To monitor the current URL after the manager closes, open **Collection settings** (the three-dot button), choose **Track page**, select **Add to review**, **Notify only**, or **Download automatically**, choose an interval, and grant access to that exact website. The default first check records a baseline without acting on existing matches.
+10. Set a relative destination such as `Website media/example.com` in **Download settings**, select the files you want, and use the bottom download button, which shows the number of files. **Download ZIP** supports image selections. Choose **Downloads** in the header for the queue, history, progress, and statistics.
 
 The temporary extension is removed when Firefox restarts. Use the **Reload** button on `about:debugging` after changing source files. Mozilla documents this workflow in [Temporary installation in Firefox](https://extensionworkshop.com/documentation/develop/temporary-installation-in-firefox/).
 
@@ -53,9 +53,9 @@ FapFolder may require an account before a post exposes its video URL. The adapte
 
 ## Background tracker MVP
 
-Choose **Track page** to monitor the current HTTP(S) URL after the popup or manager closes. A tracker remembers the current destination folder, filename template, media-type/photo/format filters, matching rules, pagination strategy, action, and notification preferences. Firefox asks for access only to that website, then an alarm wakes the extension every 15 minutes, hour, six hours, or day. **Run now**, **Pause/Resume**, and **Remove** are available from the same panel. New trackers default to **Add to review**; **Notify only** reports new matches without retaining them for approval or downloading them, while **Download automatically** sends them directly to the durable queue. Existing tracker records created before these modes retain automatic-download behavior.
+Open **Collection settings** (the three-dot button), then choose **Track page** to monitor the current HTTP(S) URL after the popup or manager closes. A tracker remembers the current destination folder, filename template, media-type/photo/format filters, matching rules, pagination strategy, action, and notification preferences. Firefox asks for access only to that website, then an alarm wakes the extension every 15 minutes, hour, six hours, or day. **Run now**, **Pause/Resume**, and **Remove** are available from the same panel. New trackers default to **Add to review**; **Notify only** reports new matches without retaining them for approval or downloading them, while **Download automatically** sends them directly to the durable queue. Existing tracker records created before these modes retain automatic-download behavior.
 
-The target-shaped header button opens the dedicated **Tracking** dashboard, which lists every tracked page and the local review inbox in one place. It shows active, paused, error, and pending-review totals; saved action, matching, and pagination settings; the latest result and reliability state; and up to 40 recent activity records per tracker. Each record includes its trigger, duration, pages checked, new matches, reviewed or queued files, and outcome. A pending item can be approved into Downloads using the tracker's current destination and filename template, previewed directly, or dismissed without downloading. From there you can also open the source page, run or pause one tracker, remove it, or pause/resume the complete schedule. Tracking and Downloads link to each other directly.
+The **Trackers** navigation button opens the dedicated **Tracking** dashboard, which lists every tracked page and the local review inbox in one place. It shows active, paused, error, and pending-review totals; saved action, matching, and pagination settings; the latest result and reliability state; and up to 40 recent activity records per tracker. Each record includes its trigger, duration, pages checked, new matches, reviewed or queued files, and outcome. A pending item can be approved into Downloads using the tracker's current destination and filename template, previewed directly, or dismissed without downloading. From there you can also open the source page, run or pause one tracker, remove it, or pause/resume the complete schedule. Tracking and Downloads link to each other directly.
 
 By default, the first successful check creates a baseline of matching media and takes no action; later checks apply the selected review, notify, or automatic-download action only to unseen matches. Enable **Process current matches on the first check** when the initial set should receive that action immediately. Include/exclude text searches URLs and exposed labels; URL patterns support `*` and `?`, one per line; and the per-check cap lets later unseen matches roll into future checks. Fingerprints ignore common expiring signature/token parameters so a refreshed signed URL does not normally look like a new file, and matches already present in the completed-download ledger are marked seen without another automatic download.
 
@@ -68,9 +68,9 @@ Each request has a 15-second timeout and a 4 MB HTML limit. A complete check vis
 ## Ignore and preview media
 
 - Choose **Ignore** beside an image or video to deselect and hide that exact media URL on the website. Compact fingerprints are stored instead of full URLs, so signed query strings and large embedded media are not copied into extension storage.
-- Choose **Ignored (N)** above the list to review hidden media. **Restore** returns an item to the normal list and leaves it unselected.
+- Open **Filters**, then choose **Ignored (N)** to review hidden media. **Restore** returns an item to the normal list and leaves it unselected.
 - Choose **Restore all** in the ignored view to remove every stored rule for the current website, including rules for media that are no longer on the current page.
-- Click any image thumbnail or video poster/placeholder—including one in the ignored view—to open a larger preview in a new Firefox tab. Image previews toggle between fit-to-window and actual size; direct video previews use Firefox's native playback controls.
+- Click a media card or its checkbox to toggle its download selection. The separate **Preview** button—including in the ignored view—opens a larger preview in a new Firefox tab without changing selection. Image previews toggle between fit-to-window and actual size; direct video previews use Firefox's native playback controls.
 
 Ignore rules are scoped to the top-level website origin and capped at 500 per website and 5,000 overall in each storage context; the oldest rules are pruned if that global limit is reached. Normal-window rules are remembered in local extension storage; private-window rules stay only in Firefox's in-memory extension session storage, and private folder edits are not written to persistent settings. Each rule is stored independently, and open manager windows synchronize rule changes through Firefox storage events. Preview details use in-memory session storage, are removed when the preview reads them, and are rejected after five minutes.
 
@@ -82,16 +82,16 @@ Image rows retain the existing full-size-source behavior: the collector first us
 
 ## Smart filters and bulk selection
 
-Expand **Filters** to show **Images & videos**, **Images**, or **Videos**. **Photos only** is available in the same panel and remains an image-focused heuristic for hiding obvious non-photo assets such as logos, icons, avatars, sprites, emoji, tracking pixels, and known very small images. Videos are outside that image-photo heuristic and are excluded while **Photos only** is enabled. The filter does not upload media or run a visual recognition model.
+Use the media-type control beside search to choose **All media**, **Images**, or **Videos**. **Photos only** is available in **Filters** and remains an image-focused heuristic for hiding obvious non-photo assets such as logos, icons, avatars, sprites, emoji, tracking pixels, and known very small images. Videos are outside that image-photo heuristic and are excluded while **Photos only** is enabled. The filter does not upload media or run a visual recognition model.
 
 - **Instagram collection** appears on profile routes. It can show all collected profile media, posts only, the current story only, all highlights, or one discovered highlight by name.
 - **Format** supports Any, JPEG, PNG, WebP, GIF, SVG, AVIF, MP4, WebM, Ogg/OGV, MOV, M4V, and MKV.
 
-Smart-filter settings are remembered. Applying a filter removes nonmatching items from the current selection; **Select matches only** then checks only the visible eligible media. The bottom **Download selected** action starts the validated bulk-download path and never includes ignored or filtered-out media. A batch may contain images, videos, or both.
+Smart-filter settings are remembered. Applying a filter removes nonmatching items from the current selection; **Select matches only** then checks only the visible eligible media. The bottom download action starts the validated bulk-download path and excludes ignored media and items rejected by smart filters. Searching preserves selections; the footer explicitly counts selected files hidden by the search. Choose **Select matches only** to restrict the batch to visible results. **Reset** or **Clear filters** clears the search and filters without selecting additional files. A batch may contain images, videos, or both.
 
 ## Filename templates and record identity
 
-Expand **Filename template** above the media list to control names for ordinary image/video downloads and image-only ZIP entries. The default `{index}-{filename}` prefixes the safe source filename with its zero-padded selected-batch position, producing names such as `0001-photo.jpg`. Templates can combine literal text with these tokens:
+Click the destination path at the bottom to open **Download settings**, then expand **Filename template** to control names for ordinary image/video downloads and image-only ZIP entries. The default `{index}-{filename}` prefixes the safe source filename with its zero-padded selected-batch position, producing names such as `0001-photo.jpg`. Templates can combine literal text with these tokens:
 
 - `{filename}` — the source filename including its extension.
 - `{name}` and `{ext}` — the source filename stem and extension separately.
@@ -108,7 +108,7 @@ The manager does not compare media for visual similarity. It uses a stable adapt
 
 ## Download queue, history, and statistics
 
-Ordinary single, bulk, and mixed image/video downloads enter a bounded background queue instead of requiring the popup to remain open while every Firefox download is started. Direct MP4, WebM, Ogg/OGV, MOV, M4V, and MKV URLs use the same queue, destination, filename-template, progress, and history path as images. Select the download-arrow button in the manager header to open the full **Downloads** dashboard. It provides:
+Ordinary single, bulk, and mixed image/video downloads enter a bounded background queue instead of requiring the popup to remain open while every Firefox download is started. Direct MP4, WebM, Ogg/OGV, MOV, M4V, and MKV URLs use the same queue, destination, filename-template, progress, and history path as images. Select **Downloads** in the manager header to open the full **Downloads** dashboard. It provides:
 
 - live per-file and per-batch state, byte progress when Firefox exposes totals, and an active-queue badge in the manager;
 - pause, resume, and cancel controls for individual files, complete batches, or all pending work;
@@ -136,7 +136,7 @@ The compact popup and separate manager remain pinned to the tab they scanned, an
 
 ## Complete-gallery collection and saved websites
 
-Each HTTP(S) website origin has one growing gallery: media found on page A remains when you visit page B on that website, and switching to another website shows its own collection. Returning restores its media and checked/unchecked selections, including after reopening AnyDownload. Stable identities prevent duplicate rows, and each record keeps its source page title for filename templates. **Clear saved gallery** removes only that site's saved media and selections, stops its watcher, and leaves downloaded files and history intact.
+Each HTTP(S) website origin has one growing gallery: media found on page A remains when you visit page B on that website, and switching to another website shows its own collection. Returning restores its media and checked/unchecked selections, including after reopening AnyDownload. Stable identities prevent duplicate rows, and each record keeps its source page title for filename templates. **Clear saved gallery** in **Collection settings** removes only that site's saved media and selections, stops its watcher, and leaves downloaded files and history intact.
 
 Normal galleries are saved locally with their media URLs and bounded display metadata; private galleries stay in session storage and never mix with normal galleries. YouTube videos use public video-ID/format references, resolve afresh through the download queue, and preview on the public video page. Other signed URLs can expire; revisiting their source refreshes them when the same media is exposed again.
 
@@ -194,7 +194,7 @@ Toolbar action
             └─ first run records a baseline; unseen matches notify, wait for review, or enter the durable queue
             └─ retry/backoff, notifications, and activity history report each outcome
             └─ Tracking dashboard controls trackers and approves or dismisses pending review items
-  └─ thumbnail/poster click stores a one-time payload and opens a packaged preview tab
+  └─ Preview button stores a one-time payload and opens a packaged preview tab
   └─ Ignore stores a site-scoped media key and removes it from selection
   └─ Download selected sends a validated DOWNLOAD_BATCH message
        └─ filename template renders safe, unique names for the selected batch
@@ -357,14 +357,22 @@ The manifest declares `data_collection_permissions.required: ["none"]` because t
 - Ignore a logo, reopen the manager on the same website, and confirm it stays hidden and unselected. Restore it from **Ignored (N)** and confirm it remains unselected.
 - Confirm that ignoring `logo.png?v=1` does not hide `logo.png?v=2` or a query-driven sibling such as `render?id=2`.
 - In a private window, ignore an image, restart Firefox, and confirm the private rule was not retained.
-- Click HTTP(S) and embedded-data thumbnails, verify each opens in a new preview tab, and toggle fit-to-window/actual size.
-- Click video posters and placeholders, verify each direct HTTP(S) file opens in the video preview with native controls, and verify **Open original** uses the exposed URL.
+- Click thumbnails, card text, and card whitespace to toggle selection; verify the checkbox toggles once and card buttons do not also toggle selection. Queued, busy, and ignored cards must not change selection.
+- Use **Preview** for HTTP(S) and embedded-data images, verify each opens in a new preview tab without changing selection, and toggle fit-to-window/actual size.
+- Use **Preview** for videos with posters and placeholders, verify each direct HTTP(S) file opens in the video preview with native controls, and verify **Open original** uses the exposed URL.
 - Right-click a gallery thumbnail and verify **AnyDownload → Download media**, **Preview media**, **Ignore media on this site**, and **Open media list…** all act on the original rather than the thumbnail.
 - Right-click a page video and verify the **AnyDownload** download, preview, ignore, and open-list actions resolve the direct media source and use the ordinary queue for download.
 - Test a page-owned `blob:`/MediaSource video, an HLS `.m3u8`, and a DASH `.mpd` player. Confirm AnyDownload does not claim to assemble those streams. Separately expose a direct HTTP(S) media URL and confirm it is handed to Firefox without a DRM detection/blocklist; the extension must neither claim to decrypt protected content nor alter the URL.
 - Confirm a full-size row changes from **checking full size…** to its actual pixel dimensions when it becomes visible, while off-screen rows do not start eager probes.
 - Open the compact toolbar popup, choose **Open window**, resize the manager larger and smaller, then repeat from the toolbar popup and confirm the same manager window is focused with its current size while the clicked source tab is rescanned.
 - In the compact popup, test a long page title, folder path, media URL, and filename; header controls, filters, row actions, and the bottom download actions must remain inside the popup without horizontal scrolling.
+
+## Interface checks
+
+- Check both themes at 470 × 600 (popup), 360 × 740 (sidebar), and a wide manager window. Confirm previews scroll independently while selection and download actions remain visible.
+- Switch layouts, search for one file while several are selected, and verify the footer counts hidden selections. Try an empty search and **Clear filters**.
+- Open Filters, Collection settings, and Download settings with the keyboard; Escape must dismiss each panel and return focus to its trigger. Test invalid folders and filename tokens, including the per-file Save action.
+- Open Downloads, then Trackers, then Media; the Media link must return to the same source tab. Dashboard pages opened without a source tab must omit that link.
 
 ## Suggested next features
 

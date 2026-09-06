@@ -7,12 +7,19 @@
     <link rel="stylesheet" href="../shared/theme.css">
     <link rel="stylesheet" href="archive.css">
   </head>
-  <body>
+  <body class="dashboard">
+    <div class="workspace-header">
+      <div class="app-brand"><img src="../icons/image-downloader-illustrated-v2-96.png" alt="" width="32" height="32"><span>AnyDownload</span></div>
+      <nav class="workspace-nav" aria-label="Workspace">
+          <a class="nav-link" data-source-link href="../popup/popup.html" hidden>Media</a>
+          <a class="nav-link" data-source-link href="../history/history.html">Downloads</a>
+          <a class="nav-link" data-source-link href="../tracking/tracking.html">Trackers</a>
+      </nav>
+    </div>
     <main class="page-shell">
       <header class="page-header">
-        <img class="app-icon" src="../icons/image-downloader-illustrated-v2-96.png" alt="">
         <div class="header-copy">
-          <p class="eyebrow">AnyDownload</p>
+          <p class="eyebrow">Image archive</p>
           <h1>Archive Progress</h1>
           <p id="job-summary" class="subtitle">Loading the selected images…</p>
         </div>
@@ -88,6 +95,7 @@
       </div>
     </main>
 
+    <script src="../shared/navigation.js"></script>
     <script src="../shared/core.js"></script>
     <script src="../shared/archive.js"></script>
     <script src="archive.js"></script>

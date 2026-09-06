@@ -65,6 +65,9 @@ class Element {
   appendChild(node) { this.append(node); return node; }
   replaceChildren(...nodes) { this.children = nodes; }
   contains() { return true; }
+  matches(selector) { return selector === ":popover-open" && this.popoverOpen === true; }
+  showPopover() { this.popoverOpen = true; }
+  hidePopover() { this.popoverOpen = false; }
   focus() {}
   querySelectorAll() { return []; }
   querySelector() { return null; }

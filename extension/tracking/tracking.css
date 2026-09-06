@@ -290,7 +290,7 @@ h2 {
 
 .approve-button {
   border-color: var(--brand);
-  color: #fff;
+  color: var(--on-brand);
   background: var(--brand);
 }
 
@@ -360,7 +360,6 @@ select:focus-visible {
   border-color: var(--brand);
   color: var(--brand-ink);
   background: var(--brand-soft);
-  outline: none;
 }
 
 button:hover:not(:disabled),
@@ -398,7 +397,6 @@ select {
   min-height: 38px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  outline: none;
   color: var(--ink);
   background: var(--surface-raised);
 }

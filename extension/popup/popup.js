@@ -787,6 +787,8 @@
       "gallery-pages-select",
       "gallery-status",
       "download-button",
+      "download-settings-panel",
+      "download-settings-button",
       "downloaded-button",
       "filter-input",
       "filename-template-button",
@@ -798,6 +800,8 @@
       "folder-help",
       "folder-input",
       "history-button",
+      "grid-view-button",
+      "list-view-button",
       "ignored-button",
       "image-list",
       "instagram-collection-filter-field",
@@ -1094,6 +1098,7 @@
       if (!pattern) {
         setNotice("This page cannot be tracked in the background.", "error");
       } else if (!folder.ok) {
+        elements["download-settings-panel"].showPopover();
         elements["folder-input"].focus();
       }
       return;
@@ -1339,6 +1344,7 @@
   function requireValidFilenameTemplate() {
     const result = updateFilenameTemplateUi();
     if (!result.ok) {
+      elements["download-settings-panel"].showPopover();
       elements["filename-template-panel"].hidden = false;
       elements["filename-template-button"].setAttribute("aria-expanded", "true");
       elements["filename-template-input"].focus();
@@ -1471,7 +1477,8 @@
   async function openDownloadHistory() {
     const createProperties = {
       active: true,
-      url: browser.runtime.getURL("history/history.html")
+      url: browser.runtime.getURL("history/history.html") +
+        (Number.isInteger(state.sourceTabId) ? `?sourceTabId=${state.sourceTabId}` : "")
     };
     if (Number.isInteger(state.sourceWindowId)) {
       createProperties.windowId = state.sourceWindowId;
@@ -1484,7 +1491,8 @@
   async function openTrackingDashboard() {
     const createProperties = {
       active: true,
-      url: browser.runtime.getURL("tracking/tracking.html")
+      url: browser.runtime.getURL("tracking/tracking.html") +
+        (Number.isInteger(state.sourceTabId) ? `?sourceTabId=${state.sourceTabId}` : "")
     };
     if (Number.isInteger(state.sourceWindowId)) {
       createProperties.windowId = state.sourceWindowId;
@@ -1874,10 +1882,12 @@
   }
 
   function focusIgnoredToggle() {
+    const target = elements["smart-filter-panel"].matches(":popover-open")
+      ? elements["ignored-button"] : elements["smart-filters-button"];
     try {
-      elements["ignored-button"].focus({ preventScroll: true });
+      target.focus({ preventScroll: true });
     } catch (_error) {
-      elements["ignored-button"].focus();
+      target.focus();
     }
   }
 
@@ -2258,7 +2268,7 @@
       Number(state.instagramCollectionFilter !== "all");
     const button = elements["smart-filters-button"];
     button.textContent = count ? `Filters (${count})` : "Filters";
-    button.classList.toggle("active", count > 0 || !elements["smart-filter-panel"].hidden);
+    button.classList.toggle("active", count > 0 || elements["smart-filter-panel"].matches(":popover-open"));
   }
 
   function imageMatchesSmartFilters(image) {
@@ -2690,6 +2700,7 @@
 
   function updateSummary(visibleImages) {
     updateGalleryControls();
+    elements["page-label"].title = elements["page-label"].textContent;
     scheduleGallerySave();
     const total = state.images.length;
     const ignoredCount = state.images.filter(isImageIgnored).length;
@@ -2705,6 +2716,8 @@
     const selected = selectedItems.length;
     const selectedHasVideo = selectedItems.some((item) => mediaTypeFor(item) === "video");
     const visible = Array.isArray(visibleImages) ? visibleImages : filteredImages();
+    const visibleUrls = new Set(visible.map((image) => image.url));
+    const hiddenSelected = selectedItems.filter((image) => !visibleUrls.has(image.url)).length;
     const hasFilter = Boolean(elements["filter-input"].value.trim()) ||
       (!state.showIgnored && (
         state.hideDownloaded ||
@@ -2736,21 +2749,29 @@
     elements["downloaded-button"].setAttribute("aria-pressed", String(state.hideDownloaded));
     elements["select-all-button"].hidden = state.showIgnored;
     elements["select-none-button"].hidden = state.showIgnored;
+    elements["select-all-button"].disabled = state.busy || !visible.some((image) =>
+      downloadStatusFor(image) !== "downloaded" && imageCanBeSelected(image)
+    );
+    elements["select-none-button"].disabled = state.busy || !visible.some((image) => state.selected.has(image.url));
     elements["select-all-button"].textContent = hasFilter ? "Select matches only" : "Select all";
     elements["select-none-button"].textContent = hasFilter ? "Clear matches" : "Clear";
     elements["download-button"].hidden = state.showIgnored;
     elements["archive-footer-button"].hidden = state.showIgnored;
     elements["selected-label"].textContent = state.showIgnored
       ? `${ignoredCount.toLocaleString()} ignored here`
-      : `${selected.toLocaleString()} selected`;
+      : `${selected.toLocaleString()} selected${hiddenSelected ? ` · ${hiddenSelected.toLocaleString()} hidden` : ""}`;
     elements["action-detail"].textContent = state.showIgnored
       ? storedIgnoredCount === ignoredCount
         ? "Restore media to make it downloadable again"
         : `${storedIgnoredCount.toLocaleString()} rules saved for this site`
       : selected
-        ? template.ok
-          ? `Ready for Downloads/${folder.ok ? folder.value : "…"}`
-          : template.error
+        ? !folder.ok
+          ? folder.error
+          : !template.ok
+            ? template.error
+            : hiddenSelected
+              ? "Download includes files hidden by your search"
+              : `Downloads/${folder.value}${selectedHasVideo ? " · ZIP is images only" : ""}`
         : queuedCount
           ? `${queuedCount.toLocaleString()} item${queuedCount === 1 ? " is" : "s are"} already queued`
           : downloadedCount
@@ -2758,7 +2779,12 @@
             : "Choose files to download";
     elements["download-button"].textContent = selected === 1
       ? `Download ${mediaTypeFor(selectedItems[0])}`
-      : "Download selected";
+      : selected ? `Download ${selected.toLocaleString()} files` : "Download selected";
+    elements["action-detail"].title = elements["action-detail"].textContent;
+    elements["download-settings-button"].classList.toggle("active", !folder.ok || !template.ok);
+    elements["download-settings-button"].title = folder.ok
+      ? `Download settings · Downloads/${folder.value}`
+      : `Fix destination folder: ${folder.error}`;
     elements["download-button"].disabled = state.busy || Boolean(galleryCollection) || selected === 0 || !folder.ok || !template.ok;
     elements["archive-footer-button"].disabled = state.busy || Boolean(galleryCollection) || selected === 0 ||
       selectedHasVideo || !folder.ok || !template.ok;
@@ -2806,13 +2832,17 @@
       updateSummary();
     });
 
-    const thumbnailFrame = document.createElement("button");
-    thumbnailFrame.type = "button";
+    const previewButton = document.createElement("button");
+    previewButton.type = "button";
+    previewButton.className = "row-action-button preview";
+    previewButton.textContent = "Preview";
+    previewButton.title = `Open ${video ? "video" : "image"} preview in a new tab`;
+    previewButton.setAttribute("aria-label", `Preview ${friendlyFilename(image)} in a new tab`);
+    previewButton.disabled = state.busy;
+    previewButton.addEventListener("click", () => openImagePreview(image));
+
+    const thumbnailFrame = document.createElement("div");
     thumbnailFrame.className = `thumbnail-frame${video ? " video" : ""}`;
-    thumbnailFrame.title = `Open ${video ? "video" : "image"} preview in a new tab`;
-    thumbnailFrame.setAttribute("aria-label", `Preview ${friendlyFilename(image)} in a new tab`);
-    thumbnailFrame.disabled = state.busy;
-    thumbnailFrame.addEventListener("click", () => openImagePreview(image));
     let thumbnail = null;
     const thumbnailUrl = video ? image.previewUrl : image.previewUrl || image.url;
     if (thumbnailUrl) {
@@ -2872,7 +2902,7 @@
       label: filenameLabel,
       container: name,
       checkbox,
-      previewButton: thumbnailFrame
+      previewButton
     });
     const url = document.createElement("div");
     url.className = "image-url";
@@ -2902,6 +2932,7 @@
 
     const actions = document.createElement("div");
     actions.className = "row-actions";
+    actions.appendChild(previewButton);
     if (ignored) {
       const restore = document.createElement("button");
       restore.type = "button";
@@ -2940,6 +2971,11 @@
       }));
       actions.append(ignore, download);
       row.append(checkbox, thumbnailFrame, copy, actions);
+      row.addEventListener("click", (event) => {
+        if (!checkbox.disabled && !event.target.closest("button, input")) {
+          checkbox.click();
+        }
+      });
     }
     return row;
   }
@@ -2952,6 +2988,31 @@
       filterRenderTimer = null;
       renderImages();
     }, FILTER_RENDER_DEBOUNCE_MS);
+  }
+
+  function applyMediaView(value) {
+    const view = value === "list" ? "list" : "grid";
+    elements["image-list"].dataset.view = view;
+    elements["grid-view-button"].setAttribute("aria-pressed", String(view === "grid"));
+    elements["list-view-button"].setAttribute("aria-pressed", String(view === "list"));
+  }
+
+  function resetMediaFilters() {
+    elements["filter-input"].value = "";
+    state.hideDownloaded = false;
+    state.instagramCollectionFilter = "all";
+    elements["instagram-collection-filter-select"].value = "all";
+    applySmartFiltersToControls(Filters.DEFAULT_FILTERS);
+    handleSmartFilterChange();
+    closeMediaFilters();
+    elements["filter-input"].focus();
+  }
+
+  function closeMediaFilters() {
+    const panel = elements["smart-filter-panel"];
+    if (panel.matches(":popover-open")) {
+      panel.hidePopover();
+    }
   }
 
   function renderImages() {
@@ -3052,19 +3113,32 @@
     if (!visible.length) {
       const empty = document.createElement("div");
       empty.className = "empty-state";
+      const title = document.createElement("strong");
+      title.textContent = state.showIgnored ? "Nothing ignored here" : state.images.length ? "No matching media" : "No media found yet";
+      const detail = document.createElement("p");
       const ignoredCount = state.images.filter(isImageIgnored).length;
       if (state.showIgnored) {
-        empty.textContent = ignoredCount
+        detail.textContent = ignoredCount
           ? "No ignored media match this filter."
           : state.ignoredKeys.size
             ? `No ignored media are present on this page. Use Restore all to clear the ${state.ignoredKeys.size.toLocaleString()} stored site rule${state.ignoredKeys.size === 1 ? "" : "s"}.`
             : "No ignored media are present on this page.";
       } else if (state.images.length && ignoredCount === state.images.length) {
-        empty.textContent = `All ${ignoredCount.toLocaleString()} media items on this page are ignored. Open the Ignored view to restore any of them.`;
+        detail.textContent = `All ${ignoredCount.toLocaleString()} media items on this page are ignored. Open Filters, then Ignored to restore them.`;
       } else {
-        empty.textContent = state.images.length
-          ? "No media match this filter."
-          : "No downloadable images or direct video files were found in the loaded page.";
+        detail.textContent = state.images.length
+          ? "Try a different search or clear your filters to see more of your collection."
+          : "Scroll the source page to load more images and videos, or use Collect gallery to find them automatically.";
+      }
+      empty.append(title, detail);
+      if (elements["filter-input"].value.trim() || Filters.hasActiveSmartFilters(state.smartFilters) ||
+        state.hideDownloaded || state.instagramCollectionFilter !== "all") {
+        const reset = document.createElement("button");
+        reset.type = "button";
+        reset.className = "secondary-button";
+        reset.textContent = "Clear filters";
+        reset.addEventListener("click", resetMediaFilters);
+        empty.appendChild(reset);
       }
       elements["image-list"].appendChild(empty);
       updateSummary(visible);
@@ -3957,6 +4031,7 @@
     }
     const folder = folderStatus();
     if (!folder.ok) {
+      elements["download-settings-panel"].showPopover();
       elements["folder-input"].focus();
       updateSummary();
       return;
@@ -4175,6 +4250,7 @@
 
     const folder = folderStatus();
     if (!folder.ok) {
+      elements["download-settings-panel"].showPopover();
       elements["folder-input"].focus();
       updateSummary();
       return undefined;
@@ -4786,6 +4862,12 @@
   }
 
   function wireEvents() {
+    for (const view of ["grid", "list"]) {
+      elements[`${view}-view-button`].addEventListener("click", () => {
+        applyMediaView(view);
+        browser.storage.local.set({ mediaLayout: view }).catch(() => undefined);
+      });
+    }
     elements["collect-gallery-button"].addEventListener("click", () => {
       collectGallery().catch((error) => setNotice(error.message || String(error), "error"));
     });
@@ -4865,10 +4947,9 @@
     ]) {
       elements[id].addEventListener("change", handleSmartFilterChange);
     }
-    elements["smart-filters-button"].addEventListener("click", () => {
-      const panel = elements["smart-filter-panel"];
-      panel.hidden = !panel.hidden;
-      elements["smart-filters-button"].setAttribute("aria-expanded", String(!panel.hidden));
+    elements["smart-filter-panel"].addEventListener("toggle", () => {
+      const open = elements["smart-filter-panel"].matches(":popover-open");
+      elements["smart-filters-button"].setAttribute("aria-expanded", String(open));
       updateSmartFilterButton();
     });
     elements["instagram-collection-filter-select"].addEventListener("change", () => {
@@ -4881,15 +4962,11 @@
       updateSmartFilterButton();
       renderImages();
     });
-    elements["reset-filters-button"].addEventListener("click", () => {
-      state.instagramCollectionFilter = "all";
-      elements["instagram-collection-filter-select"].value = "all";
-      applySmartFiltersToControls(Filters.DEFAULT_FILTERS);
-      handleSmartFilterChange();
-    });
+    elements["reset-filters-button"].addEventListener("click", resetMediaFilters);
     elements["ignored-button"].addEventListener("click", () => {
       state.showIgnored = !state.showIgnored;
       renderImages();
+      closeMediaFilters();
     });
     elements["downloaded-button"].addEventListener("click", () => {
       state.hideDownloaded = !state.hideDownloaded;
@@ -4904,6 +4981,7 @@
         }
       }
       renderImages();
+      closeMediaFilters();
     });
     elements["clear-ignored-button"].addEventListener("click", restoreAllIgnoredImages);
     elements["select-all-button"].addEventListener("click", () => {
@@ -4994,7 +5072,8 @@
         "askForSingle",
         "includeBackgrounds",
         "filenameTemplate",
-        "smartFilters"
+        "smartFilters",
+        "mediaLayout"
       ]);
       if (stored.destinationFolder) {
         elements["folder-input"].value = stored.destinationFolder;
@@ -5009,6 +5088,7 @@
       state.filenameTemplate = elements["filename-template-input"].value;
       updateFilenameTemplateUi();
       applySmartFiltersToControls(stored.smartFilters);
+      applyMediaView(stored.mediaLayout);
       updateSmartFilterButton();
     } catch (_error) {
       // Defaults are sufficient if storage is unavailable.

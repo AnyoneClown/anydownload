@@ -134,15 +134,14 @@ for (const resourcePath of popupResourcePaths) {
 assert.match(popupCss, /html,\s*body\s*\{[^}]*width:\s*470px;[^}]*height:\s*600px;[^}]*min-width:\s*0;[^}]*min-height:\s*0;/s);
 assert.doesNotMatch(popupCss, /html,\s*body\s*\{[^}]*max-(?:width|height):/s);
 assert.match(popupCss, /\.app-shell\s*\{[^}]*height:\s*600px;[^}]*min-height:\s*0;[^}]*overflow:\s*hidden;/s);
-assert.match(popupCss, /\.app-shell\s*\{[^}]*grid-template-rows:\s*auto auto auto auto minmax\(0,\s*1fr\) auto;/s);
+assert.match(popupCss, /\.app-shell\s*\{[^}]*grid-template-rows:\s*auto auto auto minmax\(0,\s*1fr\) auto;/s);
 assert.match(
   popupCss,
-  /\.app-shell\s*\{[^}]*grid-template-areas:\s*"header"\s*"folder"\s*"controls"\s*"notice"\s*"media"\s*"actions";/s,
+  /\.app-shell\s*\{[^}]*grid-template-areas:\s*"header"\s*"controls"\s*"notice"\s*"media"\s*"actions";/s,
   "Hidden notices must not shift the footer into the flexible media row during scanning"
 );
 for (const [selector, area] of [
   ["app-header", "header"],
-  ["folder-panel", "folder"],
   ["controls", "controls"],
   ["notice", "notice"],
   ["image-list", "media"],
@@ -156,17 +155,17 @@ for (const [selector, area] of [
 }
 assert.match(popupCss, /\.app-shell\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s);
 assert.match(popupCss, /\.app-shell\s*>\s*\*\s*\{[^}]*min-width:\s*0;/s);
-assert.match(popupCss, /\.app-header\s*\{[^}]*grid-template-columns:\s*38px\s+minmax\(0,\s*1fr\)\s+auto;/s);
 assert.match(popupCss, /html\.responsive-surface,\s*html\.responsive-surface body\s*\{[^}]*width:\s*100%;[^}]*height:\s*100%;/s);
-assert.match(popupCss, /html\.responsive-surface \.app-shell\s*\{[^}]*height:\s*100vh;/s);
-assert.match(popupCss, /html:not\(\.responsive-surface\) \.summary-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s);
-assert.match(popupCss, /html:not\(\.responsive-surface\) \.selection-actions\s*\{[^}]*justify-content:\s*flex-start;/s);
-assert.match(popupCss, /@media\s*\(max-width:\s*420px\)[\s\S]*\.open-window-button \.button-label\s*\{[^}]*display:\s*none;/s);
+assert.match(popupCss, /html\.responsive-surface \.app-shell\s*\{[^}]*height:\s*100dvh;/s);
 assert.match(popupCss, /\.image-list\s*\{[^}]*overflow-x:\s*hidden;/s);
-assert.match(popupCss, /\.image-row\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*0;/s);
 assert.match(popupCss, /\.action-bar\s*\{[^}]*min-width:\s*0;/s);
 assert.match(popupHtml, /id="open-window-button"[^>]*title="Open in a resizable window"[^>]*aria-label="Open in a resizable window"[^>]*disabled/);
-assert.match(popupHtml, /class="button-label">Open window<\/span>/);
+for (const panel of ["download-settings-panel", "page-tools-panel", "smart-filter-panel"]) {
+  assert.match(popupHtml, new RegExp(`id="${panel}"[^>]*popover`));
+  assert.match(popupHtml, new RegExp(`popovertarget="${panel}"`));
+}
+assert.match(popupHtml, /id="grid-view-button"[^>]*aria-pressed="true"/);
+assert.match(popupHtml, /id="list-view-button"[^>]*aria-pressed="false"/);
 assert.match(popupHtml, /id="folder-help"[^>]*role="status"[^>]*aria-live="polite"[^>]*hidden/);
 assert.match(popupHtml, /class="folder-toolbar"/);
 assert.match(popupHtml, /class="folder-options"/);
@@ -193,10 +192,7 @@ for (const removedControlId of [
   );
 }
 assert.match(popupHtml, />Save As for one file<\/span>/);
-assert.match(popupHtml, />CSS backgrounds<\/span>/);
-assert.match(popupCss, /\.folder-panel\s*\{[^}]*padding:\s*7px 12px 8px;/s);
-assert.match(popupCss, /\.folder-toolbar\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;/s);
-assert.match(popupCss, /\.folder-options\s*\{[^}]*display:\s*flex;[^}]*flex:\s*1 1 auto;[^}]*flex-wrap:\s*wrap;/s);
+assert.match(popupHtml, /id="backgrounds-input"[^>]*type="checkbox"/);
 assert.match(popupHtml, /id="ignored-button"[^>]*aria-pressed="false"/);
 assert.match(popupHtml, /id="clear-ignored-button"/);
 assert.match(popupHtml, /id="downloaded-button"[^>]*aria-pressed="false"/);
@@ -230,7 +226,7 @@ for (const collectionFilter of ["all", "posts", "story", "highlights"]) {
     `Missing Instagram collection filter: ${collectionFilter}`
   );
 }
-assert.match(popupHtml, /id="smart-filter-panel"[^>]*hidden/);
+assert.match(popupHtml, /id="smart-filter-panel"[^>]*popover/);
 assert.match(popupHtml, /id="smart-filters-button"[^>]*aria-expanded="false"[^>]*aria-controls="smart-filter-panel"/);
 assert.match(popupHtml, /id="tracker-button"[^>]*aria-controls="tracker-panel"[^>]*disabled/);
 assert.match(popupHtml, /id="tracker-panel"[^>]*hidden/);
@@ -262,8 +258,8 @@ assert.equal(
 );
 assert.match(
   popupHtml,
-  /<div id="smart-filter-panel"[^>]*hidden>[\s\S]*?<input id="photos-only-input"[^>]*type="checkbox"[\s\S]*?<\/div>/,
-  "Photos only must live inside the collapsible Filters panel"
+  /<div id="smart-filter-panel"[^>]*popover[^>]*>[\s\S]*?<input id="photos-only-input"[^>]*type="checkbox"[\s\S]*?<\/div>/,
+  "Photos only must live inside the Filters popover"
 );
 assert.match(popupHtml, /id="media-type-filter-select"/);
 for (const format of ["mp4", "webm", "ogv", "mov", "m4v", "mkv"]) {
@@ -540,7 +536,7 @@ const historyScriptSources = Array.from(
   historyHtml.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*><\/script>/gi),
   (match) => match[1]
 );
-assert.deepEqual(historyScriptSources, ["history.js"]);
+assert.deepEqual(historyScriptSources, ["../shared/navigation.js", "history.js"]);
 const historyResourcePaths = [
   ...historyScriptSources,
   ...Array.from(

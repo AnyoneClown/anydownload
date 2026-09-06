@@ -10,104 +10,62 @@
   <body>
     <div class="app-shell">
       <header class="app-header">
-        <img class="app-icon" src="../icons/image-downloader-illustrated-v2-96.png" alt="">
-        <div class="header-copy">
+        <div class="app-brand">
+          <img class="app-icon" src="../icons/image-downloader-illustrated-v2-96.png" alt="">
           <h1>AnyDownload</h1>
-          <p id="page-label">Scanning the current page…</p>
         </div>
+        <nav class="workspace-nav" aria-label="Workspace">
+          <span class="nav-link current" aria-current="page"><svg aria-hidden="true" viewBox="0 0 20 20"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="12" y="3" width="5" height="5" rx="1"/><rect x="3" y="12" width="5" height="5" rx="1"/><rect x="12" y="12" width="5" height="5" rx="1"/></svg><span>Media</span></span>
+          <button id="history-button" class="nav-link" type="button" title="Download queue and statistics" aria-label="Open download queue and statistics">
+            <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 2.5v9M6.5 8.5 10 12l3.5-3.5M3 14v2.5h14V14"/></svg><span>Downloads</span><span id="queue-badge" class="queue-badge" aria-hidden="true" hidden>0</span>
+          </button>
+          <button id="tracking-dashboard-button" class="nav-link" type="button" title="Background trackers" aria-label="Open background trackers">
+            <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r="2"/></svg><span>Trackers</span>
+          </button>
+        </nav>
         <div class="header-actions">
-          <button id="open-window-button" class="open-window-button" type="button" title="Open in a resizable window" aria-label="Open in a resizable window" disabled>
+          <button id="open-window-button" class="icon-button open-window-button" type="button" title="Open in a resizable window" aria-label="Open in a resizable window" disabled>
             <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M8 4H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-3M11 3h6v6M9 11l8-8"/></svg>
-            <span class="button-label">Open window</span>
           </button>
           <button id="sidebar-button" class="icon-button sidebar-button" type="button" title="Open Firefox Sidebar" aria-label="Open Firefox Sidebar">
             <svg aria-hidden="true" viewBox="0 0 20 20"><rect x="2.5" y="3" width="15" height="14" rx="2"/><path d="M7.5 3v14"/></svg>
           </button>
-          <button id="tracking-dashboard-button" class="icon-button tracking-dashboard-button" type="button" title="Background trackers" aria-label="Open background trackers">
-            <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r="2"/><path d="M10 1.8v2M18.2 10h-2M10 18.2v-2M1.8 10h2"/></svg>
-          </button>
-          <button id="history-button" class="icon-button history-button" type="button" title="Download queue and statistics" aria-label="Open download queue and statistics">
-            <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 2.5v9M6.5 8.5 10 12l3.5-3.5M3 14v2.5h14V14"/></svg>
-            <span id="queue-badge" class="queue-badge" aria-hidden="true" hidden>0</span>
-          </button>
         </div>
       </header>
 
-      <section class="folder-panel" aria-labelledby="folder-label">
-        <div class="folder-toolbar">
-          <label id="folder-label" for="folder-input">Destination folder<span class="visually-hidden"> inside Firefox Downloads</span></label>
-          <div class="folder-options">
-            <label class="option-row" title="Show a Save As dialog when downloading exactly one file">
-              <input id="ask-single-input" type="checkbox">
-              <span>Save As for one file</span>
-            </label>
-            <label class="option-row" title="Include CSS background images on the next scan">
-              <input id="backgrounds-input" type="checkbox" checked>
-              <span>CSS backgrounds</span>
-            </label>
-          </div>
-        </div>
-        <div class="folder-input-row">
-          <span aria-hidden="true">Downloads /</span>
-          <input id="folder-input" type="text" value="Website media" maxlength="260" autocomplete="off" spellcheck="false" aria-describedby="folder-help">
-        </div>
-        <p id="folder-help" class="field-help" role="status" aria-live="polite" hidden></p>
-        <div class="filename-template-toolbar">
-          <button id="filename-template-button" class="text-button" type="button" aria-expanded="false" aria-controls="filename-template-panel">Filename template</button>
-          <span id="filename-template-preview" title="Filename preview">Example: 0001-image-0001.jpg</span>
-        </div>
-        <div id="filename-template-panel" class="filename-template-panel" hidden>
-          <label for="filename-template-input">Template</label>
-          <input id="filename-template-input" type="text" value="{index}-{filename}" maxlength="240" autocomplete="off" spellcheck="false" aria-describedby="filename-template-help">
-          <p id="filename-template-help" class="field-help" role="status" aria-live="polite">Tokens: {filename}, {name}, {ext}, {index}, {hostname}, {page-title}, {width}, {height}, {date}. The zero-padded {index} follows selected page order.</p>
-        </div>
-      </section>
-
       <section class="controls" aria-label="Media controls">
-        <div class="gallery-toolbar">
-          <button id="collect-gallery-button" class="secondary-button" type="button" disabled>Collect gallery</button>
-          <button id="stop-gallery-button" class="secondary-button" type="button" hidden>Stop collecting</button>
-          <label class="compact-field">
-            <span class="visually-hidden">Gallery pagination limit</span>
-            <select id="gallery-pages-select" aria-label="Gallery pagination limit">
-              <option value="1">Scroll this page</option>
-              <option value="3">Up to 3 pages</option>
-              <option value="10" selected>Up to 10 pages</option>
-            </select>
-          </label>
-          <button id="clear-gallery-button" class="text-button danger-button" type="button" disabled>Clear saved gallery</button>
-        </div>
-        <p id="gallery-status" class="field-help" role="status" aria-live="polite">Galleries are saved separately for each website.</p>
-        <div class="summary-row">
-          <strong id="summary-label">0 media files</strong>
-          <div id="selection-actions" class="selection-actions">
-            <button id="ignored-button" class="text-button ignored-view-button" type="button" aria-pressed="false" disabled>Ignored (0)</button>
-            <button id="clear-ignored-button" class="text-button danger-button" type="button" hidden>Restore all</button>
-            <button id="downloaded-button" class="text-button downloaded-view-button" type="button" aria-pressed="false" disabled>Hide downloaded (0)</button>
-            <button id="select-all-button" class="text-button" type="button">Select all</button>
-            <button id="select-none-button" class="text-button" type="button">Clear</button>
+        <div class="collection-heading">
+          <div class="context-copy">
+            <p class="eyebrow">Page media</p>
+            <h2 id="page-label">Scanning the current page…</h2>
+            <p id="gallery-status" class="field-help" role="status" aria-live="polite">Your collection will appear here.</p>
+          </div>
+          <div class="gallery-toolbar">
+            <button id="collect-gallery-button" class="secondary-button" type="button" disabled>Collect gallery</button>
+            <button id="stop-gallery-button" class="secondary-button" type="button" hidden>Stop collecting</button>
+            <button class="icon-button" type="button" popovertarget="page-tools-panel" aria-label="Collection settings and page tracking" title="Collection settings and page tracking">
+              <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="4" cy="10" r="1"/><circle cx="10" cy="10" r="1"/><circle cx="16" cy="10" r="1"/></svg>
+            </button>
           </div>
         </div>
-        <label class="search-box">
-          <span class="visually-hidden">Filter media</span>
-          <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg>
-          <input id="filter-input" type="search" placeholder="Filter by URL, label, or type…" autocomplete="off">
-        </label>
-        <div class="filter-toolbar">
-          <button id="smart-filters-button" class="text-button filter-toggle-button" type="button" aria-expanded="false" aria-controls="smart-filter-panel">Filters</button>
-          <button id="tracker-button" class="text-button tracker-button" type="button" aria-expanded="false" aria-controls="tracker-panel" disabled>Track page</button>
-          <button id="instagram-collections-button" class="text-button instagram-collections-button" type="button" title="Collect the profile owner's active story and highlights" hidden>Stories &amp; highlights</button>
-          <button id="sidebar-follow-button" class="text-button sidebar-follow-button" type="button" title="Allow the Sidebar to follow every active webpage" hidden>Enable auto-follow</button>
-        </div>
-        <div id="smart-filter-panel" class="smart-filter-panel" hidden>
-          <label class="compact-field">
-            <span>Type</span>
+        <div class="search-toolbar">
+          <label class="search-box">
+            <span class="visually-hidden">Filter media</span>
+            <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg>
+            <input id="filter-input" type="search" placeholder="Search media…" autocomplete="off">
+          </label>
+          <label class="compact-field media-type-field">
+            <span class="visually-hidden">Media type</span>
             <select id="media-type-filter-select">
-              <option value="any">Images &amp; videos</option>
+              <option value="any">All media</option>
               <option value="image">Images</option>
               <option value="video">Videos</option>
             </select>
           </label>
+          <button id="smart-filters-button" class="secondary-button filter-toggle-button" type="button" popovertarget="smart-filter-panel" aria-expanded="false" aria-controls="smart-filter-panel">Filters</button>
+        </div>
+        <div id="smart-filter-panel" class="smart-filter-panel settings-popover" popover aria-labelledby="filter-heading">
+          <div class="popover-heading"><h2 id="filter-heading">Filter your collection</h2><button class="icon-button" type="button" popovertarget="smart-filter-panel" popovertargetaction="hide" aria-label="Close filters">×</button></div>
           <label class="option-row photos-only-toggle" title="Hide likely logos, icons, avatars, trackers, and other non-photo assets">
             <input id="photos-only-input" type="checkbox">
             <span>Photos only</span>
@@ -139,119 +97,37 @@
               <option value="mkv">MKV</option>
             </select>
           </label>
+          <div class="filter-view-options">
+            <button id="ignored-button" class="text-button ignored-view-button" type="button" aria-pressed="false" disabled>Ignored (0)</button>
+            <button id="clear-ignored-button" class="text-button danger-button" type="button" hidden>Restore all</button>
+            <button id="downloaded-button" class="text-button downloaded-view-button" type="button" aria-pressed="false" disabled>Hide downloaded (0)</button>
+          </div>
           <button id="reset-filters-button" class="text-button" type="button">Reset</button>
         </div>
-        <div id="tracker-panel" class="tracker-panel" hidden>
-          <div class="tracker-heading">
-            <div>
-              <strong>Background tracker</strong>
-              <span id="tracker-state-label">Not active</span>
-            </div>
-            <label class="compact-field tracker-interval-field">
-              <span>Check every</span>
-              <select id="tracker-interval-select">
-                <option value="15">15 minutes</option>
-                <option value="60" selected>1 hour</option>
-                <option value="360">6 hours</option>
-                <option value="1440">1 day</option>
-              </select>
-            </label>
+        <div class="summary-row">
+          <strong id="summary-label" role="status" aria-live="polite">0 media files</strong>
+          <div id="selection-actions" class="selection-actions">
+            <button id="select-all-button" class="text-button" type="button">Select all</button>
+            <button id="select-none-button" class="text-button" type="button">Clear</button>
           </div>
-          <label class="compact-field tracker-action-field">
-            <span>When new media is found</span>
-            <select id="tracker-action-select">
-              <option value="review" selected>Add to review</option>
-              <option value="notify">Notify only</option>
-              <option value="download">Download automatically</option>
-            </select>
-          </label>
-          <label class="option-row tracker-initial-option" title="Otherwise the first check only records a baseline and takes no action">
-            <input id="tracker-download-initial-input" type="checkbox">
-            <span>Process current matches on the first check</span>
-          </label>
-          <details class="tracker-advanced">
-            <summary>Matching, pagination &amp; alerts</summary>
-            <div class="tracker-settings-grid">
-              <label class="compact-field">
-                <span>Include text</span>
-                <input id="tracker-include-text-input" type="text" maxlength="200" autocomplete="off" placeholder="URL, label, or title contains…">
-              </label>
-              <label class="compact-field">
-                <span>Exclude text</span>
-                <input id="tracker-exclude-text-input" type="text" maxlength="200" autocomplete="off" placeholder="Skip URL, label, or title containing…">
-              </label>
-              <label class="compact-field">
-                <span>Include URL patterns</span>
-                <textarea id="tracker-include-patterns-input" rows="2" maxlength="4800" placeholder="*/gallery/*.jpg"></textarea>
-              </label>
-              <label class="compact-field">
-                <span>Exclude URL patterns</span>
-                <textarea id="tracker-exclude-patterns-input" rows="2" maxlength="4800" placeholder="*/thumbs/*"></textarea>
-              </label>
-              <label class="compact-field">
-                <span>Max new items per check</span>
-                <select id="tracker-max-downloads-select">
-                  <option value="10">10</option>
-                  <option value="25">25</option>
-                  <option value="50">50</option>
-                  <option value="100" selected>100</option>
-                </select>
-              </label>
-              <label class="compact-field">
-                <span>Pagination</span>
-                <select id="tracker-pagination-mode-select">
-                  <option value="none">First page only</option>
-                  <option value="next-link">Follow static Next link</option>
-                  <option value="url-template">URL template</option>
-                </select>
-              </label>
-              <label id="tracker-max-pages-field" class="compact-field" hidden>
-                <span>Maximum pages</span>
-                <select id="tracker-max-pages-select">
-                  <option value="2">2 pages</option>
-                  <option value="3" selected>3 pages</option>
-                  <option value="5">5 pages</option>
-                  <option value="10">10 pages</option>
-                </select>
-              </label>
-              <label id="tracker-next-selector-field" class="compact-field" hidden>
-                <span>Next-link selector (optional)</span>
-                <input id="tracker-next-selector-input" type="text" maxlength="240" autocomplete="off" placeholder="a.next">
-              </label>
-              <label id="tracker-url-template-field" class="compact-field tracker-wide-field" hidden>
-                <span>Page URL template</span>
-                <input id="tracker-url-template-input" type="text" maxlength="16384" autocomplete="off" spellcheck="false" placeholder="https://example.com/gallery?page={page}">
-              </label>
-            </div>
-            <div class="tracker-notification-options">
-              <label class="option-row">
-                <input id="tracker-notify-matches-input" type="checkbox" checked>
-                <span>Notify when new media is found</span>
-              </label>
-              <label class="option-row">
-                <input id="tracker-notify-errors-input" type="checkbox" checked>
-                <span>Notify on first or auto-pausing error</span>
-              </label>
-            </div>
-            <p class="tracker-note">Patterns support <code>*</code> and <code>?</code>, one per line. Pagination stays on the same website and is capped; AJAX “More” requests are not replayed yet.</p>
-          </details>
-          <p id="tracker-status" class="tracker-status" role="status" aria-live="polite">Start tracking to create a baseline.</p>
-          <div class="tracker-actions">
-            <button id="tracker-save-button" class="tracker-action primary" type="button">Start tracking</button>
-            <button id="tracker-run-button" class="tracker-action" type="button" hidden>Run now</button>
-            <button id="tracker-pause-button" class="tracker-action" type="button" hidden>Pause</button>
-            <button id="tracker-delete-button" class="tracker-action danger" type="button" hidden>Remove</button>
+          <div class="view-switch" role="group" aria-label="Media layout">
+            <button id="grid-view-button" class="icon-button" type="button" aria-label="Grid view" aria-pressed="true" title="Grid view"><svg aria-hidden="true" viewBox="0 0 20 20"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="12" y="3" width="5" height="5" rx="1"/><rect x="3" y="12" width="5" height="5" rx="1"/><rect x="12" y="12" width="5" height="5" rx="1"/></svg></button>
+            <button id="list-view-button" class="icon-button" type="button" aria-label="List view" aria-pressed="false" title="List view"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M7 5h10M7 10h10M7 15h10M3 5h.01M3 10h.01M3 15h.01"/></svg></button>
           </div>
+        </div>
+        <div class="filter-toolbar">
+          <button id="instagram-collections-button" class="text-button instagram-collections-button" type="button" title="Collect the profile owner's active story and highlights" hidden>Stories &amp; highlights</button>
+          <button id="sidebar-follow-button" class="text-button sidebar-follow-button" type="button" title="Allow the Sidebar to follow every active webpage" hidden>Enable auto-follow</button>
         </div>
       </section>
 
       <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
-      <main id="image-list" class="image-list" role="list" aria-label="Media found on this page"></main>
+      <main id="image-list" class="image-list" data-view="grid" role="list" aria-label="Media found on this page"></main>
 
       <footer class="action-bar">
         <div class="action-copy">
           <strong id="selected-label">0 selected</strong>
-          <span id="action-detail">Choose files to download</span>
+          <button id="download-settings-button" class="destination-button" type="button" popovertarget="download-settings-panel" title="Download settings and destination folder" aria-label="Download settings and destination folder"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M2 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2Z"/></svg><span id="action-detail">Choose files to download</span></button>
         </div>
         <div class="action-buttons">
           <button id="archive-footer-button" class="secondary-button" type="button" disabled>Download ZIP</button>
@@ -259,6 +135,153 @@
         </div>
       </footer>
     </div>
+
+    <section id="download-settings-panel" class="folder-panel settings-popover" popover aria-labelledby="download-settings-heading">
+      <div class="popover-heading"><h2 id="download-settings-heading">Download settings</h2><button class="icon-button" type="button" popovertarget="download-settings-panel" popovertargetaction="hide" aria-label="Close download settings">×</button></div>
+      <div class="folder-toolbar">
+        <label id="folder-label" for="folder-input">Save to folder<span class="visually-hidden"> inside Firefox Downloads</span></label>
+      </div>
+      <div class="folder-input-row">
+        <span aria-hidden="true">Downloads /</span>
+        <input id="folder-input" type="text" value="Website media" maxlength="260" autocomplete="off" spellcheck="false" aria-describedby="folder-help">
+      </div>
+      <div class="folder-options">
+        <label class="option-row" title="Show a Save As dialog when downloading exactly one file">
+          <input id="ask-single-input" type="checkbox">
+          <span>Save As for one file</span>
+        </label>
+      </div>
+      <p id="folder-help" class="field-help" role="status" aria-live="polite" hidden></p>
+      <div class="filename-template-toolbar">
+        <button id="filename-template-button" class="text-button" type="button" aria-expanded="false" aria-controls="filename-template-panel">Filename template</button>
+        <span id="filename-template-preview" title="Filename preview">Example: 0001-image-0001.jpg</span>
+      </div>
+      <div id="filename-template-panel" class="filename-template-panel" hidden>
+        <label for="filename-template-input">Template</label>
+        <input id="filename-template-input" type="text" value="{index}-{filename}" maxlength="240" autocomplete="off" spellcheck="false" aria-describedby="filename-template-help">
+        <p id="filename-template-help" class="field-help" role="status" aria-live="polite">Tokens: {filename}, {name}, {ext}, {index}, {hostname}, {page-title}, {width}, {height}, {date}. The zero-padded {index} follows selected page order.</p>
+      </div>
+    </section>
+    <section id="page-tools-panel" class="settings-popover page-tools-panel" popover aria-labelledby="page-tools-heading">
+      <div class="popover-heading"><h2 id="page-tools-heading">Collection settings</h2><button class="icon-button" type="button" popovertarget="page-tools-panel" popovertargetaction="hide" aria-label="Close collection settings">×</button></div>
+      <label class="compact-field">
+        <span>When collecting a gallery</span>
+        <select id="gallery-pages-select" aria-label="Gallery pagination limit">
+          <option value="1">Scroll this page</option>
+          <option value="3">Up to 3 pages</option>
+          <option value="10" selected>Up to 10 pages</option>
+        </select>
+      </label>
+      <label class="option-row" title="Include CSS background images on the next scan">
+        <input id="backgrounds-input" type="checkbox" checked><span>Include background images on the next scan</span>
+      </label>
+      <div class="page-tool-actions">
+        <button id="tracker-button" class="secondary-button tracker-button" type="button" aria-expanded="false" aria-controls="tracker-panel" disabled>Track page</button>
+        <button id="clear-gallery-button" class="text-button danger-button" type="button" disabled>Clear saved gallery</button>
+      </div>
+      <div id="tracker-panel" class="tracker-panel" hidden>
+        <div class="tracker-heading">
+          <div>
+            <strong>Background tracker</strong>
+            <span id="tracker-state-label">Not active</span>
+          </div>
+          <label class="compact-field tracker-interval-field">
+            <span>Check every</span>
+            <select id="tracker-interval-select">
+              <option value="15">15 minutes</option>
+              <option value="60" selected>1 hour</option>
+              <option value="360">6 hours</option>
+              <option value="1440">1 day</option>
+            </select>
+          </label>
+        </div>
+        <label class="compact-field tracker-action-field">
+          <span>When new media is found</span>
+          <select id="tracker-action-select">
+            <option value="review" selected>Add to review</option>
+            <option value="notify">Notify only</option>
+            <option value="download">Download automatically</option>
+          </select>
+        </label>
+        <label class="option-row tracker-initial-option" title="Otherwise the first check only records a baseline and takes no action">
+          <input id="tracker-download-initial-input" type="checkbox">
+          <span>Process current matches on the first check</span>
+        </label>
+        <details class="tracker-advanced">
+          <summary>Matching, pagination &amp; alerts</summary>
+          <div class="tracker-settings-grid">
+            <label class="compact-field">
+              <span>Include text</span>
+              <input id="tracker-include-text-input" type="text" maxlength="200" autocomplete="off" placeholder="URL, label, or title contains…">
+            </label>
+            <label class="compact-field">
+              <span>Exclude text</span>
+              <input id="tracker-exclude-text-input" type="text" maxlength="200" autocomplete="off" placeholder="Skip URL, label, or title containing…">
+            </label>
+            <label class="compact-field">
+              <span>Include URL patterns</span>
+              <textarea id="tracker-include-patterns-input" rows="2" maxlength="4800" placeholder="*/gallery/*.jpg"></textarea>
+            </label>
+            <label class="compact-field">
+              <span>Exclude URL patterns</span>
+              <textarea id="tracker-exclude-patterns-input" rows="2" maxlength="4800" placeholder="*/thumbs/*"></textarea>
+            </label>
+            <label class="compact-field">
+              <span>Max new items per check</span>
+              <select id="tracker-max-downloads-select">
+                <option value="10">10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100" selected>100</option>
+              </select>
+            </label>
+            <label class="compact-field">
+              <span>Pagination</span>
+              <select id="tracker-pagination-mode-select">
+                <option value="none">First page only</option>
+                <option value="next-link">Follow static Next link</option>
+                <option value="url-template">URL template</option>
+              </select>
+            </label>
+            <label id="tracker-max-pages-field" class="compact-field" hidden>
+              <span>Maximum pages</span>
+              <select id="tracker-max-pages-select">
+                <option value="2">2 pages</option>
+                <option value="3" selected>3 pages</option>
+                <option value="5">5 pages</option>
+                <option value="10">10 pages</option>
+              </select>
+            </label>
+            <label id="tracker-next-selector-field" class="compact-field" hidden>
+              <span>Next-link selector (optional)</span>
+              <input id="tracker-next-selector-input" type="text" maxlength="240" autocomplete="off" placeholder="a.next">
+            </label>
+            <label id="tracker-url-template-field" class="compact-field tracker-wide-field" hidden>
+              <span>Page URL template</span>
+              <input id="tracker-url-template-input" type="text" maxlength="16384" autocomplete="off" spellcheck="false" placeholder="https://example.com/gallery?page={page}">
+            </label>
+          </div>
+          <div class="tracker-notification-options">
+            <label class="option-row">
+              <input id="tracker-notify-matches-input" type="checkbox" checked>
+              <span>Notify when new media is found</span>
+            </label>
+            <label class="option-row">
+              <input id="tracker-notify-errors-input" type="checkbox" checked>
+              <span>Notify on first or auto-pausing error</span>
+            </label>
+          </div>
+          <p class="tracker-note">Patterns support <code>*</code> and <code>?</code>, one per line. Pagination stays on the same website and is capped; AJAX “More” requests are not replayed yet.</p>
+        </details>
+        <p id="tracker-status" class="tracker-status" role="status" aria-live="polite">Start tracking to create a baseline.</p>
+        <div class="tracker-actions">
+          <button id="tracker-save-button" class="tracker-action primary" type="button">Start tracking</button>
+          <button id="tracker-run-button" class="tracker-action" type="button" hidden>Run now</button>
+          <button id="tracker-pause-button" class="tracker-action" type="button" hidden>Pause</button>
+          <button id="tracker-delete-button" class="tracker-action danger" type="button" hidden>Remove</button>
+        </div>
+      </div>
+    </section>
 
     <script src="../shared/core.js"></script>
     <script src="../shared/collector.js"></script>
