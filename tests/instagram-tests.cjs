@@ -1259,6 +1259,48 @@ async function run() {
     );
   }
 
+  // Photo stories may be delivered as video after music is added. Instagram's
+  // original_media_type identifies the photo source; music/poster alone cannot.
+  for (const kind of ["story", "highlight"]) {
+    for (const [originalType, hasImage, expectedType] of [
+      [1, true, "image"], ["1", true, "image"], [2, true, "video"],
+      [undefined, true, "video"], [true, true, "video"], [1, false, "video"]
+    ]) {
+      const item = {
+        ...videoNode("102", "https://scontent.cdninstagram.com/music.mp4", ""),
+        media_type: 2,
+        original_media_type: originalType,
+        display_resources: [],
+        image_versions2: { candidates: hasImage ? [
+          { url: "https://scontent.cdninstagram.com/photo-small.jpg", width: 320, height: 568 },
+          { url: "https://scontent.cdninstagram.com/photo.jpg", width: 640, height: 1136 }
+        ] : [{ url: "javascript:invalid()", width: 1080, height: 1920 }] },
+        story_music_stickers: [{ music_asset_info: { title: "Music" } }]
+      };
+      const id = kind === "story" ? "42" : "highlight:987654";
+      const route = kind === "story" ? "alice/102" : "highlights/987654";
+      const result = await scan(`https://www.instagram.com/stories/${route}/`, {
+        scripts: [script({ reels: { [id]: {
+          id, user: { username: "alice" }, items: [item]
+        } } })]
+      });
+      assert.equal(result.images.length, 1);
+      const media = result.images[0];
+      assert.equal(media.mediaType, expectedType);
+      if (expectedType === "image") {
+        assert.equal(media.url, "https://scontent.cdninstagram.com/photo.jpg");
+        assert.equal(media.previewUrl, "https://scontent.cdninstagram.com/photo-small.jpg");
+        assert.equal(media.width, 640);
+        assert.equal(media.height, 1136);
+        assert.equal(media.mimeType, undefined);
+        assert.equal(media.duration, undefined);
+      } else {
+        assert.equal(media.url, "https://scontent.cdninstagram.com/music.mp4");
+      }
+      assert.equal(media.instagramCollections[0].type, kind);
+    }
+  }
+
   // Highlight dictionaries commonly key reels as "highlight:<id>". The
   // adapter matches that exact route ID and preserves the highlight frame order.
   {
@@ -1394,7 +1436,12 @@ async function run() {
           id: "42",
           user: { username: "alice" },
           items: [
-            imageNode("501", "https://scontent.cdninstagram.com/related-story.jpg"),
+            {
+              ...videoNode("501", "https://scontent.cdninstagram.com/related-story.mp4",
+                "https://scontent.cdninstagram.com/related-story.jpg"),
+              media_type: 2,
+              original_media_type: 1
+            },
             {
               ...imageNode("502", "https://scontent.cdninstagram.com/wrong-owner-story.jpg"),
               user: { username: "bob" }

@@ -972,7 +972,11 @@
       if (owner) {
         owners.add(owner);
       }
-      const mediaType = isVideoObject(object, videoOptions) ? "video" : "image";
+      // Music/effects can turn a photo story into a video delivery format.
+      // Only prefer its image when Instagram explicitly identifies a photo source.
+      const photoStory = image && ["story", "highlight"].includes(collectionKind) &&
+        [1, "1"].includes(safeProperty(object, "original_media_type"));
+      const mediaType = !photoStory && isVideoObject(object, videoOptions) ? "video" : "image";
       const identityKey = mediaIdentityForCollection(object, membership, position);
       const numberedKind = total > 1 ? `${collectionKind} ${position}/${total}` : collectionKind;
       const title = collectionKind === "highlight" ? safeText(collectionTitle, 20).trim() : "";

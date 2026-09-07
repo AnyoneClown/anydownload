@@ -4,6 +4,12 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.13.1] - 2026-09-07
+
+### Fixed
+
+- Instagram stories and highlights explicitly marked as originating from a photo now use the largest available image instead of the generated video. Real videos and items without a confirmed photo source or usable image keep the video download.
+
 ## [1.13.0] - 2026-09-07
 
 ### Added
