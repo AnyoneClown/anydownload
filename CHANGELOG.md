@@ -4,6 +4,8 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-09-07
+
 ### Added
 
 - **Collect gallery** automatically scrolls the source page, activates recognizable non-form Load/Show/See more buttons, and optionally follows up to ten same-origin Next pages. Progress, Stop, bounded requests, and partial-result retention keep collection reviewable before downloading.
