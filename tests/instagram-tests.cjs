@@ -320,9 +320,7 @@ async function withPage(url, page, callback, fetchImpl) {
   replacements.window.self = replacements.window;
   replacements.window.top = replacements.window;
   pageDocument.defaultView = replacements.window;
-  if (fetchImpl !== undefined) {
-    replacements.fetch = fetchImpl;
-  }
+  replacements.fetch = fetchImpl || (async () => ({ ok: false }));
   const previous = new Map();
   for (const [name, value] of Object.entries(replacements)) {
     previous.set(name, {
@@ -1299,6 +1297,76 @@ async function run() {
       }
       assert.equal(media.instagramCollections[0].type, kind);
     }
+  }
+
+  // A less detailed video payload must not override the confirmed photo, even
+  // when the photo is smaller or arrives after the initial video hydration.
+  {
+    const video = { ...videoNode("102", "https://scontent.cdninstagram.com/static.mp4",
+      "https://scontent.cdninstagram.com/poster.jpg"), media_type: 2 };
+    const photo = { ...video, original_media_type: 1, display_resources: [],
+      image_versions2: { candidates: [{ url: "https://scontent.cdninstagram.com/still.jpg", width: 640, height: 1136 }] } };
+    const reel = item => ({ reels: { "42": { id: "42", user: { username: "alice" }, items: [item] } } });
+    for (const items of [[video, photo], [photo, video]]) {
+      const result = await scan("https://www.instagram.com/stories/alice/102/", {
+        scripts: items.map(item => script(reel(item)))
+      });
+      assert.equal(result.images.length, 1);
+      assert.equal(result.images[0].mediaType, "image", "Confirmed photo metadata must win in either arrival order");
+      assert.equal(result.images[0].url, "https://scontent.cdninstagram.com/still.jpg");
+      assert.equal(result.images[0].width, 640);
+      assert.equal(result.images[0].mimeType, undefined);
+      assert.equal(result.images[0].duration, undefined);
+      assert.equal(result.images[0].originalMediaType, 1);
+    }
+    const viewer = fakeDomElement("main");
+    viewer["__reactProps$fixture"] = { reel: reel(photo), unrelated: reel({ ...video, user: { username: "bob" } }) };
+    const runtime = await scan("https://www.instagram.com/stories/alice/102/", {
+      scripts: [script(reel(video))], elements: [viewer]
+    });
+    assert.equal(runtime.images.length, 1);
+    assert.equal(runtime.images[0].mediaType, "image", "The active story viewer must be inspected for photo metadata");
+    for (const kind of ["story", "highlight"]) {
+      const collectionId = kind === "story" ? "42" : "highlight:987654";
+      const collection = item => ({ reels: { [collectionId]: {
+        id: collectionId, user: { username: "alice", pk: "42" }, items: [item]
+      } } });
+      const requests = [];
+      const result = await scan(`https://www.instagram.com/stories/${kind === "story" ? "alice/102" : "highlights/987654"}/`, {
+        scripts: [script(collection(video))]
+      }, {}, async (url, init) => {
+        requests.push(url);
+        assert.equal(init.credentials, "include");
+        assert.equal(new URL(url).pathname, "/api/v1/feed/reels_media/");
+        assert.equal(new URL(url).searchParams.get("reel_ids"), collectionId);
+        return jsonResponse(url, collection(photo));
+      });
+      assert.equal(requests.length, 1);
+      assert.equal(result.images[0].url, "https://scontent.cdninstagram.com/still.jpg");
+      assert.equal(result.images[0].mediaType, "image");
+    }
+    const rejectedRequests = [];
+    const rejected = await scan("https://www.instagram.com/stories/alice/102/", {
+      scripts: [script({ reels: { "42": {
+        id: "42", user: { username: "alice", pk: "42" }, items: [video]
+      } } })]
+    }, {}, async url => { rejectedRequests.push(url); return { ok: false }; });
+    assert.equal(rejectedRequests.length, 1, "An unavailable metadata endpoint must not trigger retries");
+    assert.equal(rejected.images[0].mediaType, "video");
+    let realVideoRequests = 0;
+    const realVideo = await scan("https://www.instagram.com/stories/alice/102/", {
+      scripts: [script(reel({ ...video, original_media_type: 2 }))]
+    }, {}, async () => { realVideoRequests += 1; return { ok: false }; });
+    assert.equal(realVideoRequests, 0, "Confirmed real videos do not need an extra metadata request");
+    assert.equal(realVideo.images[0].mediaType, "video");
+    const oversizedPhoto = { ...photo, image_versions2: { candidates: [{
+      url: `https://scontent.cdninstagram.com/${"x".repeat(1100)}.jpg`, width: 640, height: 1136
+    }] } };
+    const bounded = await scan("https://www.instagram.com/stories/alice/102/", {
+      scripts: [script(reel(video)), script(reel(oversizedPhoto))]
+    }, { maxPayloadLength: 1024 });
+    assert.equal(bounded.images[0].url, video.video_versions[1].url);
+    assert.equal(bounded.images[0].mediaType, "video", "A rejected photo URL must not relabel the retained MP4");
   }
 
   // Highlight dictionaries commonly key reels as "highlight:<id>". The

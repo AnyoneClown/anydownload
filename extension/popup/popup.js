@@ -464,14 +464,17 @@
     if (!incoming) {
       return existing;
     }
-    return Object.assign({}, existing, incoming, {
+    const photo = incoming.originalMediaType === 1 ? incoming : existing.originalMediaType === 1 ? existing : null;
+    return Object.assign({}, existing, incoming, photo, photo ? {
+      mimeType: photo.mimeType || "", filename: photo.filename || "", duration: 0
+    } : null, {
       identityKey: normalizedMediaIdentity(incoming.identityKey) ||
         normalizedMediaIdentity(existing.identityKey),
-      previewUrl: incoming.previewUrl || existing.previewUrl || "",
+      previewUrl: photo ? photo.previewUrl || "" : incoming.previewUrl || existing.previewUrl || "",
       alt: incoming.alt || existing.alt || "",
-      width: Math.max(Number(existing.width) || 0, Number(incoming.width) || 0),
-      height: Math.max(Number(existing.height) || 0, Number(incoming.height) || 0),
-      duration: Math.max(Number(existing.duration) || 0, Number(incoming.duration) || 0),
+      width: photo ? Number(photo.width) || 0 : Math.max(Number(existing.width) || 0, Number(incoming.width) || 0),
+      height: photo ? Number(photo.height) || 0 : Math.max(Number(existing.height) || 0, Number(incoming.height) || 0),
+      duration: photo ? 0 : Math.max(Number(existing.duration) || 0, Number(incoming.duration) || 0),
       instagramCollections: mergeInstagramCollections(
         existing.instagramCollections,
         incoming.instagramCollections
@@ -2116,6 +2119,35 @@
           : "";
         const identityKey = normalizedMediaIdentity(image && image.identityKey);
         const recordKey = mediaIdentityKey({ url: normalizedUrl, identityKey });
+        const incoming = {
+          url: normalizedUrl,
+          pageUrl: String(image.pageUrl || primaryPage.pageUrl || "").slice(0, 16384),
+          pageTitle: String(image.pageTitle || primaryPage.pageTitle || "").slice(0, 300),
+          identityKey,
+          originalMediaType: image.originalMediaType === 1 && image.mediaType === "image" &&
+            image.sourceProvider === "instagram" ? 1 : undefined,
+          previewUrl: normalizedPreviewUrl,
+          filename: String(image.filename || "").slice(0, 500),
+          alt: String(image.alt || "").slice(0, 500),
+          width: Math.max(0, Number(image.width) || 0),
+          height: Math.max(0, Number(image.height) || 0),
+          duration: Math.max(0, Number(image.duration) || 0),
+          mediaType: image && image.mediaType === "video" ? "video" : "image",
+          mimeType: String(image && image.mimeType || "").slice(0, 100),
+          sourceProvider: String(image && image.sourceProvider || "").slice(0, 50),
+          videoId: /^[A-Za-z0-9_-]{11}$/.test(String(image && image.videoId || ""))
+            ? String(image.videoId)
+            : "",
+          qualityLabel: String(image && image.qualityLabel || "").slice(0, 40),
+          hasAudio: typeof (image && image.hasAudio) === "boolean" ? image.hasAudio : null,
+          itag: Math.max(0, Math.round(Number(image && image.itag) || 0)),
+          instagramCollections: normalizedInstagramCollections(
+            image && image.instagramCollections
+          ),
+          kinds: Array.from(image.kinds || [])
+            .slice(0, 8)
+            .map((kind) => String(kind).slice(0, 50))
+        };
         const current = byIdentity.get(recordKey);
         if (!current) {
           if (
@@ -2131,33 +2163,20 @@
             ? normalizedPreviewUrl
             : "";
           totalUrlLength += previewUrl.length;
-          byIdentity.set(recordKey, {
-            url: normalizedUrl,
-            pageUrl: String(image.pageUrl || primaryPage.pageUrl || "").slice(0, 16384),
-            pageTitle: String(image.pageTitle || primaryPage.pageTitle || "").slice(0, 300),
-            identityKey,
-            previewUrl,
-            filename: String(image.filename || "").slice(0, 500),
-            alt: String(image.alt || "").slice(0, 500),
-            width: Math.max(0, Number(image.width) || 0),
-            height: Math.max(0, Number(image.height) || 0),
-            duration: Math.max(0, Number(image.duration) || 0),
-            mediaType: image && image.mediaType === "video" ? "video" : "image",
-            mimeType: String(image && image.mimeType || "").slice(0, 100),
-            sourceProvider: String(image && image.sourceProvider || "").slice(0, 50),
-            videoId: /^[A-Za-z0-9_-]{11}$/.test(String(image && image.videoId || ""))
-              ? String(image.videoId)
-              : "",
-            qualityLabel: String(image && image.qualityLabel || "").slice(0, 40),
-            hasAudio: typeof (image && image.hasAudio) === "boolean" ? image.hasAudio : null,
-            itag: Math.max(0, Math.round(Number(image && image.itag) || 0)),
-            instagramCollections: normalizedInstagramCollections(
-              image && image.instagramCollections
-            ),
-            kinds: Array.from(image.kinds || [])
-              .slice(0, 8)
-              .map((kind) => String(kind).slice(0, 50))
-          });
+          incoming.previewUrl = previewUrl;
+          byIdentity.set(recordKey, incoming);
+          continue;
+        }
+        if (current.originalMediaType === 1 || incoming.originalMediaType === 1) {
+          const combined = mergeMediaRecord(current, incoming);
+          const nextLength = totalUrlLength - current.url.length - String(current.previewUrl || "").length +
+            combined.url.length + String(combined.previewUrl || "").length;
+          if (nextLength <= Core.MAX_BATCH_TOTAL_URL_LENGTH) {
+            byIdentity.set(recordKey, combined);
+            totalUrlLength = nextLength;
+          } else {
+            aggregateLimitReached = true;
+          }
           continue;
         }
         for (const kind of image.kinds || []) {
@@ -2754,7 +2773,7 @@
     );
     elements["select-none-button"].disabled = state.busy || !visible.some((image) => state.selected.has(image.url));
     elements["select-all-button"].textContent = hasFilter ? "Select matches only" : "Select all";
-    elements["select-none-button"].textContent = hasFilter ? "Clear matches" : "Clear";
+    elements["select-none-button"].textContent = hasFilter ? "Deselect matches" : "Deselect";
     elements["download-button"].hidden = state.showIgnored;
     elements["archive-footer-button"].hidden = state.showIgnored;
     elements["selected-label"].textContent = state.showIgnored
@@ -3347,7 +3366,8 @@
       }
       if (galleryContext === context) {
         applySavedGallery(result.gallery);
-        setNotice("Saved gallery cleared. Collect this page again or visit another page to add new media.");
+        setNotice(`Saved media for ${hostFromUrl(context.siteKey)} cleared. Use Collect gallery to start again. Downloaded files and history are kept.`);
+        elements["collect-gallery-button"].focus({ preventScroll: true });
       }
     } catch (error) {
       setNotice(error.message || String(error), "error");
@@ -3846,7 +3866,7 @@
       if (preserveThisPage) {
         for (const image of merged.images) {
           const previous = previousByIdentity.get(mediaIdentityKey(image));
-          if (!previous) {
+          if (!previous || image.originalMediaType === 1) {
             continue;
           }
           image.width = image.width || previous.width || 0;

@@ -43,6 +43,7 @@
           <div class="gallery-toolbar">
             <button id="collect-gallery-button" class="secondary-button" type="button" disabled>Collect gallery</button>
             <button id="stop-gallery-button" class="secondary-button" type="button" hidden>Stop collecting</button>
+            <button id="clear-gallery-button" class="text-button danger-button" type="button" title="Clear all saved media for this website. Downloaded files and history are kept." disabled>Clear media</button>
             <button class="icon-button" type="button" popovertarget="page-tools-panel" aria-label="Collection settings and page tracking" title="Collection settings and page tracking">
               <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="4" cy="10" r="1"/><circle cx="10" cy="10" r="1"/><circle cx="16" cy="10" r="1"/></svg>
             </button>
@@ -108,7 +109,7 @@
           <strong id="summary-label" role="status" aria-live="polite">0 media files</strong>
           <div id="selection-actions" class="selection-actions">
             <button id="select-all-button" class="text-button" type="button">Select all</button>
-            <button id="select-none-button" class="text-button" type="button">Clear</button>
+            <button id="select-none-button" class="text-button" type="button">Deselect</button>
           </div>
           <div class="view-switch" role="group" aria-label="Media layout">
             <button id="grid-view-button" class="icon-button" type="button" aria-label="Grid view" aria-pressed="true" title="Grid view"><svg aria-hidden="true" viewBox="0 0 20 20"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="12" y="3" width="5" height="5" rx="1"/><rect x="3" y="12" width="5" height="5" rx="1"/><rect x="12" y="12" width="5" height="5" rx="1"/></svg></button>
@@ -177,7 +178,6 @@
       </label>
       <div class="page-tool-actions">
         <button id="tracker-button" class="secondary-button tracker-button" type="button" aria-expanded="false" aria-controls="tracker-panel" disabled>Track page</button>
-        <button id="clear-gallery-button" class="text-button danger-button" type="button" disabled>Clear saved gallery</button>
       </div>
       <div id="tracker-panel" class="tracker-panel" hidden>
         <div class="tracker-heading">

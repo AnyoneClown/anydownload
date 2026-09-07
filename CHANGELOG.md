@@ -4,6 +4,17 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.13.2] - 2026-09-07
+
+### Changed
+
+- **Clear media** is now visible beside **Collect gallery** and clears the current website's saved list. Selection-only clearing is labeled **Deselect**, and the cleared state explains how to start again while keeping downloaded files and history.
+
+### Fixed
+
+- Confirmed Instagram photo stories keep their image URL and type when merged with video hydration, live scans, or older saved-gallery records. Direct story/highlight pages now inspect viewer data and request bounded first-party metadata when the original media type is missing.
+- **Collect gallery** now recognizes FapFolder's JavaScript **See More** control on group photo pages, including its non-button markup. Controls inside forms remain excluded.
+
 ## [1.13.1] - 2026-09-07
 
 ### Fixed

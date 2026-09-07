@@ -136,6 +136,7 @@
     let payloadLimitReached = false;
     let documentLimitReached = false;
     let unsupportedVideoCount = 0;
+    let needsStoryMetadata = false;
     let inaccessibleRelatedCount = 0;
     let exactStructuredPostComplete = false;
     let profileAnchorCache = null;
@@ -861,9 +862,16 @@
         : foundRecordKeysByUrl.get(url);
       const existing = existingRecordKey ? found.get(existingRecordKey) : null;
       if (existing) {
+        if (existing.originalMediaType === 1 && details.originalMediaType !== 1) {
+          for (const membership of details.instagramCollections || []) {
+            addCollectionMembership(existing.instagramCollections, membership);
+          }
+          return;
+        }
+        const photoUpgrade = details.originalMediaType === 1 && existing.originalMediaType !== 1;
         const currentArea = (Number(existing.width) || 0) * (Number(existing.height) || 0);
         const nextArea = (Number(details.width) || 0) * (Number(details.height) || 0);
-        if (nextArea >= currentArea && existing.url !== url) {
+        if ((photoUpgrade || nextArea >= currentArea) && existing.url !== url) {
           const nextPreviewUrl = details.previewUrl && details.previewUrl !== url
             ? details.previewUrl
             : "";
@@ -876,6 +884,18 @@
             existing.previewUrl = nextPreviewUrl;
             foundRecordKeysByUrl.set(url, existingRecordKey);
           }
+        }
+        if (photoUpgrade) {
+          if (existing.url !== url) {
+            return;
+          }
+          existing.originalMediaType = 1;
+          existing.mediaType = "image";
+          existing.width = 0;
+          existing.height = 0;
+          existing.kinds = [];
+          delete existing.mimeType;
+          delete existing.duration;
         }
         if (details.mediaType === "video") {
           existing.mediaType = "video";
@@ -930,6 +950,9 @@
         instagramCollections: [],
         mediaType: details.mediaType === "video" ? "video" : "image"
       };
+      if (details.originalMediaType === 1 && record.mediaType === "image") {
+        record.originalMediaType = 1;
+      }
       for (const membership of details.instagramCollections || []) {
         addCollectionMembership(record.instagramCollections, membership);
       }
@@ -977,6 +1000,10 @@
       const photoStory = image && ["story", "highlight"].includes(collectionKind) &&
         [1, "1"].includes(safeProperty(object, "original_media_type"));
       const mediaType = !photoStory && isVideoObject(object, videoOptions) ? "video" : "image";
+      if (["story", "highlight"].includes(collectionKind) && mediaType === "video" &&
+        ![2, "2"].includes(safeProperty(object, "original_media_type"))) {
+        needsStoryMetadata = true;
+      }
       const identityKey = mediaIdentityForCollection(object, membership, position);
       const numberedKind = total > 1 ? `${collectionKind} ${position}/${total}` : collectionKind;
       const title = collectionKind === "highlight" ? safeText(collectionTitle, 20).trim() : "";
@@ -1016,6 +1043,7 @@
         kinds: [`${recordKind} image`],
         instagramCollections: membership ? [membership] : [],
         mediaType: "image",
+        originalMediaType: photoStory ? 1 : undefined,
         identityKey
       });
     }
@@ -1315,6 +1343,9 @@
       const processedContainers = typeof WeakSet === "function" ? new WeakSet() : null;
 
       function processContainer(object, parentKey, depth, isRoot) {
+        if (sourceRoute.kind === "story") {
+          registerMatchingProfile(object, sourceRoute.username);
+        }
         registerHighlightObject(object, parentKey, sourceRoute.username || route.username);
         let matched = false;
         let kind = sourceRoute.kind;
@@ -2214,8 +2245,9 @@
 
     function processRuntimeData() {
       const exactRoute = ["post", "reel"].includes(route.kind);
-      const complete = () => exactRoute ? exactStructuredPostComplete : Boolean(profilePk());
-      if ((!exactRoute && route.kind !== "profile") || complete()) {
+      const storyRoute = ["story", "highlight"].includes(route.kind);
+      const complete = () => exactRoute ? exactStructuredPostComplete : !storyRoute && Boolean(profilePk());
+      if ((!exactRoute && !storyRoute && route.kind !== "profile") || complete()) {
         return;
       }
       const values = [];
@@ -2259,7 +2291,7 @@
 
       const visited = typeof WeakSet === "function" ? new WeakSet() : null;
       let visitedCount = 0;
-      function walk(value, depth) {
+      function walk(value, depth, parentKey = "") {
         if (complete() || !value || typeof value !== "object" || depth > 32 ||
           visitedCount >= 40000) {
           return;
@@ -2271,7 +2303,19 @@
           visited.add(value);
         }
         visitedCount += 1;
-        if (route.kind === "profile") {
+        if (storyRoute) {
+          registerMatchingProfile(value, route.username);
+          const matches = route.kind === "story"
+            ? storyContainerMatches(value, parentKey, route)
+            : highlightContainerMatches(value, parentKey, route);
+          const itemId = route.kind === "story" ? route.storyId : route.highlightId;
+          if (matches || (itemId && objectId(value) === itemId &&
+            matchesExpectedOwner(value, route.username) && hasMediaShape(value))) {
+            registerMatchingProfile(safeProperty(value, "user") || safeProperty(value, "owner"), route.username);
+            addMediaContainer(value, route.pageUrl, route.kind, matches, route);
+            return;
+          }
+        } else if (route.kind === "profile") {
           registerMatchingProfile(value, route.username);
         } else if (exactItemMatches(value) && addExactItem(value, route.pageUrl)) {
           return;
@@ -2284,8 +2328,8 @@
         } catch (_error) {
           entries = [];
         }
-        for (const [, child] of entries) {
-          walk(child, depth + 1);
+        for (const [key, child] of entries) {
+          walk(child, depth + 1, key);
           if (complete()) {
             break;
           }
@@ -2889,6 +2933,20 @@
     }
 
     processCurrentDocument();
+
+    if (["story", "highlight"].includes(route.kind)) {
+      processRuntimeData();
+      if (needsStoryMetadata && Array.from(found.values()).some(item => item.mediaType === "video")) {
+        const reelId = route.kind === "highlight"
+          ? `highlight:${route.highlightId}` : await discoverProfilePk();
+        if (reelId) {
+          const fetched = await fetchReelCollection(reelId, "story-metadata");
+          if (fetched) {
+            processJson(fetched.value, route, fetched.url, false);
+          }
+        }
+      }
+    }
 
     if (route.kind === "post" || route.kind === "reel") {
       // SPA post modals do not replace the profile document's original

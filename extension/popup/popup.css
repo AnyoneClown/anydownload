@@ -953,8 +953,13 @@ svg {
   }
 
   .collection-heading {
+    flex-wrap: wrap;
     gap: 8px;
     margin-bottom: 14px;
+  }
+
+  .context-copy {
+    flex: 1 1 100%;
   }
 
   .collection-heading h2 {
@@ -1051,14 +1056,6 @@ svg {
 
   .header-actions {
     margin-left: auto;
-  }
-
-  .collection-heading {
-    flex-wrap: wrap;
-  }
-
-  .context-copy {
-    flex: 1 1 100%;
   }
 
   .media-type-field {

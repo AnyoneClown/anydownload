@@ -83,6 +83,9 @@
       record[key] = Math.max(0, Math.min(1000000, Number(value[key]) || 0));
     }
     record.hasAudio = typeof value.hasAudio === "boolean" ? value.hasAudio : null;
+    if (value.originalMediaType === 1 && record.mediaType === "image" && record.sourceProvider === "instagram") {
+      record.originalMediaType = 1;
+    }
     record.kinds = (Array.isArray(value.kinds) ? value.kinds : []).slice(0, 8)
       .map((kind) => String(kind).slice(0, 50));
     record.instagramCollections = (Array.isArray(value.instagramCollections) ? value.instagramCollections : [])
@@ -115,12 +118,15 @@
     let urls = 0;
     let trimmed = false;
     for (const raw of (Array.isArray(value.records) ? value.records : []).slice(0, Core.MAX_BATCH_SIZE * 2)) {
-      const record = normalizeRecord(raw, siteKey);
+      let record = normalizeRecord(raw, siteKey);
       if (!record) {
         continue;
       }
       const key = recordKey(record);
       const previous = records.get(key);
+      if (previous && previous.originalMediaType === 1 && record.originalMediaType !== 1) {
+        record = { ...previous, selected: record.selected };
+      }
       const addedBytes = byteLength(record) - (previous ? byteLength(previous) : 0);
       const addedUrls = record.url.length + record.previewUrl.length -
         (previous ? previous.url.length + previous.previewUrl.length : 0);
@@ -189,8 +195,11 @@
     const viewport = root.clientHeight || window.innerHeight || 600;
     root.scrollTo({ top: restart ? 0 : top + Math.max(300, viewport * 0.8), behavior: "instant" });
     const bottom = root.scrollTop + viewport >= height - 4;
-    const more = bottom && allowLoadMore && Array.from(document.querySelectorAll("button")).slice(0, 500)
-      .find((button) => !button.disabled && !button.form && button.getAttribute("aria-disabled") !== "true" &&
+    const more = bottom && allowLoadMore && Array.from(document.querySelectorAll(
+      'button, .js_see-more[data-get="photos"][data-type="group"]'
+    )).slice(0, 500)
+      .find((button) => !button.disabled && !button.form && !button.closest("form") &&
+        button.getAttribute("aria-disabled") !== "true" &&
         button.getClientRects().length && /^(?:load|show|see) more(?: (?:images|photos|media|posts|results))?$/i
           .test(String(button.textContent || "").trim()));
     if (more) {

@@ -68,7 +68,7 @@ class Element {
   matches(selector) { return selector === ":popover-open" && this.popoverOpen === true; }
   showPopover() { this.popoverOpen = true; }
   hidePopover() { this.popoverOpen = false; }
-  focus() {}
+  focus() { this.focused = true; }
   querySelectorAll() { return []; }
   querySelector() { return null; }
   closest() { return this; }
@@ -177,7 +177,7 @@ function popupHarness(stored = { local: [], session: [] }) {
     globalThis.testPopup = {
       state, elements, scanPage, saveCurrentGallery, clearSiteGallery, collectGallery,
       stopGalleryCollection, resetSidebarPageState, beginSidebarTransition, handleGalleryStorageChanges,
-      renderedDownloadItems, wireSourceTabLifecycle,
+      renderedDownloadItems, wireSourceTabLifecycle, mergeScanResults,
       prepare() { cacheElements(); applySmartFiltersToControls(Filters.DEFAULT_FILTERS); }
     };
     document.addEventListener("DOMContentLoaded",`), context);
@@ -264,6 +264,65 @@ async function checkPopup() {
   const combined = Gallery.getSite(stored.local, siteKey);
   assert.equal(combined.records.find((record) => record.pageTitle === "two").selected, false,
     "Saving another tab's new media must not overwrite an unchanged, stale selection");
+
+  const clearing = popupHarness(stored);
+  await clearing.popup.scanPage();
+  const otherGallery = JSON.stringify(Gallery.getSite(stored.local, "https://other.test"));
+  await clearing.popup.clearSiteGallery();
+  assert.equal(clearing.popup.state.images.length, 0);
+  assert.equal(clearing.popup.state.selected.size, 0);
+  assert.equal(Gallery.getSite(stored.local, siteKey).records.length, 0);
+  assert.equal(JSON.stringify(Gallery.getSite(stored.local, "https://other.test")), otherGallery);
+  assert.equal(clearing.elements.get("clear-gallery-button").disabled, true);
+  assert.equal(clearing.elements.get("collect-gallery-button").focused, true);
+  assert.match(clearing.elements.get("notice").textContent, /Downloaded files and history are kept/);
+  const fresh = popupHarness(stored);
+  fresh.setImages([photo("current-page")]);
+  await fresh.popup.scanPage();
+  assert.deepEqual(Array.from(fresh.popup.state.images, item => item.url), ["https://cdn.test/current-page.jpg"],
+    "Reopening after Clear media must scan the current page without restoring the old gallery");
+}
+
+async function checkPhotoStory() {
+  const still = { ...photo("story-photo"), identityKey: "instagram:story:alice:alice:102",
+    sourceProvider: "instagram", mediaType: "image", originalMediaType: 1,
+    previewUrl: "https://cdn.test/photo-preview.jpg",
+    width: 640, height: 1136 };
+  const video = { ...still, url: "https://cdn.test/story-video.mp4", originalMediaType: undefined,
+    previewUrl: "https://cdn.test/video-preview.jpg",
+    mediaType: "video", mimeType: "video/mp4", filename: "story-video.mp4",
+    width: 1080, height: 1920, duration: 12.5 };
+  const harness = popupHarness();
+  for (const images of [[video, still], [still, video]]) {
+    const result = harness.popup.mergeScanResults([{ frameId: 0, result: { pageUrl: `${siteKey}/one`, images } }]);
+    assert.equal(result.images.length, 1);
+    assert.equal(result.images[0].mediaType, "image");
+    assert.equal(result.images[0].url, still.url);
+    assert.equal(result.images[0].width, 640);
+    assert.equal(result.images[0].previewUrl, still.previewUrl);
+  }
+  harness.setImages([video]);
+  await harness.popup.scanPage();
+  harness.setImages([still]);
+  await harness.popup.scanPage({ preserveSelection: true, live: true });
+  const result = harness.popup.state.images[0];
+  assert.equal(result.mediaType, "image");
+  assert.equal(result.url, still.url);
+  assert.equal(result.mimeType, "");
+  assert.equal(result.duration, 0);
+  assert.equal(result.width, 640);
+  assert.equal(harness.popup.state.selected.has(still.url), true);
+  assert.match(harness.popup.renderedDownloadItems([result])[0].filename, /\.jpg$/);
+  await harness.popup.saveCurrentGallery();
+  const saved = Gallery.getSite(harness.stored.local, siteKey);
+  assert.equal(saved.records[0].originalMediaType, 1);
+  const staleWrite = Gallery.updateSites(harness.stored.local, { siteKey, epoch: saved.epoch, records: [video] });
+  assert.equal(staleWrite.gallery.records[0].url, still.url, "A stale manager must not overwrite the confirmed photo");
+  const reopened = popupHarness(harness.stored);
+  reopened.setImages([video]);
+  await reopened.popup.scanPage();
+  assert.equal(reopened.popup.state.images[0].url, still.url);
+  assert.equal(reopened.popup.state.images[0].mediaType, "image");
 }
 
 async function checkFetch() {
@@ -293,13 +352,26 @@ function checkScrolling() {
     scrollTo({ top }) { this.scrollTop = Math.min(1000, top); }
   };
   let clicks = 0;
+  let enclosingForm = null;
+  let visible = true;
+  const attributes = {};
   const more = {
+    tagName: "BUTTON", className: "",
     textContent: "Load more photos", disabled: false, form: null,
-    getAttribute() { return null; }, getClientRects() { return [{}]; }, click() { clicks += 1; }
+    getAttribute(name) { return attributes[name] || null; },
+    closest(selector) { assert.equal(selector, "form"); return enclosingForm; },
+    getClientRects() { return visible ? [{}] : []; }, click() { clicks += 1; }
   };
   const scroll = vm.runInNewContext(`(${Gallery.scrollPage.toString()})`, {
     location: { href: `${siteKey}/one` }, window: { innerHeight: 600 },
-    document: { scrollingElement: root, querySelectorAll(selector) { return selector === "button" ? [more] : []; } }
+    document: { scrollingElement: root, querySelectorAll(selector) {
+      if (!selector.startsWith("button")) return [];
+      return more.tagName === "BUTTON" || (
+        selector.includes('.js_see-more[data-get="photos"][data-type="group"]') &&
+        more.className === "js_see-more" && attributes["data-get"] === "photos" &&
+        attributes["data-type"] === "group"
+      ) ? [more] : [];
+    } }
   });
   assert.equal(scroll(`${siteKey}/one`, true).bottom, false);
   assert.equal(clicks, 0);
@@ -308,12 +380,36 @@ function checkScrolling() {
   assert.equal(clicks, 1);
   more.form = {};
   assert.equal(scroll(`${siteKey}/one`, true).clickedMore, false, "Collection must never submit a form");
+  more.form = null;
+  more.tagName = "DIV";
+  more.className = "js_see-more";
+  more.textContent = " See More ";
+  attributes["data-get"] = "photos";
+  attributes["data-type"] = "group";
+  assert.equal(scroll(`${siteKey}/one`, true).clickedMore, true, "FapFolder uses a JavaScript div for photo pagination");
+  assert.equal(clicks, 2);
+  enclosingForm = {};
+  assert.equal(scroll(`${siteKey}/one`, true).clickedMore, false, "JavaScript controls inside forms must also be skipped");
+  enclosingForm = null;
+  attributes["aria-disabled"] = "true";
+  assert.equal(scroll(`${siteKey}/one`, true).clickedMore, false);
+  delete attributes["aria-disabled"];
+  visible = false;
+  assert.equal(scroll(`${siteKey}/one`, true).clickedMore, false);
+  visible = true;
+  assert.equal(scroll(`${siteKey}/one`, false).clickedMore, false, "The caller's load-more limit must still apply");
+  more.className = "";
+  assert.equal(scroll(`${siteKey}/one`, true).clickedMore, false, "Unrecognized divs must not be clicked based only on text");
+  more.className = "js_see-more";
+  attributes["data-get"] = "members";
+  assert.equal(scroll(`${siteKey}/one`, true).clickedMore, false, "Only the known photo-pagination action is supported");
   assert.equal(scroll(`${siteKey}/one`, false, true).top, 0, "A complete collection must also visit content above the starting position");
   assert.throws(() => scroll(`${siteKey}/elsewhere`, true), /source page changed/);
 }
 
 (async () => {
   await checkPopup();
+  await checkPhotoStory();
   await checkFetch();
   checkScrolling();
   const stoppable = popupHarness();
