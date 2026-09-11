@@ -15,17 +15,18 @@ class NodeFixture {
 }
 
 class DocumentFixture {
-  constructor(nodes, nextNode) {
+  constructor(nodes, nextNode, baseNode) {
     this.nodes = nodes;
     this.nextNode = nextNode || null;
+    this.baseNode = baseNode || null;
   }
 
   querySelectorAll() {
     return this.nodes;
   }
 
-  querySelector() {
-    return this.nextNode;
+  querySelector(selector) {
+    return selector === "base[href]" ? this.baseNode : this.nextNode;
   }
 }
 
@@ -102,6 +103,24 @@ assert.equal(
   ),
   "",
   "Next-link pagination must not cross origins"
+);
+for (const baseHref of ["/archive/", "https://example.test/archive/"]) {
+  assert.equal(
+    Tracker.extractNextPageUrl(
+      new DocumentFixture([], new NodeFixture("a", { href: "page2" }), new NodeFixture("base", { href: baseHref })),
+      "https://example.test/gallery"
+    ),
+    "https://example.test/archive/page2",
+    "Next links must resolve against the page's base URL"
+  );
+}
+assert.equal(
+  Tracker.extractNextPageUrl(
+    new DocumentFixture([], new NodeFixture("a", { href: "page2" }), new NodeFixture("base", { href: "https://other.test/archive/" })),
+    "https://example.test/gallery"
+  ),
+  "",
+  "A base URL must not allow pagination to cross origins"
 );
 
 const nodes = [

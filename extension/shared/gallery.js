@@ -200,14 +200,14 @@
     )).slice(0, 500)
       .find((button) => !button.disabled && !button.form && !button.closest("form") &&
         button.getAttribute("aria-disabled") !== "true" &&
-        button.getClientRects().length && /^(?:load|show|see) more(?: (?:images|photos|media|posts|results))?$/i
+        button.getClientRects().length && /^(?:load|show|see) more(?: (?:images|photos|videos|media|posts|results))?$/i
           .test(String(button.textContent || "").trim()));
     if (more) {
       more.click();
     }
     const nextLinks = Array.from(document.querySelectorAll(
       "a[rel~='next'],link[rel~='next'],a.next,.pagination a.next,.pager a.next,a[aria-label*='next' i]"
-    )).slice(0, 30).map((node) => node.getAttribute("href"));
+    )).slice(0, 30).map((node) => node.href || node.getAttribute("href"));
     return {
       top: root.scrollTop, height,
       bottom, clickedMore: Boolean(more),

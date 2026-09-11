@@ -701,6 +701,7 @@
     instagramCollectionMode: false,
     instagramCollectionFilter: "all",
     liveCapture: false,
+    liveScanning: false,
     pageScopeKey: "",
     pageTitle: "",
     pageUrl: "",
@@ -2722,6 +2723,7 @@
     elements["page-label"].title = elements["page-label"].textContent;
     scheduleGallerySave();
     const total = state.images.length;
+    const selectionBusy = state.busy && !state.liveScanning;
     const ignoredCount = state.images.filter(isImageIgnored).length;
     const storedIgnoredCount = state.ignoredKeys.size;
     const availableCount = total - ignoredCount;
@@ -2768,10 +2770,10 @@
     elements["downloaded-button"].setAttribute("aria-pressed", String(state.hideDownloaded));
     elements["select-all-button"].hidden = state.showIgnored;
     elements["select-none-button"].hidden = state.showIgnored;
-    elements["select-all-button"].disabled = state.busy || !visible.some((image) =>
+    elements["select-all-button"].disabled = selectionBusy || !visible.some((image) =>
       downloadStatusFor(image) !== "downloaded" && imageCanBeSelected(image)
     );
-    elements["select-none-button"].disabled = state.busy || !visible.some((image) => state.selected.has(image.url));
+    elements["select-none-button"].disabled = selectionBusy || !visible.some((image) => state.selected.has(image.url));
     elements["select-all-button"].textContent = hasFilter ? "Select matches only" : "Select all";
     elements["select-none-button"].textContent = hasFilter ? "Deselect matches" : "Deselect";
     elements["download-button"].hidden = state.showIgnored;
@@ -2828,7 +2830,7 @@
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.checked = state.selected.has(image.url) && imageCanBeSelected(image);
-    checkbox.disabled = state.busy || downloadStatus === "queued";
+    checkbox.disabled = (state.busy && !state.liveScanning) || downloadStatus === "queued";
     checkbox.setAttribute(
       "aria-label",
       downloadStatus === "downloaded"
@@ -2836,8 +2838,12 @@
         : `Select ${friendlyFilename(image)}`
     );
     checkbox.addEventListener("change", () => {
+      if ((state.busy && !state.liveScanning) || downloadStatusFor(image) === "queued" || isImageIgnored(image)) {
+        checkbox.checked = state.selected.has(image.url) && imageCanBeSelected(image);
+        return;
+      }
       if (checkbox.checked) {
-        if (downloadStatus === "downloaded" && image.downloadFingerprint) {
+        if (downloadStatusFor(image) === "downloaded" && image.downloadFingerprint) {
           state.explicitRedownloads.add(image.downloadFingerprint);
         }
         state.selected.add(image.url);
@@ -3563,13 +3569,13 @@
 
     let previousImages = state.images;
     const previousByIdentity = new Map();
-    let previousSelected = new Set(state.selected);
     let previousPageScopeKey = state.pageScopeKey;
     let previousSiteKey = state.siteKey;
     let previousIgnoredKeys = new Set(state.ignoredKeys);
     let previousInstagramCollectionMode = state.instagramCollectionMode;
     let scanTab = null;
     let succeeded = false;
+    state.liveScanning = Boolean(settings.live);
     state.busy = true;
     updateOpenWindowButton();
     if (!settings.preserveSelection && !state.images.length) {
@@ -3594,7 +3600,6 @@
         return false;
       }
       previousImages = state.images;
-      previousSelected = new Set(state.selected);
       previousPageScopeKey = state.pageScopeKey;
       previousSiteKey = state.siteKey;
       previousIgnoredKeys = new Set(state.ignoredKeys);
@@ -3915,7 +3920,7 @@
       state.selected = new TrackedSelectionSet(reconcileScanSelection(
         merged.images,
         previousImages,
-        previousSelected,
+        state.selected,
         preserveThisPage,
         (image) => !isImageIgnored(image) &&
           Filters.matchesSmartFilters(image, state.smartFilters) &&
@@ -3933,6 +3938,9 @@
       const hostname = hostFromUrl(merged.page.pageUrl);
       elements["page-label"].textContent = merged.page.pageTitle || hostname;
       updateFilenameTemplateUi();
+      if (settings.live) {
+        renderImages();
+      }
 
       try {
         await refreshDownloadStatuses({ render: false });
@@ -4013,6 +4021,7 @@
         setNotice(`${guidance} (${message})`, "error");
       }
     } finally {
+      state.liveScanning = false;
       state.busy = false;
       updateOpenWindowButton();
       renderImages();

@@ -484,7 +484,8 @@
     const raw = getAttribute(node, "href") || getAttribute(node, "data-href");
     try {
       const current = new URL(normalizePageUrl(pageUrl));
-      const next = new URL(raw, current);
+      const baseHref = getAttribute(documentObject.querySelector("base[href]"), "href");
+      const next = new URL(raw, baseHref ? new URL(baseHref, current) : current);
       if (
         next.origin !== current.origin ||
         !["http:", "https:"].includes(next.protocol) ||

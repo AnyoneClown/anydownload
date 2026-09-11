@@ -4,6 +4,11 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Photo checkboxes and **Select matches only** remain available during live library scans, and selections survive scan results and refreshed media URLs.
+- **Collect gallery** recognizes **Load more videos** controls and follows Next links using the page's declared base URL, while keeping pagination on the original website.
+
 ## [1.13.2] - 2026-09-07
 
 ### Changed

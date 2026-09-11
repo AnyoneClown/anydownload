@@ -81,6 +81,9 @@ function popupHarness(stored = { local: [], session: [] }) {
   let scrolls = 0;
   let sourceImages = [photo("one")];
   let scanWait = null;
+  let scanStarted = null;
+  let statusWait = null;
+  let statusStarted = null;
   let updatedListener = null;
   const tab = { id: 1, url: `${siteKey}/one`, title: "one", incognito: false, windowId: 1, active: true };
   const context = {
@@ -136,6 +139,12 @@ function popupHarness(stored = { local: [], session: [] }) {
             return { ok: true, gallery: result.gallery, stale: result.stale };
           }
           if (message.type === "GET_MEDIA_DOWNLOAD_STATUS") {
+            if (statusWait) {
+              const wait = statusWait;
+              statusWait = null;
+              statusStarted();
+              await wait;
+            }
             return { ok: true, statuses: message.items.map(() => ({ status: "new" })) };
           }
           return { ok: true, tracker: null };
@@ -157,6 +166,8 @@ function popupHarness(stored = { local: [], session: [] }) {
           if (scanWait) {
             const wait = scanWait;
             scanWait = null;
+            scanStarted?.();
+            scanStarted = null;
             await wait;
           }
           return [{ frameId: 0, result: { images: sourceImages, pageUrl: tab.url, pageTitle: tab.title, warnings: [] } }];
@@ -177,7 +188,7 @@ function popupHarness(stored = { local: [], session: [] }) {
     globalThis.testPopup = {
       state, elements, scanPage, saveCurrentGallery, clearSiteGallery, collectGallery,
       stopGalleryCollection, resetSidebarPageState, beginSidebarTransition, handleGalleryStorageChanges,
-      renderedDownloadItems, wireSourceTabLifecycle, mergeScanResults,
+      renderedDownloadItems, wireSourceTabLifecycle, mergeScanResults, wireEvents, renderImages, makeImageRow,
       prepare() { cacheElements(); applySmartFiltersToControls(Filters.DEFAULT_FILTERS); }
     };
     document.addEventListener("DOMContentLoaded",`), context);
@@ -191,7 +202,14 @@ function popupHarness(stored = { local: [], session: [] }) {
   return {
     popup, tab, stored, elements,
     setImages(images) { sourceImages = images; },
-    delayScan(promise) { scanWait = promise; },
+    delayScan(promise) {
+      scanWait = promise;
+      return new Promise(resolve => { scanStarted = resolve; });
+    },
+    delayStatuses(promise) {
+      statusWait = promise;
+      return new Promise(resolve => { statusStarted = resolve; });
+    },
     navigate(url) { tab.url = url; updatedListener(tab.id, { url, status: "loading" }, tab); },
     get scrolls() { return scrolls; }
   };
@@ -283,6 +301,67 @@ async function checkPopup() {
     "Reopening after Clear media must scan the current page without restoring the old gallery");
 }
 
+async function checkSelectionDuringScan() {
+  const harness = popupHarness();
+  const { popup, elements } = harness;
+  harness.setImages([photo("one"), photo("two")]);
+  await popup.scanPage();
+  popup.wireEvents();
+  popup.state.selected.delete(photo("one").url);
+  elements.get("filter-input").value = "one";
+  popup.renderImages();
+
+  let release;
+  let started = harness.delayScan(new Promise(resolve => { release = resolve; }));
+  let scanning = popup.scanPage({ preserveSelection: true, live: true });
+  await started;
+  assert.equal(elements.get("select-all-button").disabled, false,
+    "Select matches must stay available while the library refreshes");
+  assert.equal(elements.get("download-button").disabled, true, "Downloads still wait for the scan");
+  elements.get("select-all-button").listeners.get("click")();
+  assert.deepEqual(Array.from(popup.state.selected), [photo("one").url]);
+  const refreshed = { ...photo("one"), url: `${photo("one").url}?token=refreshed` };
+  harness.setImages([refreshed, photo("two")]);
+  release();
+  assert.equal(await scanning, true);
+  assert.deepEqual(Array.from(popup.state.selected), [refreshed.url],
+    "A finished scan must preserve bulk selection and follow refreshed media URLs");
+
+  started = harness.delayScan(new Promise(resolve => { release = resolve; }));
+  scanning = popup.scanPage({ preserveSelection: true, live: true });
+  await started;
+  const checkbox = popup.makeImageRow(popup.state.images[0]).children[0];
+  assert.equal(checkbox.disabled, false, "Photos rendered during live scans must remain selectable");
+  checkbox.checked = false;
+  checkbox.listeners.get("change")();
+  elements.get("filter-input").value = "two";
+  popup.renderImages();
+  const other = popup.makeImageRow(popup.state.images[1]).children[0];
+  other.checked = true;
+  other.listeners.get("change")();
+  release();
+  await scanning;
+  assert.deepEqual(Array.from(popup.state.selected), [photo("two").url],
+    "A finished scan must preserve individual photo selection and deselection");
+
+  popup.state.selected.clear();
+  popup.renderImages();
+  const refreshedTwo = { ...photo("two"), url: `${photo("two").url}?token=refreshed` };
+  harness.setImages([refreshed, refreshedTwo]);
+  started = harness.delayStatuses(new Promise(resolve => { release = resolve; }));
+  scanning = popup.scanPage({ preserveSelection: true, live: true });
+  await started;
+  const displayed = elements.get("image-list").children[0].children[0].children[0];
+  displayed.checked = true;
+  displayed.listeners.get("change")();
+  assert.deepEqual(Array.from(popup.state.selected), [refreshedTwo.url],
+    "Cards must use refreshed URLs while the scan waits for download statuses");
+  release();
+  await scanning;
+  assert.deepEqual(Array.from(popup.state.selected), [refreshedTwo.url]);
+  assert.equal(popup.state.liveScanning, false);
+}
+
 async function checkPhotoStory() {
   const still = { ...photo("story-photo"), identityKey: "instagram:story:alice:alice:102",
     sourceProvider: "instagram", mediaType: "image", originalMediaType: 1,
@@ -354,6 +433,10 @@ function checkScrolling() {
   let clicks = 0;
   let enclosingForm = null;
   let visible = true;
+  const nextLink = {
+    href: `${siteKey}/archive/page2`,
+    getAttribute(name) { return name === "href" ? "page2" : null; }
+  };
   const attributes = {};
   const more = {
     tagName: "BUTTON", className: "",
@@ -365,7 +448,7 @@ function checkScrolling() {
   const scroll = vm.runInNewContext(`(${Gallery.scrollPage.toString()})`, {
     location: { href: `${siteKey}/one` }, window: { innerHeight: 600 },
     document: { scrollingElement: root, querySelectorAll(selector) {
-      if (!selector.startsWith("button")) return [];
+      if (!selector.startsWith("button")) return [nextLink];
       return more.tagName === "BUTTON" || (
         selector.includes('.js_see-more[data-get="photos"][data-type="group"]') &&
         more.className === "js_see-more" && attributes["data-get"] === "photos" &&
@@ -378,6 +461,11 @@ function checkScrolling() {
   scroll(`${siteKey}/one`, true);
   assert.equal(scroll(`${siteKey}/one`, true).clickedMore, true);
   assert.equal(clicks, 1);
+  more.textContent = "Load more videos";
+  assert.equal(scroll(`${siteKey}/one`, true).clickedMore, true, "Video galleries must load their next batch");
+  assert.equal(clicks, 2);
+  assert.equal(scroll(`${siteKey}/one`, false).nextLinks[0], nextLink.href,
+    "Live Next links must retain the browser's resolution of the page's base URL");
   more.form = {};
   assert.equal(scroll(`${siteKey}/one`, true).clickedMore, false, "Collection must never submit a form");
   more.form = null;
@@ -387,7 +475,7 @@ function checkScrolling() {
   attributes["data-get"] = "photos";
   attributes["data-type"] = "group";
   assert.equal(scroll(`${siteKey}/one`, true).clickedMore, true, "FapFolder uses a JavaScript div for photo pagination");
-  assert.equal(clicks, 2);
+  assert.equal(clicks, 3);
   enclosingForm = {};
   assert.equal(scroll(`${siteKey}/one`, true).clickedMore, false, "JavaScript controls inside forms must also be skipped");
   enclosingForm = null;
@@ -409,6 +497,7 @@ function checkScrolling() {
 
 (async () => {
   await checkPopup();
+  await checkSelectionDuringScan();
   await checkPhotoStory();
   await checkFetch();
   checkScrolling();
