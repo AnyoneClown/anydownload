@@ -137,6 +137,7 @@ function popupHarness(stored = { local: [], session: [] }) {
         onUpdated: { addListener(listener) { updatedListener = listener; } }
       },
       runtime: {
+        getURL: file => `moz-extension://test/${file}`,
         async sendMessage(message) {
           if (message.type === "SITE_GALLERY") {
             const area = message.incognito ? "session" : "local";

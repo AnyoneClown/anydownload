@@ -12,21 +12,21 @@
     <div class="workspace-header">
       <div class="app-brand"><img src="../icons/image-downloader-illustrated-v2-96.png" alt="" width="32" height="32"><span>AnyDownload</span></div>
       <nav class="workspace-nav" aria-label="Workspace">
-        <a class="nav-link" data-source-link href="../popup/popup.html" hidden>Media</a>
-        <a class="nav-link" data-source-link href="../history/history.html">Downloads</a>
-        <a class="nav-link" data-source-link href="../tracking/tracking.html">Trackers</a>
-        <a class="nav-link" data-source-link href="../sync/sync.html">Account</a>
-        <a class="nav-link current" href="integrations.html" aria-current="page">Integrations</a>
+        <a class="nav-link" data-source-link href="../popup/popup.html" hidden><svg aria-hidden="true" viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" rx="2"/><circle cx="7" cy="7" r="1"/><path d="m3 14 4-4 3 3 3-3 4 4"/></svg>Media</a>
+        <a class="nav-link" data-source-link href="../history/history.html"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 3v10m-4-4 4 4 4-4M3 13v4h14v-4"/></svg>Downloads</a>
+        <a class="nav-link" data-source-link href="../tracking/tracking.html"><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/></svg>Trackers</a>
+        <a class="nav-link" data-source-link href="../sync/sync.html"><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="6" r="3"/><path d="M4 17v-2a6 6 0 0 1 12 0v2"/></svg>Account</a>
+        <a class="nav-link current" data-source-link href="integrations.html" aria-current="page"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M7 2v4m6-4v4M5 6h10v4a5 5 0 0 1-10 0V6m5 9v3"/></svg>Integrations</a>
       </nav>
     </div>
     <main class="page-shell">
       <header class="page-header">
         <div><p class="eyebrow">Your media, connected</p><h1>Integrations</h1><p class="subtitle">Connect your photo library. Send your images straight from Firefox.</p></div>
-        <a class="button-link primary-button" data-source-link href="../upload/upload.html"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 13V3m-4 4 4-4 4 4M3 13v4h14v-4"/></svg>Upload images</a>
+        <a class="button-link primary-button" data-source-link href="../upload/upload.html" target="_blank" rel="noopener noreferrer"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 13V3m-4 4 4-4 4 4M3 13v4h14v-4"/></svg>Upload images</a>
       </header>
       <nav class="integration-tabs" aria-label="Integrations">
-        <a class="current" data-source-link href="integrations.html" aria-current="page">Connections</a>
-        <a data-source-link href="../upload/upload.html">Uploads</a>
+        <a class="current" data-source-link href="integrations.html" aria-current="page"><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="M7 2v4m6-4v4M5 6h10v4a5 5 0 0 1-10 0V6m5 9v3"/></svg>Connections</a>
+        <a data-source-link href="../upload/upload.html" target="_blank" rel="noopener noreferrer"><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="M10 13V3m-4 4 4-4 4 4M3 13v4h14v-4"/></svg>Uploads</a>
       </nav>
       <p id="private-notice" class="card" hidden>Integrations are unavailable in private windows. Open this page in a normal Firefox window.</p>
       <div id="status" role="status" aria-live="polite"></div>
@@ -61,10 +61,10 @@
             </details>
             <div class="actions">
               <button id="save" class="primary-button" type="submit" disabled>Test &amp; save connection</button>
-              <button id="cancel" type="button" hidden>Cancel test</button>
+              <button id="cancel" type="button" hidden><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="m5 5 10 10M15 5 5 15"/></svg>Cancel test</button>
             </div>
             <div id="disconnect-section" class="disconnect-section" hidden>
-              <button id="disconnect" class="danger-button" type="button" hidden disabled>Disconnect &amp; delete key</button>
+              <button id="disconnect" class="danger-button" type="button" hidden disabled><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="M3 5h14M7 5V3h6v2M5 5l1 12h8l1-12M8 8v6m4-6v6"/></svg>Disconnect &amp; delete key</button>
               <p class="hint">Uploaded images stay in Immich.</p>
             </div>
           </form>
@@ -74,7 +74,7 @@
               <p class="eyebrow">From page to library</p>
               <h2>A home for your finds</h2>
               <p class="hint">Send images from a webpage or your device to Immich, with an album of your choice.</p>
-              <a class="button-link" data-source-link href="../upload/upload.html">Open uploads <span aria-hidden="true">→</span></a>
+              <a class="button-link" data-source-link href="../upload/upload.html" target="_blank" rel="noopener noreferrer">Open uploads <span aria-hidden="true">→</span></a>
             </section>
             <section class="card steps-card">
               <h2>Your next upload</h2>

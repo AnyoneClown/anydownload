@@ -314,6 +314,10 @@
     async function editTracker(tracker) {
       if (privateContext) return;
       try {
+        if (root.frameElement && typeof root.parent?.AnyDownloadWorkspace?.editTracker === "function") {
+          await root.parent.AnyDownloadWorkspace.editTracker(tracker.id);
+          return;
+        }
         await browser.tabs.create({
           active: true,
           url: `${browser.runtime.getURL("popup/popup.html")}?editTrackerId=${encodeURIComponent(tracker.id)}`

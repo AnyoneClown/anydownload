@@ -94,6 +94,7 @@ summary:focus-visible {
 
 .workspace-nav {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
 }
@@ -130,6 +131,7 @@ summary:focus-visible {
 }
 
 .nav-link svg {
+  flex: none;
   width: 16px;
   height: 16px;
   fill: none;
@@ -138,6 +140,21 @@ summary:focus-visible {
   stroke-linejoin: round;
   stroke-width: 1.7;
 }
+
+.button-icon {
+  display: inline-block;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-right: 5px;
+  vertical-align: -3px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 
 [hidden] {
   display: none !important;
@@ -336,3 +353,27 @@ progress::-webkit-progress-value {
   border-radius: 99px;
   background: var(--brand);
 }
+
+
+.embedded-workspace .workspace-header,
+.embedded-workspace .app-header,
+.embedded-workspace .integration-tabs {
+  display: none;
+}
+
+html.embedded-workspace,
+.embedded-workspace body {
+  min-width: 0;
+}
+
+.embedded-workspace .page-shell {
+  width: 100%;
+  padding: 24px;
+  margin: 0;
+}
+
+@media (max-width: 480px) {
+  .embedded-workspace .page-shell { padding: 18px 14px; }
+}
+
+.embedded-workspace .stat-card strong { font-size: clamp(20px, 4.5vw, 28px); }

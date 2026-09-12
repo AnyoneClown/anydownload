@@ -30,7 +30,9 @@ class Element {
   }
   setAttribute(name, value) { this.attributes[name] = value; }
   getAttribute(name) { return this.attributes[name] ?? null; }
-  removeAttribute(name) { delete this.attributes[name]; if (name === "src") this.src = ""; }
+  get src() { return this.attributes.src || ""; }
+  set src(value) { this.attributes.src = value; this.srcWrites = (this.srcWrites || 0) + 1; }
+  removeAttribute(name) { delete this.attributes[name]; }
   addEventListener(name, callback) { this.listeners[name] = callback; }
   append(...children) {
     this.children.push(...children);
@@ -141,7 +143,8 @@ assert.ok(source.includes(entry));
 source = source.replace(entry, `  globalThis.ui = { cacheElements, wireEvents, applyMediaView, applySmartFiltersToControls,
     updateSummary, renderImages, makeImageRow, requireValidFilenameTemplate, requestDownloads, finishArchiveDownload,
     filteredImages, selectedDownloadableImages, resetMediaFilters, openGalleryPreview, openImagePreview,
-    moveGalleryPreview, initializeTrackerEditor, saveTracker, focusIgnoredToggle, persistSettings, ignoreStorageArea, handleSettingsStorageChanges, state, elements };
+    moveGalleryPreview, initializeTrackerEditor, saveTracker, focusIgnoredToggle, persistSettings, ignoreStorageArea,
+    handleSettingsStorageChanges, showWorkspace, setIncognitoContext, state, elements };
 ${entry}`);
 vm.runInContext(source, context);
 const ui = context.ui;
@@ -180,6 +183,61 @@ assert.equal(get("selected-label").textContent, "2 selected · 1 hidden");
 assert.equal(get("download-button").textContent, "Download 2 files");
 assert.match(get("selection-warning").textContent, /includes 1 files hidden/);
 assert.equal(ui.state.selected.size, 2, "Searching must preserve existing selections");
+
+const workspaceButtons = {
+  media: "media-button", history: "history-button", tracking: "tracking-dashboard-button",
+  integrations: "integrations-button", sync: "sync-button"
+};
+const workspaceFrame = get("workspace-frame");
+for (const view of ["history", "tracking", "integrations", "sync", "media"]) {
+  get(workspaceButtons[view]).click();
+  assert.equal(ui.state.workspace, view, `${view} opens in the popup workspace`);
+  assert.equal(get("media-workspace").hidden, view !== "media");
+  assert.equal(workspaceFrame.hidden, view === "media");
+  for (const [name, id] of Object.entries(workspaceButtons)) {
+    assert.equal(get(id).getAttribute("aria-current") === "page", name === view,
+      "Only the visible workspace is marked current");
+  }
+  if (view === "media") {
+    assert.equal(workspaceFrame.getAttribute("src"), null, "Returning to Media unloads the dashboard");
+  } else {
+    const url = new URL(workspaceFrame.src);
+    assert.equal(url.pathname, `/${view}/${view}.html`);
+    assert.equal(url.searchParams.get("embedded"), "1");
+    assert.equal(url.searchParams.get("sourceTabId"), "7", "Dashboard navigation retains the scanned tab");
+    const writes = workspaceFrame.srcWrites;
+    get(workspaceButtons[view]).click();
+    assert.equal(workspaceFrame.srcWrites, writes, "Clicking the current section preserves its form state");
+  }
+  assert.equal(openedTabs.length, 0, "Workspace navigation never opens an external tab");
+  assert.deepEqual([...ui.state.selected], [first.url, second.url], "Switching workspaces preserves media selection");
+  assert.equal(get("filter-input").value, "lake", "Switching workspaces preserves the media search");
+}
+context.AnyDownloadWorkspace.editTracker("tracker-7");
+assert.equal(ui.state.workspace, "tracking", "Editing a tracker stays in its workspace");
+assert.equal(new URL(workspaceFrame.src).pathname, "/popup/popup.html");
+assert.equal(new URL(workspaceFrame.src).searchParams.get("editTrackerId"), "tracker-7");
+get("tracking-dashboard-button").click();
+assert.equal(new URL(workspaceFrame.src).pathname, "/tracking/tracking.html", "The Trackers button returns from its editor");
+get("media-button").click();
+for (const view of ["unexpected", "__proto__", "https://unexpected.example"]) {
+  ui.showWorkspace(view);
+  assert.equal(ui.state.workspace, "media", "Only known extension workspaces can be embedded");
+}
+get("integrations-button").click();
+ui.setIncognitoContext(true);
+assert.equal(ui.state.workspace, "media", "A private-context switch immediately closes account integrations");
+assert.equal(workspaceFrame.getAttribute("src"), null, "Private browsing unloads the protected document");
+for (const view of ["tracking", "sync", "integrations"]) {
+  ui.showWorkspace(view);
+  assert.equal(ui.state.workspace, "media", "Private restrictions cannot be bypassed by invoking navigation");
+}
+get("history-button").click();
+assert.equal(ui.state.workspace, "history", "Private download history remains accessible");
+const historyWrites = workspaceFrame.srcWrites;
+ui.setIncognitoContext(false);
+assert.ok(workspaceFrame.srcWrites > historyWrites, "Download history reloads when its privacy context changes");
+get("media-button").click();
 
 get("smart-filter-panel").open = true;
 get("smart-filter-panel").listeners.toggle();
@@ -294,6 +352,32 @@ for (const sourceId of ["7", "", "-1", "3.5", "9007199254740992", "https://unexp
   });
   assert.equal(link.hidden, sourceId !== "7");
   assert.equal(new URL(link.href).searchParams.get("sourceTabId"), sourceId === "7" ? "7" : null);
+}
+for (const embedded of [false, true]) {
+  const links = [
+    ["moz-extension://test/popup/popup.html", "media"],
+    ...["history", "tracking", "sync", "integrations"].map(view => [`moz-extension://test/${view}/${view}.html`, view]),
+    ["moz-extension://test/upload/upload.html", null],
+    ["moz-extension://test/tracking/history.html", null],
+    ["moz-extension://another-extension/sync/sync.html", null],
+    ["https://test/sync/sync.html", null]
+  ].map(([href, view]) => Object.assign(new Element("a"), { href, view }));
+  const classes = [];
+  const opened = [];
+  vm.runInNewContext(navigation, {
+    URL, location: { href: `moz-extension://test/tracking/tracking.html?embedded=${Number(embedded)}` },
+    parent: { AnyDownloadWorkspace: { open: view => opened.push(view) } },
+    document: { querySelectorAll: () => links, documentElement: { classList: { add: name => classes.push(name) } } }
+  });
+  assert.deepEqual(classes, embedded ? ["embedded-workspace"] : []);
+  for (const link of links) {
+    let prevented = false;
+    link.listeners.click?.({ preventDefault() { prevented = true; } });
+    assert.equal(prevented, embedded && Boolean(link.view),
+      "Only known same-extension destinations may route through an embedded workspace");
+  }
+  assert.deepEqual(opened, embedded ? ["media", "history", "tracking", "sync", "integrations"] : [],
+    "Embedded navigation works without a source tab and updates the persistent sidebar");
 }
 
 (async () => {

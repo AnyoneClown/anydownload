@@ -128,7 +128,7 @@ function descendants(node) {
   return node.children.flatMap((child) => [child, ...descendants(child)]);
 }
 
-async function loadDashboard({ incognito = false, failures = new Set(), changeTrackersDuringReview = false } = {}) {
+async function loadDashboard({ incognito = false, failures = new Set(), changeTrackersDuringReview = false, workspace } = {}) {
   const document = { activeElement: null, listeners: {} };
   const html = fs.readFileSync(path.join(__dirname, "../extension/tracking/tracking.html"), "utf8");
   const elements = new Map([...html.matchAll(/<(\w+)[^>]*\bid="([^"]+)"[^>]*>/g)].map((match) =>
@@ -150,6 +150,8 @@ async function loadDashboard({ incognito = false, failures = new Set(), changeTr
   let storageListener;
   Tracking.initialize({
     document,
+    frameElement: workspace ? {} : null,
+    parent: { AnyDownloadWorkspace: workspace },
     confirm: () => true,
     browser: {
       tabs: { getCurrent: async () => ({ incognito }), create: async (value) => openedTabs.push(value) },
@@ -222,6 +224,12 @@ async function testDashboardActions() {
   assert.equal(page.document.activeElement, get(toggleId), "Storage refresh retains keyboard focus");
   await get("tracker-tracker-active-edit").dispatch("click");
   assert.equal(page.openedTabs[0].url, "moz-extension://test/popup/popup.html?editTrackerId=tracker-active");
+
+  const editedTrackerIds = [];
+  const embedded = await loadDashboard({ workspace: { editTracker: async (id) => editedTrackerIds.push(id) } });
+  await embedded.document.getElementById("tracker-tracker-active-edit").dispatch("click");
+  assert.deepEqual(editedTrackerIds, ["tracker-active"], "Embedded tracker edits use the parent workspace");
+  assert.equal(embedded.openedTabs.length, 0, "Embedded editing must not open a separate tab");
 
   const individual = await loadDashboard();
   const dismiss = individual.document.getElementById("review-review-one-dismiss");

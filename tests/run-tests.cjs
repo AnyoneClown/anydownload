@@ -64,7 +64,7 @@ const trackingJs = fs.readFileSync(path.join(root, "tracking/tracking.js"), "utf
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.name, "AnyDownload — Page Media Downloader");
-assert.equal(manifest.version, "1.17.1");
+assert.equal(manifest.version, "1.18.0");
 assert.equal(manifest.action.default_title, "Download page media");
 assert.equal(Core.MAX_BATCH_TOTAL_URL_LENGTH, 2000000);
 assert.deepEqual(manifest.permissions.sort(), ["activeTab", "alarms", "downloads", "menus", "notifications", "scripting", "storage"]);
@@ -136,13 +136,13 @@ const popupResourcePaths = [
 for (const resourcePath of popupResourcePaths) {
   assertLocalResource(path.dirname(popupPath), resourcePath, "Popup resource");
 }
-assert.match(popupCss, /html,\s*body\s*\{[^}]*width:\s*470px;[^}]*height:\s*600px;[^}]*min-width:\s*0;[^}]*min-height:\s*0;/s);
+assert.match(popupCss, /html,\s*body\s*\{[^}]*width:\s*780px;[^}]*height:\s*600px;[^}]*min-width:\s*0;[^}]*min-height:\s*0;/s);
 assert.doesNotMatch(popupCss, /html,\s*body\s*\{[^}]*max-(?:width|height):/s);
 assert.match(popupCss, /\.app-shell\s*\{[^}]*height:\s*600px;[^}]*min-height:\s*0;[^}]*overflow:\s*hidden;/s);
-assert.match(popupCss, /\.app-shell\s*\{[^}]*grid-template-rows:\s*auto auto auto auto minmax\(0,\s*1fr\) auto auto;/s);
+assert.match(popupCss, /\.media-workspace\s*\{[^}]*grid-template-rows:\s*auto auto auto minmax\(0,\s*1fr\) auto auto;/s);
 assert.match(
   popupCss,
-  /\.app-shell\s*\{[^}]*grid-template-areas:\s*"header"\s*"controls"\s*"notice"\s*"undo"\s*"media"\s*"pagination"\s*"actions";/s,
+  /\.media-workspace\s*\{[^}]*grid-template-areas:\s*"controls"\s*"notice"\s*"undo"\s*"media"\s*"pagination"\s*"actions";/s,
   "Hidden notices must not shift the footer into the flexible media row during scanning"
 );
 for (const [selector, area] of [
@@ -158,7 +158,8 @@ for (const [selector, area] of [
     `${selector} must remain pinned to the ${area} grid area`
   );
 }
-assert.match(popupCss, /\.app-shell\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s);
+assert.match(popupCss, /\.app-shell\s*\{[^}]*grid-template-columns:\s*156px minmax\(0,\s*1fr\);/s);
+assert.match(popupCss, /\.app-shell\s*\{[^}]*grid-template-areas:\s*"header workspace";/s);
 assert.match(popupCss, /\.app-shell\s*>\s*\*\s*\{[^}]*min-width:\s*0;/s);
 assert.match(popupCss, /html\.responsive-surface,\s*html\.responsive-surface body\s*\{[^}]*width:\s*100%;[^}]*height:\s*100%;/s);
 assert.match(popupCss, /html\.responsive-surface \.app-shell\s*\{[^}]*height:\s*100dvh;/s);
@@ -180,7 +181,14 @@ const popupWorkspaceNav = popupHtml.match(/<nav\b[^>]*class="workspace-nav"[^>]*
 for (const controlId of ["history-button", "tracking-dashboard-button", "sync-button", "integrations-button"]) {
   assert.match(popupWorkspaceNav, new RegExp(`id="${controlId}"[^>]*class="nav-link"`), `${controlId} must be in the main navigation`);
 }
-assert.match(popupJs, /runtime\.getURL\("tracking\/tracking\.html"\)/);
+assert.match(popupHtml, /<iframe\b[^>]*id="workspace-frame"[^>]*title="[^"]+"[^>]*hidden/);
+assert.match(trackingHtml, /data-source-link href="\.\.\/integrations\/integrations\.html"/,
+  "The standalone Trackers dashboard must also offer Integrations");
+for (const controlId of ["media-button", "history-button", "tracking-dashboard-button", "sync-button", "integrations-button"]) {
+  const button = popupWorkspaceNav.match(new RegExp(`<button\\b[^>]*id="${controlId}"[^>]*>[\\s\\S]*?</button>`))?.[0] || "";
+  assert.match(button, /<svg[^>]*aria-hidden="true"/,
+    `${controlId} must keep its navigation icon`);
+}
 assert.match(popupHtml, /id="filename-template-button"[^>]*aria-controls="filename-template-panel"/);
 assert.match(popupHtml, /id="filename-template-input"[^>]*value="\{index\}-\{filename\}"[^>]*maxlength="240"/);
 assert.match(popupHtml, /id="filename-template-help"[^>]*>[^<]*\{hostname\}[^<]*\{page-title\}[^<]*\{date\}/);
@@ -356,7 +364,6 @@ assert.match(
   popupJs,
   /module\.exports\s*=\s*\{[\s\S]*matchesInstagramCollectionFilter,[\s\S]*mergeInstagramCollections,/
 );
-assert.match(popupJs, /runtime\.getURL\("history\/history\.html"\)/);
 assert.match(popupJs, /type:\s*"GET_DOWNLOAD_DASHBOARD"/);
 assert.match(popupJs, /summaryOnly:\s*true/);
 assert.match(popupJs, /elements\["archive-footer-button"\]\.addEventListener\("click", downloadSelectedArchive\)/);
@@ -559,7 +566,7 @@ assert.match(historyJs, /performDownloadsAction\(\s*"show",\s*\[task\.downloadId
 assert.match(historyJs, /performDownloadsAction\(\s*"showDefaultFolder"/s);
 assert.match(historyCss, /\.stats-grid\s*\{[^}]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\);/s);
 assert.match(historyCss, /@media\s*\(max-width:\s*800px\)/);
-assert.match(historyHtml, /href="\.\.\/tracking\/tracking\.html">Trackers<\/a>/);
+assert.match(historyHtml, /href="\.\.\/tracking\/tracking\.html"><svg\b[^>]*>[\s\S]*?<\/svg>Trackers<\/a>/);
 
 assert.match(trackingHtml, /^<!doctype html>/i, "Tracking dashboard must use standards mode");
 assert.match(trackingHtml, /<title>AnyDownload — Tracking<\/title>/);
@@ -572,7 +579,7 @@ assert.match(trackingJs, /TRACKER_REVIEW_ACTION/);
 assert.doesNotMatch(trackingHtml, /id="(?:tracker-list|review-list)"[^>]*aria-live/);
 assert.match(trackingHtml, /id="pause-all-button"/);
 assert.match(trackingHtml, /id="resume-all-button"/);
-assert.match(trackingHtml, /href="\.\.\/history\/history\.html">Downloads<\/a>/);
+assert.match(trackingHtml, /href="\.\.\/history\/history\.html"><svg\b[^>]*>[\s\S]*?<\/svg>Downloads<\/a>/);
 const trackingResourcePaths = [
   ...Array.from(
     trackingHtml.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*><\/script>/gi),

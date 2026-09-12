@@ -652,6 +652,9 @@
   if (responsiveSurface) {
     document.documentElement.classList.add("responsive-surface");
   }
+  if (globalScope.parent?.AnyDownloadWorkspace && new URL(launchUrl).searchParams.get("embedded") === "1") {
+    document.documentElement.classList.add("embedded-workspace");
+  }
 
   let filenamePreviewsDirty = true;
   let filenamePreviewDateKey = "";
@@ -685,6 +688,7 @@
   }
 
   const state = {
+    workspace: "media",
     images: [],
     showSelected: false,
     galleryPage: 0,
@@ -785,6 +789,7 @@
 
   function cacheElements() {
     const ids = [
+      "media-workspace", "workspace-frame", "media-button",
       "gallery-undo", "undo-clear-button",
       "editor-source-link",
       "gallery-pagination", "previous-page-button", "next-page-button", "pagination-label",
@@ -1491,29 +1496,44 @@
     }
   }
 
-  async function openCloudSync() {
-    if (state.incognito) return;
-    const createProperties = {
-      active: true,
-      url: browser.runtime.getURL("sync/sync.html") +
-        (Number.isInteger(state.sourceTabId) ? `?sourceTabId=${state.sourceTabId}` : "")
-    };
-    if (Number.isInteger(state.sourceWindowId)) {
-      createProperties.windowId = state.sourceWindowId;
+  const workspaces = {
+    media: ["media-button", "Media collection"],
+    history: ["history-button", "Downloads"],
+    tracking: ["tracking-dashboard-button", "Trackers"],
+    sync: ["sync-button", "Account"],
+    integrations: ["integrations-button", "Integrations"]
+  };
+
+  function showWorkspace(view, trackerId) {
+    if (!Object.hasOwn(workspaces, view) ||
+      state.incognito && ["tracking", "sync", "integrations"].includes(view)) return;
+    if (trackerId !== undefined && (view !== "tracking" || typeof trackerId !== "string" || !trackerId || trackerId.length > 200)) return;
+    const frame = elements["workspace-frame"];
+    const url = new URL(browser.runtime.getURL(trackerId ? "popup/popup.html" : `${view}/${view}.html`));
+    url.searchParams.set("embedded", "1");
+    if (Number.isInteger(state.sourceTabId)) url.searchParams.set("sourceTabId", state.sourceTabId);
+    if (trackerId) url.searchParams.set("editTrackerId", trackerId);
+    state.workspace = view;
+    elements["media-workspace"].hidden = view !== "media";
+    frame.hidden = view === "media";
+    if (view === "media") frame.removeAttribute("src");
+    else if (frame.src !== url.href) frame.src = url.href;
+    frame.title = trackerId ? "Edit tracker" : workspaces[view][1];
+    document.title = `AnyDownload — ${workspaces[view][1]}`;
+    for (const [key, [id]] of Object.entries(workspaces)) {
+      elements[id].classList.toggle("current", key === view);
+      if (key === view) elements[id].setAttribute("aria-current", "page");
+      else elements[id].removeAttribute("aria-current");
     }
-    await browser.tabs.create(createProperties).catch(() => {
-      setNotice("Firefox could not open Account. Please try again.", "error");
-    });
+    for (const id of ["smart-filter-panel", "download-settings-panel", "tracker-panel"]) {
+      if (elements[id].matches(":popover-open")) elements[id].hidePopover();
+    }
   }
 
-  async function openIntegrations() {
-    if (state.incognito) return;
-    await browser.tabs.create({ active: true,
-      url: browser.runtime.getURL("integrations/integrations.html") +
-        (Number.isInteger(state.sourceTabId) ? `?sourceTabId=${state.sourceTabId}` : ""),
-      ...(Number.isInteger(state.sourceWindowId) ? { windowId: state.sourceWindowId } : {})
-    }).catch(() => setNotice("Firefox could not open Integrations. Please try again.", "error"));
-  }
+  globalScope.AnyDownloadWorkspace = {
+    open: showWorkspace,
+    editTracker: (id) => showWorkspace("tracking", id)
+  };
 
   async function writeNormalStorage(action, value) {
     let response;
@@ -1576,34 +1596,6 @@
       updateSmartFilterButton();
       renderImages();
     }
-  }
-
-  async function openDownloadHistory() {
-    const createProperties = {
-      active: true,
-      url: browser.runtime.getURL("history/history.html") +
-        (Number.isInteger(state.sourceTabId) ? `?sourceTabId=${state.sourceTabId}` : "")
-    };
-    if (Number.isInteger(state.sourceWindowId)) {
-      createProperties.windowId = state.sourceWindowId;
-    }
-    await browser.tabs.create(createProperties).catch((error) => {
-      setNotice(`Firefox could not open the download queue. (${error.message || error})`, "error");
-    });
-  }
-
-  async function openTrackingDashboard() {
-    const createProperties = {
-      active: true,
-      url: browser.runtime.getURL("tracking/tracking.html") +
-        (Number.isInteger(state.sourceTabId) ? `?sourceTabId=${state.sourceTabId}` : "")
-    };
-    if (Number.isInteger(state.sourceWindowId)) {
-      createProperties.windowId = state.sourceWindowId;
-    }
-    await browser.tabs.create(createProperties).catch((error) => {
-      setNotice(`Firefox could not open background trackers. (${error.message || error})`, "error");
-    });
   }
 
   async function refreshQueueBadge() {
@@ -1678,6 +1670,8 @@
       return;
     }
     state.incognito = nextValue;
+    elements["workspace-frame"].removeAttribute("src");
+    showWorkspace(state.workspace === "history" ? "history" : "media");
     refreshQueueBadge();
   }
 
@@ -5196,10 +5190,9 @@
       stopGalleryCollection();
       saveCurrentGallery();
     });
-    elements["history-button"].addEventListener("click", openDownloadHistory);
-    elements["tracking-dashboard-button"].addEventListener("click", openTrackingDashboard);
-    elements["sync-button"].addEventListener("click", openCloudSync);
-    elements["integrations-button"].addEventListener("click", openIntegrations);
+    for (const [view, [id]] of Object.entries(workspaces)) {
+      elements[id].addEventListener("click", () => showWorkspace(view));
+    }
     elements["tracker-panel"].addEventListener("toggle", () => {
       const open = elements["tracker-panel"].matches(":popover-open");
       elements["tracker-button"].setAttribute("aria-expanded", String(open));

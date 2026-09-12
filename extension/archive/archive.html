@@ -11,9 +11,11 @@
     <div class="workspace-header">
       <div class="app-brand"><img src="../icons/image-downloader-illustrated-v2-96.png" alt="" width="32" height="32"><span>AnyDownload</span></div>
       <nav class="workspace-nav" aria-label="Workspace">
-          <a class="nav-link" data-source-link href="../popup/popup.html" hidden>Media</a>
-          <a class="nav-link" data-source-link href="../history/history.html">Downloads</a>
-          <a class="nav-link" data-source-link href="../tracking/tracking.html">Trackers</a>
+        <a class="nav-link" data-source-link href="../popup/popup.html" hidden><svg aria-hidden="true" viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" rx="2"/><circle cx="7" cy="7" r="1"/><path d="m3 14 4-4 3 3 3-3 4 4"/></svg>Media</a>
+        <a class="nav-link" data-source-link href="../history/history.html"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 3v10m-4-4 4 4 4-4M3 13v4h14v-4"/></svg>Downloads</a>
+        <a class="nav-link" data-source-link href="../tracking/tracking.html"><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/></svg>Trackers</a>
+        <a class="nav-link" data-source-link href="../sync/sync.html"><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="6" r="3"/><path d="M4 17v-2a6 6 0 0 1 12 0v2"/></svg>Account</a>
+        <a class="nav-link" data-source-link href="../integrations/integrations.html"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M7 2v4m6-4v4M5 6h10v4a5 5 0 0 1-10 0V6m5 9v3"/></svg>Integrations</a>
       </nav>
     </div>
     <main class="page-shell">
@@ -31,7 +33,7 @@
             <p class="section-label">Status</p>
             <h2 id="status-heading">Opening archive job…</h2>
           </div>
-          <button id="cancel-button" class="danger-button" type="button" disabled>Cancel</button>
+          <button id="cancel-button" class="danger-button" type="button" disabled><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="m5 5 10 10M15 5 5 15"/></svg>Cancel</button>
         </div>
 
         <progress id="job-progress" max="1" value="0" aria-describedby="progress-description"></progress>
@@ -77,7 +79,7 @@
               <p class="section-label">Files</p>
               <h2 id="downloads-heading">Archive downloads</h2>
             </div>
-            <button id="show-downloads-button" class="quiet-button" type="button" hidden>Open Downloads</button>
+            <button id="show-downloads-button" class="quiet-button" type="button" hidden><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="M2 6V4h6l2 2h8v10H2V6Z"/></svg>Open Downloads</button>
           </div>
           <p id="downloads-empty" class="empty-state">Archive files will appear here as Firefox finishes them.</p>
           <ol id="downloads-list" class="result-list"></ol>
@@ -89,7 +91,7 @@
               <p class="section-label">Skipped items</p>
               <h2 id="failures-heading">Fetch failures</h2>
             </div>
-            <button id="retry-failures-button" class="quiet-button" type="button" title="Create a new ZIP with only the failed images. Previously saved ZIP files stay in Downloads." hidden>Retry failed images</button>
+            <button id="retry-failures-button" class="quiet-button" type="button" title="Create a new ZIP with only the failed images. Previously saved ZIP files stay in Downloads." hidden><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="M16 6V2.5M16 2.5h-3.5M16 2.5l-2.4 2.4A6.5 6.5 0 1 0 16 10"/></svg>Retry failed images</button>
           </div>
           <p id="failures-empty" class="empty-state">No failures so far.</p>
           <ol id="failures-list" class="result-list failure-list"></ol>

@@ -4,6 +4,13 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.18.0] - 2026-09-12
+
+### Changed
+
+- Kept Media, Downloads, Trackers, Account, and Integrations in a persistent popup sidebar, with tracker editing inside the same workspace and media selections preserved between sections.
+- Restored navigation and action icons, including at compact widths, and added the missing Integrations links on Downloads and Trackers.
+
 ## [1.17.1] - 2026-09-12
 
 ### Changed
