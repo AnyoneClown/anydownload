@@ -43,6 +43,7 @@ function harness({ stored = {}, session = {}, fetch: handler } = {}) {
   const calls = [];
   const tabs = new Map();
   const alarms = [];
+  const clearedAlarms = [];
   const hooks = {};
   const permissions = { origins: true, data: [...Runtime.DATA_TYPES] };
   const changed = event();
@@ -75,7 +76,7 @@ function harness({ stored = {}, session = {}, fetch: handler } = {}) {
       getAll: async () => permissions.data === undefined ? {} : { data_collection: [...permissions.data] },
       onRemoved: event()
     },
-    alarms: { create: (name, info) => alarms.push({ name, ...info }), onAlarm: event() },
+    alarms: { create: (name, info) => alarms.push({ name, ...info }), clear: async name => { clearedAlarms.push(name); return true; }, onAlarm: event() },
     tabs: {
       onUpdated: event(), onRemoved: event(),
       async create(info) { const tab = { id: tabs.size + 1, incognito: false, ...info }; tabs.set(tab.id, tab); return clone(tab); },
@@ -102,7 +103,7 @@ function harness({ stored = {}, session = {}, fetch: handler } = {}) {
     }
   });
   return {
-    browser, local, temporary, calls, tabs, alarms, hooks, permissions, sender, runtime,
+    browser, local, temporary, calls, tabs, alarms, clearedAlarms, hooks, permissions, sender, runtime,
     async message(action, values = {}, from = sender()) { return (await browser.runtime.onMessage.emit({ type: "CLOUD_SYNC", action, ...values }, from))[0]; },
     async write(values, from = sender("popup/popup.html")) { return (await browser.runtime.onMessage.emit({ type: "CLOUD_LOCAL_WRITE", action: "set", values }, from))[0]; },
     async callback(url, id = temporary[LOGIN].tabId, tab = { id, incognito: false }) { await browser.tabs.onUpdated.emit(id, { url }, tab); }
@@ -401,7 +402,94 @@ async function journalRecovery() {
   }
 }
 
+async function automaticDevices() {
+  let row;
+  let offline = false;
+  const fetch = call => {
+    if (offline) throw new TypeError("Network unavailable");
+    if (call.method === "GET") return response(row ? [new URL(call.url).searchParams.get("select") === "revision" ? { revision: row.revision } : row] : []);
+    if (call.method === "PATCH" && new URL(call.url).searchParams.get("revision") !== `eq.${row.revision}`) return response([]);
+    row = { revision: call.body.revision, payload: call.body.payload };
+    return response([row]);
+  };
+  const first = harness({ stored: { [STATE]: signedState() }, fetch });
+  const previousListener = globalThis.addEventListener;
+  let reconnect;
+  globalThis.addEventListener = (name, listener) => { if (name === "online") reconnect = listener; };
+  let second;
+  try { second = harness({ stored: { [STATE]: signedState() }, fetch }); }
+  finally {
+    if (previousListener) globalThis.addEventListener = previousListener;
+    else delete globalThis.addEventListener;
+  }
+  const tick = h => h.browser.alarms.onAlarm.emit({ name: "anydownload-cloud-sync" });
+  await Promise.all([first.runtime.ready, second.runtime.ready]);
+  assert.ok(first.alarms.some(alarm => alarm.periodInMinutes === 1));
+  await first.write({ mediaLayout: "list" });
+  assert.ok(first.alarms.some(alarm => alarm.name.endsWith("-changes") && alarm.when <= Date.now() + 5000));
+  await first.browser.alarms.onAlarm.emit({ name: "anydownload-cloud-sync-changes" });
+  await tick(second);
+  assert.equal(second.local.mediaLayout, "list", "Another device receives local changes without Sync now");
+  offline = true;
+  await second.write({ includeBackgrounds: true });
+  await tick(second);
+  assert.equal(second.local.includeBackgrounds, true, "Offline changes survive a failed automatic sync");
+  assert.ok(second.local[STATE].error);
+  offline = false;
+  await reconnect();
+  await tick(first);
+  assert.equal(first.local.includeBackgrounds, true, "Automatic retries deliver offline edits");
+  assert.equal(second.local[STATE].error, "");
+  assert.equal((await second.message("pause")).autoSync, false);
+  assert.ok(second.clearedAlarms.includes("anydownload-cloud-sync"));
+  const count = second.calls.length;
+  const alarms = second.alarms.length;
+  await second.write({ mediaLayout: "grid" });
+  await tick(second);
+  assert.equal(second.calls.length, count, "Paused devices ignore previously queued alarms");
+  assert.equal(second.alarms.length, alarms, "Paused edits do not schedule uploads");
+  const pausedRestart = harness({ stored: { ...second.local, [STATE]: { ...second.local[STATE], lastSync: 0 } }, fetch });
+  await pausedRestart.runtime.ready;
+  assert.equal(pausedRestart.calls.length, 0, "Pause survives a browser restart");
+  assert.equal((await second.message("sync")).autoSync, false, "Manual sync remains available without unpausing");
+  assert.equal(row.payload.mediaLayout, "grid");
+  await second.write({ filenameTemplate: "{index}-{filename}" });
+  assert.equal((await second.message("resume")).autoSync, true);
+  assert.equal(row.payload.filenameTemplate, "{index}-{filename}", "Resume immediately merges pending edits");
+  const restart = harness({ stored: { [STATE]: signedState({ lastSync: Date.now() - 61000 }) }, fetch });
+  await restart.runtime.ready;
+  assert.equal(restart.local.mediaLayout, "grid", "Startup catches up after a minute away");
+  await second.message("signout");
+  const signedOutCalls = second.calls.length;
+  await tick(second);
+  assert.equal(second.calls.length, signedOutCalls);
+  const signedOut = harness();
+  await signedOut.runtime.ready;
+  await signedOut.write({ mediaLayout: "list" });
+  assert.equal(signedOut.alarms.length, 0, "Local-only users have no sync alarms");
+}
+
+async function syncProgressAndCancellation() {
+  let release;
+  const h = harness({ stored: { [STATE]: signedState() }, fetch: () => new Promise(resolve => { release = resolve; }) });
+  await h.runtime.ready;
+  const first = h.browser.alarms.onAlarm.emit({ name: "anydownload-cloud-sync" });
+  while (!release) await new Promise(setImmediate);
+  assert.equal((await h.message("status")).syncing, true);
+  const duplicate = h.browser.alarms.onAlarm.emit({ name: "anydownload-cloud-sync" });
+  const pause = h.message("pause");
+  assert.equal(h.calls[0].signal.aborted, true, "Pause aborts an in-flight request immediately");
+  release(response([]));
+  await Promise.all([first, duplicate, pause]);
+  assert.equal(h.calls.length, 1, "Repeated alarms cannot build a network backlog");
+  const status = await h.message("status");
+  assert.equal(status.syncing, false);
+  assert.equal(status.autoSync, false);
+  assert.equal(status.error, "");
+  assert.equal(h.local[STATE].journal, undefined, "Cancelled responses are never applied");
+}
+
 (async () => {
-  for (const check of [consentAndTrust, sharedProjectMigration, authentication, refreshAndOwnership, syncConflictsAndConcurrentEdits, revokedPermissions, journalRecovery]) await check();
+  for (const check of [consentAndTrust, sharedProjectMigration, authentication, refreshAndOwnership, syncConflictsAndConcurrentEdits, revokedPermissions, journalRecovery, automaticDevices, syncProgressAndCancellation]) await check();
   console.log("Cloud sync runtime tests passed.");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

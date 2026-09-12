@@ -74,7 +74,7 @@ async function main() {
       },
       storage: { local: storage(data), session: storage(temporary), onChanged: event() },
       permissions: { contains: async () => true, getAll: async () => ({ data_collection: Runtime.DATA_TYPES }), onRemoved: event() },
-      alarms: { create() {}, onAlarm: event() },
+      alarms: { create() {}, async clear() { return true; }, onAlarm: event() },
       tabs: { onUpdated: event(), onRemoved: event() }
     };
     const runtime = Runtime.start(browser, { fetch: fetcher });

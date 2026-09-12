@@ -4,6 +4,13 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-09-12
+
+### Changed
+
+- Redesigned Cloud sync with a responsive account dashboard, readable consent and data-sharing summary, second-device setup instructions, live sync and permission states, and last-success feedback.
+- Automatic sync checks other devices every minute, catches up on startup and reconnection, and still batches local edits within seconds. Added a persistent per-device pause/resume switch with immediate catch-up on resume; manual sync remains available while paused. Signed-out devices no longer schedule sync alarms.
+
 ## [1.14.1] - 2026-09-12
 
 ### Fixed

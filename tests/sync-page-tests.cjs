@@ -13,16 +13,18 @@ const flush = async () => { for (let i = 0; i < 6; i++) await new Promise(setImm
 async function openPage(options = {}) {
   const nodes = Object.fromEntries([...html.matchAll(/<[^>]+\bid="([^"]+)"[^>]*>/g)].map(([tag, id]) => [id, {
     id, value: "", checked: false, hidden: /\bhidden\b/.test(tag), disabled: /\bdisabled\b/.test(tag),
+    attributes: {}, setAttribute(name, value) { this.attributes[name] = value; },
     listeners: {}, addEventListener(name, callback) { this.listeners[name] = callback; }
   }]));
   const documentListeners = {};
+  let poll;
   const messages = [];
   const requests = [];
   let permissionResolver;
   let changeListener;
   let current = { ok: true, configured: true, consent: false, signedIn: false, config: CONFIG, ...options.status };
   const context = {
-    URL, Date, console,
+    URL, Date, console, setInterval: callback => { poll = callback; return 1; }, clearInterval() {},
     document: {
       querySelectorAll: () => Object.values(nodes),
       addEventListener: (name, callback) => { documentListeners[name] = callback; }
@@ -43,6 +45,7 @@ async function openPage(options = {}) {
           messages.push(message);
           if (options.transportError) throw new Error("Access token: do-not-display");
           if (message.action === "signin") current = { ...current, signedIn: true, consent: true, accountBound: true, email: "test@example.com" };
+          if (["pause", "resume"].includes(message.action)) current = { ...current, autoSync: message.action === "resume" };
           if (message.action === "signout") current = { ...current, signedIn: false };
           return current;
         }
@@ -55,6 +58,7 @@ async function openPage(options = {}) {
   await flush();
   return {
     nodes, messages, requests,
+    async updateStatus(values) { current = { ...current, ...values }; poll(); await flush(); },
     resolvePermission: granted => permissionResolver(granted),
     storageChanged: () => changeListener({ cloudSyncState: { newValue: {} } }, "local")
   };
@@ -101,7 +105,7 @@ async function run() {
   assert.equal(page.messages.at(-1).action, "signin", "One click signs in without a configuration step");
   assert.equal(page.messages.at(-1).consent, true);
   assert.equal(page.messages.at(-1).config, undefined);
-  assert.match(get("sync-status").textContent, /test@example.com/);
+  assert.match(get("account-email").textContent, /test@example.com/);
   const beforeSync = page.requests.length;
   get("sync-button").listeners.click();
   assert.equal(page.requests.length, beforeSync + 1, "Sync now can restore permissions without signing out");
@@ -129,6 +133,33 @@ async function run() {
   assert.equal(returning.nodes["sync-consent"].disabled, true);
   assert.equal(returning.nodes["sync-button"].hidden, false);
   assert.equal(returning.requests.length, 0, "Opening an account page does not prompt for permissions");
+
+  assert.equal(returning.nodes["setup-section"].hidden, true);
+  assert.equal(returning.nodes["automatic-section"].hidden, false);
+  returning.nodes["auto-button"].listeners.click();
+  await flush();
+  assert.equal(returning.messages.at(-1).action, "pause");
+  assert.equal(returning.requests.length, 0, "Pausing does not need new permissions");
+  assert.equal(returning.nodes["auto-button"].attributes["aria-checked"], "false");
+  assert.equal(returning.nodes["status-badge"].textContent, "Paused");
+  returning.nodes["auto-button"].listeners.click();
+  assert.equal(returning.requests.length, 1, "Resuming can restore revoked permissions in the click stack");
+  returning.resolvePermission(true);
+  await flush();
+  assert.equal(returning.nodes["auto-button"].attributes["aria-checked"], "true");
+  await returning.updateStatus({ syncing: true });
+  assert.equal(returning.nodes["sync-button"].disabled, true);
+  assert.equal(returning.nodes["status-badge"].textContent, "Syncing…");
+  await returning.updateStatus({ syncing: false, permissionGranted: false });
+  assert.equal(returning.nodes["sync-button"].textContent, "Allow permissions & sync");
+  await returning.updateStatus({ permissionGranted: true, lastSync: Date.now(), error: "" });
+  assert.match(returning.nodes["last-sync"].textContent, /just now/);
+  const pending = await openPage({ status: { pendingLogin: true } });
+  assert.equal(pending.nodes["setup-section"].hidden, true);
+  assert.equal(pending.nodes["signin-button"].hidden, true);
+  assert.equal(pending.nodes["signout-button"].textContent, "Cancel sign-in");
+  await pending.updateStatus({ pendingLogin: false });
+  assert.equal(pending.nodes["setup-section"].hidden, false, "Expired login is refreshed without user interaction");
 
   const failed = await openPage({ transportError: true });
   assert.equal(failed.nodes["error-banner"].hidden, false);

@@ -13,6 +13,7 @@
   const LOGIN_KEY = "cloudLogin:v1";
   const ALARM = "anydownload-cloud-sync";
   const CHANGE_ALARM = `${ALARM}-changes`;
+  const SYNC_MINUTES = 1;
   const DATA_TYPES = ["authenticationInfo", "personallyIdentifyingInfo", "browsingActivity", "websiteActivity", "websiteContent"];
   const CALLBACK_PATH = "/functions/v1/sync-callback";
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -30,6 +31,8 @@
     const requests = new Set();
     let applying = false;
     let needsRecovery = true;
+    let syncing = false;
+    let autoSyncQueued = false;
 
     const load = async () => (await browser.storage.local.get(STATE_KEY))[STATE_KEY] || {};
     const save = (state) => browser.storage.local.set({ [STATE_KEY]: state });
@@ -181,7 +184,14 @@
       });
     }
 
-    async function synchronize() {
+    async function synchronize(automatic = false) {
+      const state = await load();
+      if (automatic && state.autoSync === false) return;
+      syncing = true;
+      try { await exchange(); } finally { syncing = false; }
+    }
+
+    async function exchange() {
       await local(() => undefined);
       const state = await load();
       if (!state.session || !state.consent) return;
@@ -227,7 +237,7 @@
           needsRecovery = true;
           await save({ ...state, revision, journal: { target, remote: merged } });
           await recover();
-          if (!Model.equal(target, merged)) scheduleChanges();
+          if (!Model.equal(target, merged)) await scheduleChanges();
         });
         return;
       }
@@ -241,6 +251,8 @@
         ok: true, configured: true, config: CONFIG, consent: Boolean(state.consent),
         signedIn: Boolean(state.session), email: state.session && state.session.email || "",
         lastSync: state.lastSync || 0, error: state.error || "",
+        syncing, autoSync: state.autoSync !== false,
+        permissionGranted: await permitted(state),
         pendingLogin: Boolean(login && login.expiresAt > Date.now()), accountBound: Boolean(state.owner)
       };
     }
@@ -250,10 +262,28 @@
       state.error = error.message || "Cloud sync failed. Local data is safe.";
       await save(state);
     }
-    const sync = () => background(synchronize);
+    const sync = () => {
+      if (autoSyncQueued) return operations;
+      autoSyncQueued = true;
+      return background(async () => {
+        try { await synchronize(true); } finally { autoSyncQueued = false; }
+      });
+    };
 
-    function scheduleChanges() {
-      browser.alarms.create(CHANGE_ALARM, { when: Date.now() + 5000 });
+    async function scheduleChanges() {
+      const state = await load();
+      if (state.session && state.consent && state.autoSync !== false) {
+        await browser.alarms.create(CHANGE_ALARM, { when: Date.now() + 5000 });
+      }
+    }
+
+    async function schedule(state) {
+      await browser.alarms.clear(CHANGE_ALARM);
+      if (state.session && state.consent && state.autoSync !== false) {
+        await browser.alarms.create(ALARM, { periodInMinutes: SYNC_MINUTES });
+      } else {
+        await browser.alarms.clear(ALARM);
+      }
     }
 
     async function signin(consent) {
@@ -316,9 +346,11 @@
         throw new Error("Sign in with the same Google account previously linked to this installation.");
       }
       state.session = session;
+      state.autoSync = true;
       state.owner = { userId: session.userId, project: login.project };
       state.error = "";
       await save(state);
+      await schedule(state);
       await browser.tabs.update(tabId, { url: browser.runtime.getURL("sync/sync.html") });
       await synchronize();
     }
@@ -370,7 +402,7 @@
       if (!trusted(sender, message.type === "CLOUD_SYNC")) return Promise.resolve({ ok: false, error: "Cloud sync is available only in normal extension pages." });
       if (message.type === "CLOUD_LOCAL_WRITE") return localWrite(message).catch((error) => ({ ok: false, error: error.message }));
       if (message.action === "status") return ready.then(status);
-      if (message.action === "signout") cancel();
+      if (["signout", "pause"].includes(message.action)) cancel();
       return enqueue(async () => {
         try {
           if (message.action !== "signout") await local(() => undefined);
@@ -380,12 +412,20 @@
           } else if (message.action === "sync") {
             if (!state.session) throw new Error("Sign in with Google first.");
             await synchronize();
+          } else if (["pause", "resume"].includes(message.action)) {
+            if (!state.session) throw new Error("Sign in with Google first.");
+            state.autoSync = message.action === "resume";
+            state.error = "";
+            await save(state);
+            await schedule(state);
+            if (state.autoSync) await synchronize();
           } else if (message.action === "signout") {
             await browser.storage.session.remove(LOGIN_KEY);
             const old = state.session;
             state.session = null;
             state.error = "";
             await save(state);
+            await schedule(state);
             if (old && await permitted(state)) {
               await request(state, "/auth/v1/logout?scope=local", { method: "POST", token: old.accessToken }).catch(() => undefined);
             }
@@ -411,16 +451,15 @@
     browser.storage.onChanged.addListener((changes, area) => {
       if (area !== "local" || applying) return;
       if (Object.keys(changes).some((key) => Model.SETTINGS_KEYS.includes(key) || key.startsWith("ignoredImage:") || key === "downloadLedger:v1")) {
-        scheduleChanges();
+        return scheduleChanges().catch(() => undefined);
       }
     });
     browser.permissions.onRemoved.addListener(cancel);
     browser.alarms.onAlarm.addListener((alarm) => {
       if (alarm && [ALARM, CHANGE_ALARM].includes(alarm.name)) return sync();
     });
-    // ponytail: bounded snapshots every 15 minutes; use incremental rows if
-    // real metadata/traffic approaches the 4 MiB snapshot ceiling.
-    browser.alarms.create(ALARM, { periodInMinutes: 15 });
+    // ponytail: poll revisions once a minute; use push if sub-minute delivery is needed.
+    globalThis.addEventListener?.("online", sync);
     const ready = background(async () => {
       await local(async () => {
         const state = await load();
@@ -440,7 +479,8 @@
         else await browser.storage.session.remove(LOGIN_KEY);
       }
       const state = await load();
-      if (state.session && Date.now() - (state.lastSync || 0) > 15 * 60 * 1000) await synchronize();
+      await schedule(state);
+      if (state.session && Date.now() - (state.lastSync || 0) > SYNC_MINUTES * 60 * 1000) await synchronize(true);
     });
     return { recover, ready };
   }
