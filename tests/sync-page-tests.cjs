@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { CONFIG } = require("../extension/shared/cloud-sync-runtime.js");
 
 const html = fs.readFileSync(path.join(__dirname, "../extension/sync/sync.html"), "utf8");
 const script = fs.readFileSync(path.join(__dirname, "../extension/sync/sync.js"), "utf8");
@@ -19,7 +20,7 @@ async function openPage(options = {}) {
   const requests = [];
   let permissionResolver;
   let changeListener;
-  let current = { ok: true, configured: false, signedIn: false, config: { url: "", publicKey: "" } };
+  let current = { ok: true, configured: true, consent: false, signedIn: false, config: CONFIG, ...options.status };
   const context = {
     URL, Date, console,
     document: {
@@ -41,8 +42,7 @@ async function openPage(options = {}) {
         sendMessage: async message => {
           messages.push(message);
           if (options.transportError) throw new Error("Access token: do-not-display");
-          if (message.action === "configure") current = { ...current, config: message.config, configured: true };
-          if (message.action === "signin") current = { ...current, signedIn: true, accountBound: true, email: "test@example.com" };
+          if (message.action === "signin") current = { ...current, signedIn: true, consent: true, accountBound: true, email: "test@example.com" };
           if (message.action === "signout") current = { ...current, signedIn: false };
           return current;
         }
@@ -72,48 +72,35 @@ async function run() {
   const page = await openPage();
   const get = id => page.nodes[id];
   assert.equal(get("sync-card").hidden, false);
-  assert.equal(get("configure-button").disabled, true, "Consent must be explicit before saving a project");
-  get("project-url").value = "https://testproject.supabase.co";
-  get("public-key").value = "sb_publishable_test";
-  get("project-url").listeners.input();
-  get("config-form").listeners.submit({ preventDefault() {} });
-  assert.equal(page.requests.length, 0, "A submitted form cannot bypass unchecked consent");
+  assert.equal(get("project-url"), undefined, "Users never configure the shared project");
+  assert.equal(get("public-key"), undefined);
+  assert.equal(get("sync-consent").checked, false, "Bundled configuration is not consent");
+  assert.equal(get("signin-button").disabled, true);
+  get("signin-button").listeners.click();
+  assert.equal(page.requests.length, 0, "A click cannot bypass unchecked consent");
   get("sync-consent").checked = true;
   get("sync-consent").listeners.change();
-  assert.equal(get("configure-button").disabled, false);
-  get("config-form").listeners.submit({ preventDefault() {} });
-  assert.equal(page.requests.length, 1, "Permission must be requested synchronously from the submit handler");
+  assert.equal(get("signin-button").disabled, false);
+  get("signin-button").listeners.click();
+  assert.equal(page.requests.length, 1, "Permission is requested synchronously from the click handler");
   assert.deepEqual(page.requests[0], {
-    origins: ["https://testproject.supabase.co/*"],
+    origins: [`${CONFIG.url}/*`],
     data_collection: ["authenticationInfo", "personallyIdentifyingInfo", "browsingActivity", "websiteActivity", "websiteContent"]
   });
-  assert.equal(page.messages.length, 1, "Configuration must wait for permission approval");
+  assert.equal(page.messages.length, 1, "Sign-in waits for permission approval");
   page.resolvePermission(false);
   await flush();
-  assert.equal(page.messages.length, 1, "Denied consent must not configure cloud sync");
+  assert.equal(page.messages.length, 1, "Denied permission must not start sign-in");
   assert.match(get("error-banner").textContent, /not granted/);
-  get("config-form").listeners.submit({ preventDefault() {} });
-  page.resolvePermission(true);
-  await flush();
-  assert.equal(page.messages.at(-1).action, "configure");
-  assert.equal(page.messages.at(-1).consent, true);
-  assert.equal(get("signin-button").disabled, false);
-
-  get("public-key").value = "an-unsaved-key";
-  get("public-key").listeners.input();
   page.storageChanged();
   await flush();
-  assert.equal(get("public-key").value, "an-unsaved-key", "Status refresh cannot overwrite configuration edits");
-  assert.equal(get("signin-button").disabled, true, "Unsaved configuration cannot start sign-in");
-  get("config-form").listeners.submit({ preventDefault() {} });
-  page.resolvePermission(true);
-  await flush();
-  const previousRequests = page.requests.length;
+  assert.equal(get("sync-consent").checked, true, "Status refresh preserves the user's consent choice");
   get("signin-button").listeners.click();
-  assert.equal(page.requests.length, previousRequests + 1, "Sign-in re-requests revoked permissions in the direct click stack");
   page.resolvePermission(true);
   await flush();
-  assert.equal(get("project-url").disabled, true);
+  assert.equal(page.messages.at(-1).action, "signin", "One click signs in without a configuration step");
+  assert.equal(page.messages.at(-1).consent, true);
+  assert.equal(page.messages.at(-1).config, undefined);
   assert.match(get("sync-status").textContent, /test@example.com/);
   const beforeSync = page.requests.length;
   get("sync-button").listeners.click();
@@ -125,19 +112,23 @@ async function run() {
   await flush();
   assert.equal(page.messages.at(-1).action, "signout");
   assert.equal(get("account-note").hidden, false);
-  assert.equal(get("project-url").disabled, true, "Account binding must remain visible after sign-out");
-  assert.equal(get("public-key").disabled, false, "A signed-out installation can rotate its public key for the same project");
+  const beforeSignin = page.requests.length;
+  get("signin-button").listeners.click();
+  assert.equal(page.requests.length, beforeSignin + 1, "Re-login re-requests revoked permissions in the click stack");
+  page.resolvePermission(true);
+  await flush();
 
   const legacy = await openPage({ legacy: true });
   legacy.nodes["sync-consent"].checked = true;
-  legacy.nodes["project-url"].value = "https://testproject.supabase.co/path";
-  legacy.nodes["config-form"].listeners.submit({ preventDefault() {} });
-  assert.equal(legacy.requests.length, 0, "Non-root project URLs cannot request permissions");
-  legacy.nodes["project-url"].value = "https://testproject.supabase.co";
-  legacy.nodes["config-form"].listeners.submit({ preventDefault() {} });
-  assert.deepEqual(legacy.requests[0], { origins: ["https://testproject.supabase.co/*"] });
+  legacy.nodes["signin-button"].listeners.click();
+  assert.deepEqual(legacy.requests[0], { origins: [`${CONFIG.url}/*`] });
   legacy.resolvePermission(false);
   await flush();
+  const returning = await openPage({ status: { consent: true, signedIn: true, accountBound: true } });
+  assert.equal(returning.nodes["sync-consent"].checked, true);
+  assert.equal(returning.nodes["sync-consent"].disabled, true);
+  assert.equal(returning.nodes["sync-button"].hidden, false);
+  assert.equal(returning.requests.length, 0, "Opening an account page does not prompt for permissions");
 
   const failed = await openPage({ transportError: true });
   assert.equal(failed.nodes["error-banner"].hidden, false);

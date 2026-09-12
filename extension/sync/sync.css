@@ -42,39 +42,6 @@ p {
   background: var(--surface);
 }
 
-details {
-  padding: 16px 0;
-  margin: 20px 0;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-}
-
-summary {
-  cursor: pointer;
-  font-weight: 600;
-}
-
-form {
-  display: grid;
-  gap: 8px;
-}
-
-form label:not(:first-child) {
-  margin-top: 8px;
-}
-
-input[type="url"],
-input[type="text"] {
-  width: 100%;
-  min-width: 0;
-  min-height: 40px;
-  padding: 8px 10px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  color: var(--ink);
-  background: var(--surface-raised);
-}
-
 .consent-row {
   display: flex;
   align-items: flex-start;
@@ -106,10 +73,6 @@ button {
   color: var(--ink);
   background: var(--surface-raised);
   cursor: pointer;
-}
-
-form button {
-  justify-self: start;
 }
 
 button:hover:not(:disabled) {

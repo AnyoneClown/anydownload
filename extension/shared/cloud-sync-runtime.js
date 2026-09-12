@@ -16,25 +16,10 @@
   const DATA_TYPES = ["authenticationInfo", "personallyIdentifyingInfo", "browsingActivity", "websiteActivity", "websiteContent"];
   const CALLBACK_PATH = "/functions/v1/sync-callback";
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-  function config(value) {
-    const url = new URL(String(value && value.url || "").trim());
-    if (url.protocol !== "https:" || !/^[a-z0-9]+\.supabase\.co$/.test(url.hostname) ||
-        url.port || url.username || url.password || url.search || url.hash || url.pathname !== "/") {
-      throw new Error("Enter your HTTPS Supabase project URL, without a path.");
-    }
-    const publicKey = String(value && value.publicKey || "").trim();
-    let publicRole = false;
-    if (/^eyJ[A-Za-z0-9_.-]+$/.test(publicKey) && publicKey.length < 4096) {
-      try {
-        publicRole = JSON.parse(atob(publicKey.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).role === "anon";
-      } catch (_error) { /* Reject malformed or privileged keys. */ }
-    }
-    if (!/^sb_publishable_[A-Za-z0-9_-]{10,250}$/.test(publicKey) && !publicRole) {
-      throw new Error("Use a publishable or legacy anon key. Secret and service-role keys must never be used in the extension.");
-    }
-    return { url: url.origin, publicKey };
-  }
+  const CONFIG = Object.freeze({
+    url: "https://ingepnogawhwgwakgpao.supabase.co",
+    publicKey: "sb_publishable_b4-FtAiz2t0qy4XnHHLVxQ_I_ZlTxRk"
+  });
 
   function start(browser, options = {}) {
     const fetcher = options.fetch || globalThis.fetch;
@@ -62,8 +47,8 @@
     }
 
     async function permitted(state) {
-      if (!state.consent || !state.config) return false;
-      if (!await browser.permissions.contains({ origins: [`${state.config.url}/*`] })) return false;
+      if (!state.consent || state.config?.url !== CONFIG.url) return false;
+      if (!await browser.permissions.contains({ origins: [`${CONFIG.url}/*`] })) return false;
       const granted = await browser.permissions.getAll();
       // Firefox 140–147 / Android 142–147 use the explicit in-page consent.
       return !Object.hasOwn(granted, "data_collection") ||
@@ -77,11 +62,11 @@
       requests.add(controller);
       const timeout = setTimeout(() => controller.abort(), 20000);
       try {
-        const response = await fetcher(`${state.config.url}${path}`, {
+        const response = await fetcher(`${CONFIG.url}${path}`, {
           method, credentials: "omit", redirect: "error", cache: "no-store", referrerPolicy: "no-referrer",
           signal: controller.signal,
           headers: {
-            apikey: state.config.publicKey, "Content-Type": "application/json",
+            apikey: CONFIG.publicKey, "Content-Type": "application/json",
             ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers
           },
           ...(body === undefined ? {} : { body: JSON.stringify(body) })
@@ -109,9 +94,9 @@
         if (epoch !== generation) throw new Error("Cloud sync stopped.");
         if (!response.ok) {
           const error = new Error(response.status === 401 ? "Your cloud session expired. Sign in again." :
-            response.status === 404 ? "Cloud sync is not set up. Apply the Supabase database migration first." :
+            response.status === 404 ? "Cloud sync is temporarily unavailable. Try again later." :
             response.status === 429 ? "Cloud sync is temporarily rate limited. It will retry later." :
-            `Cloud request failed (${response.status}). Check the Supabase setup and try again.`);
+            `Cloud request failed (${response.status}). Please try again.`);
           error.status = response.status;
           throw error;
         }
@@ -253,7 +238,7 @@
       const state = await load();
       const login = (await browser.storage.session.get(LOGIN_KEY))[LOGIN_KEY];
       return {
-        ok: true, configured: Boolean(state.config), config: state.config || { url: "", publicKey: "" },
+        ok: true, configured: true, config: CONFIG, consent: Boolean(state.consent),
         signedIn: Boolean(state.session), email: state.session && state.session.email || "",
         lastSync: state.lastSync || 0, error: state.error || "",
         pendingLogin: Boolean(login && login.expiresAt > Date.now()), accountBound: Boolean(state.owner)
@@ -271,9 +256,11 @@
       browser.alarms.create(CHANGE_ALARM, { when: Date.now() + 5000 });
     }
 
-    async function signin() {
+    async function signin(consent) {
       const state = await load();
-      if (!state.config || !await permitted(state)) throw new Error("Configure Supabase and allow cloud sync first.");
+      if (consent !== true) throw new Error("Choose whether to upload your data before enabling cloud sync.");
+      state.consent = true;
+      if (!await permitted(state)) throw new Error("Allow cloud sync permissions first.");
       if (state.session) throw new Error("You are already signed in.");
       const pending = (await browser.storage.session.get(LOGIN_KEY))[LOGIN_KEY];
       if (pending && pending.expiresAt > Date.now()) throw new Error("Complete or cancel the current Google sign-in first.");
@@ -282,8 +269,8 @@
       const verifier = encode(bytes);
       const challenge = encode(new Uint8Array(await cryptoApi.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
       const nonce = encode(cryptoApi.getRandomValues(new Uint8Array(24)));
-      const callback = `${state.config.url}${CALLBACK_PATH}?state=${nonce}`;
-      const url = new URL(`${state.config.url}/auth/v1/authorize`);
+      const callback = `${CONFIG.url}${CALLBACK_PATH}?state=${nonce}`;
+      const url = new URL(`${CONFIG.url}/auth/v1/authorize`);
       url.search = new URLSearchParams({
         provider: "google", redirect_to: callback, code_challenge: challenge,
         code_challenge_method: "s256", prompt: "select_account"
@@ -296,7 +283,7 @@
         throw new Error("Sign in from a normal Firefox window.");
       }
       await browser.storage.session.set({ [LOGIN_KEY]: {
-        tabId: tab.id, verifier, nonce, project: state.config.url, expiresAt: Date.now() + 10 * 60 * 1000
+        tabId: tab.id, verifier, nonce, project: CONFIG.url, expiresAt: Date.now() + 10 * 60 * 1000
       } });
       await save({ ...state, error: "" });
       await browser.tabs.update(tab.id, { url: url.href });
@@ -311,7 +298,7 @@
       }
       let url;
       try { url = new URL(urlValue); } catch (_error) { return; }
-      if (url.origin !== login.project || url.pathname !== CALLBACK_PATH) return;
+      if (login.project !== CONFIG.url || url.origin !== login.project || url.pathname !== CALLBACK_PATH) return;
       if (url.searchParams.get("state") !== login.nonce) throw new Error("Sign-in callback could not be verified. Try again.");
       await browser.storage.session.remove(LOGIN_KEY);
       if (url.searchParams.has("error")) throw new Error("Google sign-in was cancelled or denied. Try again.");
@@ -382,23 +369,14 @@
       if (!message || !["CLOUD_SYNC", "CLOUD_LOCAL_WRITE"].includes(message.type)) return undefined;
       if (!trusted(sender, message.type === "CLOUD_SYNC")) return Promise.resolve({ ok: false, error: "Cloud sync is available only in normal extension pages." });
       if (message.type === "CLOUD_LOCAL_WRITE") return localWrite(message).catch((error) => ({ ok: false, error: error.message }));
-      if (message.action === "status") return status();
-      if (message.action === "signout" || message.action === "configure") cancel();
+      if (message.action === "status") return ready.then(status);
+      if (message.action === "signout") cancel();
       return enqueue(async () => {
         try {
           if (message.action !== "signout") await local(() => undefined);
           let state = await load();
-          if (message.action === "configure") {
-            if (message.consent !== true) throw new Error("Choose whether to upload your data before enabling cloud sync.");
-            const next = config(message.config);
-            if (state.session) throw new Error("Sign out before changing the configuration.");
-            if (state.owner && state.owner.project !== next.url) throw new Error("This installation is linked to a different Supabase project.");
-            state = { ...state, config: next, consent: true, error: "" };
-            if (!await permitted(state)) throw new Error("Grant the requested cloud sync permissions first.");
-            await browser.storage.session.remove(LOGIN_KEY);
-            await save(state);
-          } else if (message.action === "signin") {
-            await signin();
+          if (message.action === "signin") {
+            await signin(message.consent);
           } else if (message.action === "sync") {
             if (!state.session) throw new Error("Sign in with Google first.");
             await synchronize();
@@ -444,7 +422,17 @@
     // real metadata/traffic approaches the 4 MiB snapshot ceiling.
     browser.alarms.create(ALARM, { periodInMinutes: 15 });
     const ready = background(async () => {
-      await local(() => undefined);
+      await local(async () => {
+        const state = await load();
+        if (state.config && state.config.url !== CONFIG.url || state.owner && state.owner.project !== CONFIG.url) {
+          // Recover local writes before discarding another project's tokens and merge history.
+          await browser.storage.session.remove(LOGIN_KEY);
+          await save({ config: CONFIG, consent: false,
+            error: "Cloud sync now uses AnyDownload's shared service. Review consent and sign in again to sync this device's local data." });
+        } else if (state.config?.publicKey !== CONFIG.publicKey) {
+          await save({ ...state, config: CONFIG });
+        }
+      });
       const login = (await browser.storage.session.get(LOGIN_KEY))[LOGIN_KEY];
       if (login) {
         const tab = await browser.tabs.get(login.tabId).catch(() => null);
@@ -457,5 +445,5 @@
     return { recover, ready };
   }
 
-  return { start, config, STATE_KEY, LOGIN_KEY, DATA_TYPES };
+  return { start, CONFIG, STATE_KEY, LOGIN_KEY, DATA_TYPES };
 });

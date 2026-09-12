@@ -5,7 +5,6 @@
   let status = {};
   let busy = false;
   let ready = false;
-  let configDirty = false;
   let supportsDataConsent = false;
   const dataTypes = [
     "authenticationInfo", "personallyIdentifyingInfo", "browsingActivity", "websiteActivity", "websiteContent"
@@ -19,23 +18,18 @@
   function render() {
     const connected = Boolean(status.signedIn);
     const pending = Boolean(status.pendingLogin);
-    const locked = connected || pending;
     elements["account-heading"].textContent = connected ? "Your account" : "Connect your account";
     elements["sync-status"].textContent = busy ? "Updating cloud sync…"
       : connected ? `Signed in${status.email ? ` as ${status.email}` : ""}. Changes sync automatically.`
       : pending ? "Finish Google sign-in in the opened tab. This page will update when you return."
-      : status.configured ? "Cloud sync is off. Continue with Google to connect this device."
-      : "Save your Supabase project and continue with Google to enable sync.";
+      : "Cloud sync is off. Continue with Google to connect this device.";
     const timestamp = new Date(status.lastSync || 0);
     elements["last-sync"].hidden = !status.lastSync || !Number.isFinite(timestamp.getTime());
     elements["last-sync"].textContent = `Last synced: ${timestamp.toLocaleString()}`;
     elements["account-note"].hidden = !status.accountBound;
-    elements["project-url"].disabled = !ready || busy || locked || Boolean(status.accountBound);
-    elements["public-key"].disabled = !ready || busy || locked;
     elements["sync-consent"].disabled = !ready || busy || connected || pending;
-    elements["configure-button"].disabled = !ready || busy || locked || !elements["sync-consent"].checked;
     elements["signin-button"].hidden = connected || pending;
-    elements["signin-button"].disabled = !ready || busy || !status.configured || configDirty || !elements["sync-consent"].checked;
+    elements["signin-button"].disabled = !ready || busy || !status.config || !elements["sync-consent"].checked;
     elements["sync-button"].hidden = !connected;
     elements["sync-button"].disabled = !ready || busy || !connected;
     elements["signout-button"].hidden = !connected && !pending;
@@ -46,14 +40,7 @@
 
   function applyStatus(response, initial = false) {
     status = response;
-    if (!configDirty) {
-      elements["project-url"].value = status.config && status.config.url || "";
-      elements["public-key"].value = status.config && status.config.publicKey || "";
-    }
-    if (initial) {
-      elements["sync-consent"].checked = Boolean(status.configured);
-      elements["project-details"].open = !status.configured;
-    }
+    if (initial) elements["sync-consent"].checked = Boolean(status.consent);
     render();
     showError(status.error);
   }
@@ -76,27 +63,27 @@
     const url = new URL(config.url);
     if (url.protocol !== "https:" || !/^[a-z0-9]+\.supabase\.co$/.test(url.hostname) ||
       url.username || url.password || url.port || url.pathname !== "/" || url.search || url.hash) {
-      throw new Error("Enter your HTTPS Supabase project URL, without a path or query.");
+      throw new Error("Cloud sync configuration is unavailable.");
     }
     const permissions = { origins: [`${url.origin}/*`] };
     if (supportsDataConsent) permissions.data_collection = dataTypes;
-    // Firefox requires this call to stay in the click/submit handler's direct stack.
+    // Firefox requires this call to stay in the click handler's direct stack.
     return browser.permissions.request(permissions);
   }
 
-  async function act(action, config) {
+  async function act(action) {
     if (!ready || busy) return;
     showError("");
     let permission = Promise.resolve(true);
-    if (["configure", "signin", "sync"].includes(action)) {
+    if (["signin", "sync"].includes(action)) {
       if (!elements["sync-consent"].checked) {
         showError("Agree to cloud sync above before continuing.");
         return;
       }
       try {
-        permission = permissionRequest(config || status.config);
+        permission = permissionRequest(status.config);
       } catch (_error) {
-        showError("Enter your HTTPS Supabase project URL, without a path or query, and allow access to continue.");
+        showError("Cloud sync could not request permission. Refresh this page and try again.");
         return;
       }
     }
@@ -107,14 +94,10 @@
         showError("Permission was not granted. Cloud sync remains unchanged.");
         return;
       }
-      const response = await browser.runtime.sendMessage({ type: "CLOUD_SYNC", action, config, consent: true });
+      const response = await browser.runtime.sendMessage({ type: "CLOUD_SYNC", action, consent: true });
       if (!response || !response.ok) {
         showError(response && response.error || "Cloud sync could not finish this request. Please try again.");
         return;
-      }
-      if (action === "configure") {
-        configDirty = false;
-        elements["project-details"].open = false;
       }
       applyStatus(response);
     } catch (_error) {
@@ -135,16 +118,6 @@
     const permissions = await browser.permissions.getAll();
     supportsDataConsent = Object.prototype.hasOwnProperty.call(permissions, "data_collection");
     elements["sync-card"].hidden = false;
-    elements["config-form"].addEventListener("submit", (event) => {
-      event.preventDefault();
-      act("configure", {
-        url: elements["project-url"].value.trim(),
-        publicKey: elements["public-key"].value.trim()
-      });
-    });
-    for (const id of ["project-url", "public-key"]) {
-      elements[id].addEventListener("input", () => { configDirty = true; render(); });
-    }
     elements["sync-consent"].addEventListener("change", render);
     for (const action of ["signin", "sync", "signout"]) {
       elements[`${action}-button`].addEventListener("click", () => act(action));

@@ -1,7 +1,6 @@
 "use strict";
 
-// Opt-in: use a development project and two disposable authenticated users.
-// ANYDOWNLOAD_SUPABASE_URL / ANYDOWNLOAD_SUPABASE_PUBLIC_KEY configure the project.
+// Opt-in: use two disposable authenticated users in the bundled shared project.
 // ANYDOWNLOAD_TEST_TOKEN_A / ANYDOWNLOAD_TEST_TOKEN_B are fresh user access tokens.
 // Run: node tests/cloud-sync-live-tests.cjs
 // Delete the disposable users afterwards; their synthetic sync rows cascade away.
@@ -12,10 +11,10 @@ const Core = require("../extension/shared/core.js");
 const Ledger = require("../extension/shared/download-ledger.js");
 
 async function main() {
-  const required = ["ANYDOWNLOAD_SUPABASE_URL", "ANYDOWNLOAD_SUPABASE_PUBLIC_KEY", "ANYDOWNLOAD_TEST_TOKEN_A", "ANYDOWNLOAD_TEST_TOKEN_B"];
+  const required = ["ANYDOWNLOAD_TEST_TOKEN_A", "ANYDOWNLOAD_TEST_TOKEN_B"];
   for (const name of required) assert.ok(process.env[name], `Set ${name}; use disposable development users only.`);
-  const config = Runtime.config({ url: process.env[required[0]], publicKey: process.env[required[1]] });
-  const tokens = required.slice(2).map((name) => process.env[name]);
+  const config = Runtime.CONFIG;
+  const tokens = required.map((name) => process.env[name]);
   const expirations = tokens.map((token) => {
     const claims = JSON.parse(Buffer.from(token.split(".")[1], "base64url"));
     assert.equal(claims.role, "authenticated", "Use user access tokens, never privileged credentials.");

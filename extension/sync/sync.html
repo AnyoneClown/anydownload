@@ -21,7 +21,7 @@
       <header class="page-header">
         <p class="eyebrow">One account, your devices</p>
         <h1>Cloud sync</h1>
-        <p class="subtitle">Keep your preferences and completed-download records together with Supabase.</p>
+        <p class="subtitle">Sign in with Google to keep your preferences and completed-download records together across devices.</p>
       </header>
 
       <p id="private-notice" class="card" hidden>Cloud sync is unavailable in private windows. Open AnyDownload in a normal window to connect your account.</p>
@@ -29,24 +29,11 @@
         <h2 id="account-heading">Connect your account</h2>
         <p id="sync-status" role="status" aria-live="polite">Loading sync settings…</p>
         <p id="last-sync" class="muted" hidden></p>
-        <p id="account-note" class="muted" hidden>This installation stays linked to this Google account and Supabase project after sign-out.</p>
-
-        <details id="project-details" open>
-          <summary>Supabase project</summary>
-          <p class="muted">Enter the project URL and public key supplied for your AnyDownload installation. Use the same project on every device.</p>
-          <form id="config-form">
-            <label for="project-url">Project URL</label>
-            <input id="project-url" type="url" placeholder="https://your-project.supabase.co" autocomplete="off" spellcheck="false" required maxlength="200">
-            <label for="public-key">Publishable or legacy anon key</label>
-            <input id="public-key" type="text" autocomplete="off" spellcheck="false" required maxlength="4096" aria-describedby="key-help">
-            <p id="key-help" class="muted">Use the public key from your Supabase project. Never enter a secret or service-role key.</p>
-            <button id="configure-button" type="submit" disabled>Save project</button>
-          </form>
-        </details>
+        <p id="account-note" class="muted" hidden>This installation stays linked to this Google account after sign-out.</p>
 
         <label class="consent-row">
           <input id="sync-consent" type="checkbox" disabled>
-          <span>I agree to send my Google account information, layout and background-image preferences, filters, filename templates, website ignore rules (including site names and hashed media identifiers), and completed-download records to this Supabase project to sync between my devices.</span>
+          <span>I agree to send my Google account information, layout and background-image preferences, filters, filename templates, website ignore rules (including site names and hashed media identifiers), and completed-download records to AnyDownload's cloud service, hosted on Supabase, to sync between my devices.</span>
         </label>
         <p class="muted">A local copy stays available offline. Downloaded files, destination folders, Save As preferences, active queues, galleries, trackers, and private-window data stay on this device. Signing out stops sync and keeps existing local and cloud data.</p>
         <div class="actions">

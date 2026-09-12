@@ -4,6 +4,12 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.14.1] - 2026-09-12
+
+### Fixed
+
+- All installations now use AnyDownload's shared Supabase service automatically. Cloud sync needs only consent and Google sign-in; users no longer enter a project URL or public key. Existing shared-project sessions stay connected. Old custom-project sessions stop before reconnecting, preserving local data.
+
 ## [1.14.0] - 2026-09-12
 
 ### Added

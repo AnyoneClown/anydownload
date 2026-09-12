@@ -6,8 +6,9 @@ const Runtime = require("../extension/shared/cloud-sync-runtime.js");
 const Model = require("../extension/shared/cloud-sync.js");
 const Core = require("../extension/shared/core.js");
 
-const PROJECT = "https://anydownloadtest.supabase.co";
-const CONFIG = { url: PROJECT, publicKey: "sb_publishable_test_public_key_12345" };
+const PROJECT = "https://ingepnogawhwgwakgpao.supabase.co";
+const CONFIG = { url: PROJECT, publicKey: "sb_publishable_b4-FtAiz2t0qy4XnHHLVxQ_I_ZlTxRk" };
+const OTHER_PROJECT = "https://otherproject.supabase.co";
 const USER = "11111111-1111-4111-8111-111111111111";
 const OTHER_USER = "22222222-2222-4222-8222-222222222222";
 const STATE = "cloudSync:v1";
@@ -89,6 +90,8 @@ function harness({ stored = {}, session = {}, fetch: handler } = {}) {
     crypto: webcrypto,
     withStorageLock(callback) { const work = lock.catch(() => undefined).then(callback); lock = work; return work; },
     async fetch(url, options) {
+      assert.equal(new URL(url).origin, PROJECT, "Every runtime request must use the shipped project");
+      assert.equal(options.headers.apikey, CONFIG.publicKey, "Every runtime request must use the shipped public key");
       const call = { url, ...options, body: options.body === undefined ? undefined : JSON.parse(options.body) };
       calls.push(call);
       if (handler) return handler(call, { local, temporary, browser, calls });
@@ -108,8 +111,7 @@ function harness({ stored = {}, session = {}, fetch: handler } = {}) {
 
 async function beginLogin(h) {
   await h.runtime.ready;
-  assert.equal((await h.message("configure", { consent: true, config: CONFIG })).ok, true);
-  assert.equal((await h.message("signin")).ok, true);
+  assert.equal((await h.message("signin", { consent: true })).ok, true);
   return clone(h.temporary[LOGIN]);
 }
 
@@ -120,35 +122,95 @@ function callbackUrl(login) {
 async function consentAndTrust() {
   const h = harness();
   await h.runtime.ready;
+  assert.deepEqual(Runtime.CONFIG, CONFIG);
+  assert.equal(Object.isFrozen(Runtime.CONFIG), true);
+  const status = await h.message("status");
+  assert.equal(status.configured, true);
+  assert.deepEqual(status.config, CONFIG);
+  assert.equal(status.consent, false);
   await h.browser.alarms.onAlarm.emit({ name: "anydownload-cloud-sync" });
   assert.equal((await h.message("signin")).ok, false);
-  assert.equal((await h.message("configure", { config: CONFIG })).ok, false);
+  assert.equal((await h.message("configure", { consent: true, config: CONFIG })).ok, false);
   assert.equal(h.calls.length, 0);
   assert.equal(h.tabs.size, 0);
-  const serviceRole = `${Buffer.from('{"alg":"HS256"}').toString("base64url")}.${Buffer.from('{"role":"service_role"}').toString("base64url")}.signature`;
-  for (const publicKey of ["sb_secret_test_secret_key_12345", serviceRole, "invalid-key"]) {
-    assert.equal((await h.message("configure", { consent: true, config: { ...CONFIG, publicKey } })).ok, false);
-  }
-  for (const url of ["http://anydownloadtest.supabase.co", `${PROJECT}/path`, "https://anydownloadtest.supabase.co.evil.test", `${PROJECT}/?secret=1`]) {
-    assert.equal((await h.message("configure", { consent: true, config: { ...CONFIG, url } })).ok, false);
-  }
   for (const sender of [h.sender("sync/sync.html", { id: "other@extension" }), h.sender("sync/sync.html", { url: "https://evil.test/sync/sync.html" }), h.sender("popup/popup.html"), h.sender("sync/sync.html", { tab: { incognito: true } })]) {
-    assert.equal((await h.message("configure", { consent: true, config: CONFIG }, sender)).ok, false);
+    assert.equal((await h.message("signin", { consent: true }, sender)).ok, false);
   }
   assert.equal((await h.write({ includeBackgrounds: true }, h.sender("popup/popup.html", { tab: { incognito: true } }))).ok, false);
   assert.equal((await h.write({ "cloudSync:v1": signedState() })).ok, false);
+  h.permissions.origins = false;
+  assert.equal((await h.message("signin", { consent: true })).ok, false);
+  h.permissions.origins = true;
   h.permissions.data = [];
-  assert.equal((await h.message("configure", { consent: true, config: CONFIG })).ok, false);
+  assert.equal((await h.message("signin", { consent: true })).ok, false);
+  assert.equal((await h.message("status")).consent, false, "Denied permissions cannot enable sync");
+  assert.equal(h.tabs.size, 0);
   h.permissions.data = undefined; // Firefox versions before data_collection permission support.
-  assert.equal((await h.message("configure", { consent: true, config: CONFIG })).ok, true);
+  assert.equal((await h.message("signin", {
+    consent: true, config: { url: OTHER_PROJECT, publicKey: "sb_publishable_ignored_override" }
+  })).ok, true);
+  const login = clone(h.temporary[LOGIN]);
+  assert.equal(new URL(h.tabs.get(login.tabId).url).origin, PROJECT, "Message configuration cannot redirect Google sign-in");
+  assert.deepEqual(h.local[STATE].config, CONFIG);
   assert.equal((await h.message("sync")).ok, false);
-  assert.equal(h.calls.length, 0, "Configuration does not contact the cloud or upload before sign-in");
+  assert.equal(h.calls.length, 0, "No account data is requested or uploaded before sign-in completes");
   assert.equal(h.local.includeBackgrounds, undefined);
+  await h.callback(callbackUrl(login));
+  assert.equal(h.local[STATE].session.userId, USER);
+  assert.equal((await h.message("signout")).ok, true);
+  assert.equal((await h.message("signin")).ok, false, "Stored consent does not bypass consent on a new sign-in request");
 
   const noConsent = harness({ stored: { [STATE]: signedState({ consent: false, lastSync: 0 }) } });
   await noConsent.runtime.ready;
   await noConsent.browser.alarms.onAlarm.emit({ name: "anydownload-cloud-sync" });
   assert.equal(noConsent.calls.length, 0, "A stored session never overrides withdrawn consent");
+}
+
+async function sharedProjectMigration() {
+  const base = { includeBackgrounds: true, mediaLayout: "list" };
+  const saved = signedState({
+    config: { url: PROJECT, publicKey: "sb_publishable_previous_public_key" }, base, revision: 7
+  });
+  const existing = harness({ stored: { ...base, [STATE]: saved }, fetch: () => response([{ revision: 7 }]) });
+  await existing.runtime.ready;
+  assert.deepEqual(existing.local[STATE], { ...saved, config: CONFIG }, "Shared-project upgrades retain session, account binding and sync history");
+  assert.equal(existing.calls.length, 0);
+  assert.equal((await existing.message("sync")).ok, true);
+  assert.equal(existing.calls.length, 1);
+
+  const target = { mediaLayout: "list" };
+  for (const mismatch of ["config", "owner", "journal"]) {
+    const old = signedState({
+      config: { url: mismatch === "owner" ? PROJECT : OTHER_PROJECT, publicKey: "sb_publishable_previous_public_key" },
+      owner: { userId: USER, project: mismatch === "config" ? PROJECT : OTHER_PROJECT }, base, revision: 9, lastSync: 0,
+      ...(mismatch === "journal" ? { journal: { target, remote: target } } : {})
+    });
+    const pending = { tabId: 23, project: OTHER_PROJECT, nonce: "old-nonce", verifier: "old-verifier", expiresAt: Date.now() + 60000 };
+    const h = harness({
+      stored: { ...base, destinationFolder: "device/path", [STATE]: old },
+      session: { [LOGIN]: pending, [PRIVATE_IGNORE]: 100 }
+    });
+    h.tabs.set(pending.tabId, { id: pending.tabId, url: callbackUrl(pending), incognito: false });
+    await h.runtime.ready;
+    const migrated = h.local[STATE];
+    assert.deepEqual(migrated.config, CONFIG);
+    assert.equal(migrated.consent, false);
+    assert.equal(Boolean(migrated.session), false);
+    assert.equal(Boolean(migrated.owner), false);
+    assert.deepEqual(migrated.base || {}, {});
+    assert.equal(migrated.revision || 0, 0);
+    assert.equal(Boolean(migrated.journal), false);
+    assert.ok(migrated.error, "Changing the cloud destination requires an explanatory notice");
+    assert.deepEqual(Model.snapshot(h.local), mismatch === "journal" ? target : base, "Migration retains local data and completes interrupted writes");
+    assert.equal(h.local.destinationFolder, "device/path");
+    assert.equal(h.temporary[PRIVATE_IGNORE], 100);
+    assert.equal(h.temporary[LOGIN], undefined, "A login started for the old project cannot resume after migration");
+    await h.browser.alarms.onAlarm.emit({ name: "anydownload-cloud-sync" });
+    assert.equal((await h.message("signin")).ok, false);
+    assert.equal(h.calls.length, 0, "Migration never sends the old session or local data to either project");
+    assert.equal((await h.message("signin", { consent: true })).ok, true);
+    assert.equal(h.temporary[LOGIN].project, PROJECT);
+  }
 }
 
 async function authentication() {
@@ -340,6 +402,6 @@ async function journalRecovery() {
 }
 
 (async () => {
-  for (const check of [consentAndTrust, authentication, refreshAndOwnership, syncConflictsAndConcurrentEdits, revokedPermissions, journalRecovery]) await check();
+  for (const check of [consentAndTrust, sharedProjectMigration, authentication, refreshAndOwnership, syncConflictsAndConcurrentEdits, revokedPermissions, journalRecovery]) await check();
   console.log("Cloud sync runtime tests passed.");
 })().catch((error) => { console.error(error); process.exitCode = 1; });
