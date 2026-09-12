@@ -641,14 +641,11 @@
   const launchUrl = globalScope.location && globalScope.location.href;
   const launchSourceTabId = sourceTabIdFromUrl(launchUrl);
   const launchOptions = launchOptionsFromUrl(launchUrl);
-  const managerWindowMode = Number.isInteger(launchSourceTabId);
+  const managerTabMode = Number.isInteger(launchSourceTabId);
   const sidebarMode = launchOptions.sidebar;
   const editTrackerId = new URL(launchUrl).searchParams.get("editTrackerId");
-  const responsiveSurface = managerWindowMode || sidebarMode || Boolean(editTrackerId);
+  const responsiveSurface = managerTabMode || sidebarMode || Boolean(editTrackerId);
 
-  if (managerWindowMode) {
-    document.documentElement.classList.add("manager-window");
-  }
   if (sidebarMode) {
     document.documentElement.classList.add("sidebar-panel");
   }
@@ -689,7 +686,6 @@
 
   const state = {
     images: [],
-    collectionScope: "site",
     showSelected: false,
     galleryPage: 0,
     sort: "page",
@@ -759,8 +755,6 @@
   let previewItems = [];
   let previewIndex = 0;
   let previewOpener = null;
-  let pageMediaContext = "";
-  const pageMediaKeys = new Set();
 
   function markFilenamePreviewsDirty() {
     filenamePreviewsDirty = true;
@@ -791,8 +785,8 @@
 
   function cacheElements() {
     const ids = [
-      "collection-scope-select", "gallery-undo", "undo-clear-button",
-      "page-tools-panel", "editor-source-link",
+      "gallery-undo", "undo-clear-button",
+      "editor-source-link",
       "gallery-pagination", "previous-page-button", "next-page-button", "pagination-label",
       "min-width-input", "min-height-input", "orientation-filter-select", "sort-select",
       "selection-warning", "back-to-collection-button",
@@ -809,7 +803,6 @@
       "clear-gallery-button",
       "collect-gallery-button",
       "stop-gallery-button",
-      "gallery-pages-select",
       "gallery-status",
       "download-button",
       "download-settings-panel",
@@ -834,7 +827,6 @@
       "instagram-collections-button",
       "media-type-filter-select",
       "notice",
-      "open-window-button",
       "page-label",
       "photos-only-input",
       "queue-badge",
@@ -842,7 +834,6 @@
       "select-all-button",
       "select-none-button",
       "selected-label",
-      "sidebar-button",
       "sidebar-follow-button",
       "smart-filter-panel",
       "smart-filters-button",
@@ -1807,7 +1798,7 @@
     if (Number.isSafeInteger(requestedTabId)) {
       return browser.tabs.get(requestedTabId);
     }
-    if ((managerWindowMode || pinnedSource) && Number.isInteger(state.sourceTabId)) {
+    if ((managerTabMode || pinnedSource) && Number.isInteger(state.sourceTabId)) {
       return browser.tabs.get(state.sourceTabId);
     }
 
@@ -1819,61 +1810,6 @@
     }
     const tabs = await browser.tabs.query(query);
     return tabs[0] || null;
-  }
-
-  function updateOpenWindowButton() {
-    const button = elements["open-window-button"];
-    if (!button) {
-      return;
-    }
-    button.hidden = managerWindowMode;
-    button.disabled = managerWindowMode || state.busy || !Number.isInteger(state.sourceTabId);
-  }
-
-  async function openManagerWindow() {
-    if (managerWindowMode || !Number.isInteger(state.sourceTabId)) {
-      setNotice("Wait for the current page scan before opening the large window.", "error");
-      return;
-    }
-
-    const button = elements["open-window-button"];
-    button.disabled = true;
-    try {
-      const result = await browser.runtime.sendMessage({
-        type: "OPEN_MANAGER_WINDOW",
-        sourceTabId: state.sourceTabId
-      });
-      if (!result || !result.ok) {
-        throw new Error((result && result.error) || "Firefox could not open the large window.");
-      }
-      if (sidebarMode) {
-        setNotice("Opened the resizable media window.", "success");
-      } else {
-        globalScope.close();
-      }
-    } catch (error) {
-      setNotice(error && error.message ? error.message : String(error), "error");
-      button.disabled = false;
-    }
-  }
-
-  function openFirefoxSidebar() {
-    const button = elements["sidebar-button"];
-    if (!browser.sidebarAction || typeof browser.sidebarAction.open !== "function") {
-      button.hidden = true;
-      return;
-    }
-
-    try {
-      const opening = browser.sidebarAction.open();
-      Promise.resolve(opening).then(() => {
-        globalScope.close();
-      }).catch((error) => {
-        setNotice(`Firefox could not open the sidebar: ${error.message || error}`, "error");
-      });
-    } catch (error) {
-      setNotice(`Firefox could not open the sidebar: ${error.message || error}`, "error");
-    }
   }
 
   function validIgnoredKey(value) {
@@ -2701,12 +2637,10 @@
   }
 
   function filteredImages() {
-    updatePageMedia();
     if (state.showSelected) return sortImages(selectedDownloadableImages());
     const query = elements["filter-input"].value.trim().toLocaleLowerCase();
     const inCurrentView = state.images.filter((image) =>
       isImageIgnored(image) === state.showIgnored &&
-      (state.collectionScope !== "page" || pageMediaKeys.has(mediaIdentityKey(image))) &&
       (!state.hideDownloaded || state.showIgnored || downloadStatusFor(image) !== "downloaded") &&
       imageMatchesSmartFilters(image) &&
       imageMatchesInstagramCollectionFilter(image)
@@ -2720,26 +2654,6 @@
     }));
   }
 
-  function updatePageMedia(discovered = []) {
-    const pageUrl = Gallery.pageUrl(state.pageUrl);
-    const context = JSON.stringify([state.incognito, state.siteKey, state.sourceTabId, pageUrl]);
-    if (context !== pageMediaContext) {
-      pageMediaContext = context;
-      pageMediaKeys.clear();
-    }
-    const available = new Set(state.images.map(mediaIdentityKey));
-    for (const key of pageMediaKeys) {
-      if (!available.has(key)) pageMediaKeys.delete(key);
-    }
-    // Keep this tab's discoveries when another manager updates a shared record's
-    // source attribution. Restored records still fall back to their saved page.
-    for (const image of [...state.images.filter((item) =>
-      pageUrl && Gallery.pageUrl(item.pageUrl || state.pageUrl) === pageUrl), ...discovered]) {
-      const key = mediaIdentityKey(image);
-      if (available.has(key)) pageMediaKeys.add(key);
-    }
-  }
-
   function sortImages(images) {
     if (state.sort === "name") images.sort((a, b) => baseFilenameForMedia(a, 0).localeCompare(baseFilenameForMedia(b, 0), undefined, { numeric: true }));
     if (state.sort === "resolution") images.sort((a, b) => (b.width || 0) * (b.height || 0) - (a.width || 0) * (a.height || 0));
@@ -2747,7 +2661,7 @@
   }
 
   function hasCollectionFilter() {
-    return Boolean(elements["filter-input"].value.trim()) || state.collectionScope === "page" || state.showSelected ||
+    return Boolean(elements["filter-input"].value.trim()) || state.showSelected ||
       (!state.showIgnored && (state.hideDownloaded || Filters.hasActiveSmartFilters(state.smartFilters) || state.instagramCollectionFilter !== "all"));
   }
 
@@ -2761,8 +2675,6 @@
     state.showSelected = false;
     state.galleryPage = 0;
     clearedGallery = null;
-    pageMediaKeys.clear();
-    pageMediaContext = "";
     elements["gallery-undo"].hidden = true;
     if (elements["media-preview-dialog"].open) elements["media-preview-dialog"].close();
   }
@@ -3079,7 +2991,7 @@
     updateInstagramCollectionsButton();
     elements["image-list"].setAttribute(
       "aria-label",
-      state.showSelected ? "Selected media" : state.showIgnored ? "Ignored media" : state.collectionScope === "page" ? "Media from this page" : "Saved website media"
+      state.showSelected ? "Selected media" : state.showIgnored ? "Ignored media" : "Saved media from this website"
     );
     if (elements["media-preview-dialog"].open) {
       const image = currentPreviewImage();
@@ -3287,8 +3199,6 @@
     state.hideDownloaded = false;
     state.instagramCollectionFilter = "all";
     state.showSelected = false;
-    state.collectionScope = "site";
-    elements["collection-scope-select"].value = "site";
     elements["instagram-collection-filter-select"].value = "all";
     applySmartFiltersToControls(Filters.DEFAULT_FILTERS);
     handleSmartFilterChange();
@@ -3425,7 +3335,7 @@
       } else {
         detail.textContent = state.images.length
           ? "Try a different search or clear your filters to see more of your collection."
-          : "Scroll the source page to load more images and videos, or use Collect gallery to find them automatically.";
+          : "Scroll the source page to load more images and videos, or use Find more media to scan automatically.";
       }
       empty.append(title, detail);
       if (hasCollectionFilter() && !state.showSelected) {
@@ -3465,7 +3375,6 @@
     elements["collect-gallery-button"].hidden = collecting;
     elements["collect-gallery-button"].disabled = state.busy || !state.siteKey || !Number.isInteger(state.sourceTabId);
     elements["stop-gallery-button"].hidden = !collecting;
-    elements["gallery-pages-select"].disabled = collecting;
     elements["clear-gallery-button"].disabled = collecting || state.busy || !state.images.length;
     elements["gallery-undo"].hidden = !clearedGallery || clearedGallery.context !== galleryContext || clearedGallery.epoch !== galleryContext.epoch;
     elements["undo-clear-button"].disabled = collecting || state.busy;
@@ -3560,7 +3469,6 @@
       stopLiveCapture();
       sourcePageGeneration += 1;
       state.images = [];
-      pageMediaKeys.clear();
       state.selected.clear();
       context.sent.clear();
       context.epoch = gallery.epoch;
@@ -3641,8 +3549,6 @@
     stopLiveCapture();
     const records = state.images.map(savedRecord).filter(Boolean);
     const explicitRedownloads = new Set(state.explicitRedownloads);
-    updatePageMedia();
-    const pageMembership = { context: pageMediaContext, keys: new Set(pageMediaKeys) };
     state.busy = true;
     updateSummary();
     await saveCurrentGallery();
@@ -3655,8 +3561,8 @@
       }
       if (galleryContext === context) {
         applySavedGallery(result.gallery);
-        clearedGallery = { context, epoch: result.gallery.epoch, records, explicitRedownloads, pageMembership };
-        if (elements["page-tools-panel"].matches(":popover-open")) elements["page-tools-panel"].hidePopover();
+        clearedGallery = { context, epoch: result.gallery.epoch, records, explicitRedownloads };
+        closeMediaFilters();
         setNotice(`Saved media for ${hostFromUrl(context.siteKey)} cleared. Downloaded files and history are kept.`);
       }
     } catch (error) {
@@ -3684,10 +3590,6 @@
         throw new Error("This collection was cleared again in another window. The older collection was not restored.");
       }
       state.explicitRedownloads = new Set(undo.explicitRedownloads);
-      updatePageMedia();
-      if (pageMediaContext === undo.pageMembership.context) {
-        for (const key of undo.pageMembership.keys) pageMediaKeys.add(key);
-      }
       applySavedGallery(result.gallery);
       clearedGallery = null;
       setNotice("Website collection and selections restored.", "success");
@@ -3714,7 +3616,7 @@
     if (galleryCollection) {
       galleryCollection.stopped = true;
       galleryCollection.wake?.();
-      elements["gallery-status"].textContent = "Stopping collection; collected media will be kept…";
+      elements["gallery-status"].textContent = "Stopping scan; media already found will be kept…";
     }
   }
 
@@ -3725,11 +3627,10 @@
     if (!responsiveSurface) {
       await saveCurrentGallery();
       const result = await browser.runtime.sendMessage({
-        type: "OPEN_MANAGER_WINDOW", sourceTabId: state.sourceTabId, collectGallery: true,
-        galleryPages: Number(elements["gallery-pages-select"].value)
+        type: "OPEN_MANAGER_TAB", sourceTabId: state.sourceTabId, collectGallery: true
       });
       if (!result || !result.ok) {
-        setNotice(result && result.error || "Firefox could not open the collection window.", "error");
+        setNotice(result && result.error || "Firefox could not open the media tab.", "error");
       }
       return;
     }
@@ -3781,7 +3682,7 @@
         moreClicks += Number(Boolean(position.clickedMore));
         stable = !position.clickedMore && position.bottom && marker === lastPosition && state.images.length === before ? stable + 1 : 0;
         lastPosition = marker;
-        elements["gallery-status"].textContent = `Collecting ${hostFromUrl(run.url)} · ${state.images.length.toLocaleString()} media · scrolling page 1`;
+        elements["gallery-status"].textContent = `Scanning ${hostFromUrl(run.url)} · ${state.images.length.toLocaleString()} media · scrolling page 1`;
         if (stable >= 4) {
           exhaustedSteps = false;
           break;
@@ -3798,11 +3699,11 @@
       let nextUrl = nextLinks.filter((value) => typeof value === "string" && value.trim()).map((value) => {
         try { return Gallery.pageUrl(new URL(value, run.url).href); } catch (_error) { return ""; }
       }).find((url) => url && Core.siteKeyForUrl(url) === state.siteKey && !visited.has(url));
-      const maxPages = Math.min(Gallery.MAX_PAGES, Number(elements["gallery-pages-select"].value) || 1);
+      const maxPages = Gallery.MAX_PAGES;
       let fetchedBytes = 0;
       while (current() && nextUrl && run.pages < maxPages && !limitReached()) {
         visited.add(nextUrl);
-        elements["gallery-status"].textContent = `Collecting page ${run.pages + 1} · ${state.images.length.toLocaleString()} media`;
+        elements["gallery-status"].textContent = `Scanning page ${run.pages + 1} · ${state.images.length.toLocaleString()} media`;
         const results = await browser.scripting.executeScript({
           target: { tabId: run.tabId }, func: Gallery.fetchPage, args: [nextUrl, run.url]
         });
@@ -3859,7 +3760,7 @@
         updateGalleryControls();
         if (run.generation === sourcePageGeneration && run.tabId === state.sourceTabId) {
           await saveCurrentGallery();
-          setNotice(`${run.stopped ? "Collection stopped." : reason} Kept ${state.images.length.toLocaleString()} media from ${run.pages} page${run.pages === 1 ? "" : "s"}. Review the selection, then download.`);
+          setNotice(`${run.stopped ? "Scan stopped." : reason} Kept ${state.images.length.toLocaleString()} media from ${run.pages} page${run.pages === 1 ? "" : "s"}. Review the selection, then download.`);
           await refreshDownloadStatuses().catch(() => undefined);
           await startLiveCapture({ skipInitialScan: true, quiet: true });
         }
@@ -3893,7 +3794,6 @@
     let succeeded = false;
     state.liveScanning = Boolean(settings.live);
     state.busy = true;
-    updateOpenWindowButton();
     if (!settings.preserveSelection && !state.images.length) {
       elements["page-label"].textContent = "Scanning the current page…";
     }
@@ -4238,7 +4138,6 @@
       state.scanWarnings = merged.warnings;
       state.pageTitle = merged.page.pageTitle || "";
       state.pageUrl = merged.page.pageUrl || "";
-      updatePageMedia(discoveredImages);
       state.instagramCollectionMode = Boolean(
         instagramCollectionSucceeded ||
         (preserveThisPage && previousInstagramCollectionMode) ||
@@ -4333,7 +4232,6 @@
     } finally {
       state.liveScanning = false;
       state.busy = false;
-      updateOpenWindowButton();
       renderImages();
       if (succeeded) {
         await saveCurrentGallery();
@@ -5227,11 +5125,6 @@
   }
 
   function wireEvents() {
-    elements["collection-scope-select"].addEventListener("change", () => {
-      state.collectionScope = elements["collection-scope-select"].value === "page" ? "page" : "site";
-      state.showSelected = false;
-      resetGalleryPage();
-    });
     elements["sort-select"].addEventListener("change", () => {
       state.sort = ["name", "resolution"].includes(elements["sort-select"].value) ? elements["sort-select"].value : "page";
       resetGalleryPage();
@@ -5303,30 +5196,20 @@
       stopGalleryCollection();
       saveCurrentGallery();
     });
-    elements["open-window-button"].addEventListener("click", openManagerWindow);
-    elements["sidebar-button"].addEventListener("click", openFirefoxSidebar);
     elements["history-button"].addEventListener("click", openDownloadHistory);
     elements["tracking-dashboard-button"].addEventListener("click", openTrackingDashboard);
     elements["sync-button"].addEventListener("click", openCloudSync);
     elements["integrations-button"].addEventListener("click", openIntegrations);
-    elements["tracker-button"].addEventListener("click", (event) => {
-      event.preventDefault();
-      if (elements["page-tools-panel"].matches(":popover-open") && !elements["tracker-panel"].hidden) {
-        elements["page-tools-panel"].hidePopover();
-        return;
+    elements["tracker-panel"].addEventListener("toggle", () => {
+      const open = elements["tracker-panel"].matches(":popover-open");
+      elements["tracker-button"].setAttribute("aria-expanded", String(open));
+      if (open) {
+        elements["tracker-interval-select"].focus();
+        refreshTrackerStatus(true).catch((error) => {
+          elements["tracker-status"].textContent = error && error.message ? error.message : String(error);
+          elements["tracker-status"].classList.add("error");
+        });
       }
-      elements["tracker-panel"].hidden = false;
-      elements["page-tools-panel"].showPopover();
-      elements["tracker-button"].setAttribute("aria-expanded", "true");
-      elements["tracker-interval-select"].focus();
-      refreshTrackerStatus(true).catch((error) => {
-        elements["tracker-status"].textContent = error && error.message ? error.message : String(error);
-        elements["tracker-status"].classList.add("error");
-      });
-    });
-    elements["page-tools-panel"].addEventListener("toggle", () => {
-      const open = elements["page-tools-panel"].matches(":popover-open");
-      elements["tracker-button"].setAttribute("aria-expanded", String(open && !elements["tracker-panel"].hidden));
     });
     elements["tracker-save-button"].addEventListener("click", saveTracker);
     elements["tracker-action-select"].addEventListener("change", updateTrackerActionFields);
@@ -5488,8 +5371,7 @@
     populateTrackerControls(tracker);
     updateTrackerUi();
     updateSmartFilterButton();
-    elements["page-tools-panel"].removeAttribute("popover");
-    elements["tracker-panel"].hidden = false;
+    elements["tracker-panel"].removeAttribute("popover");
     elements["tracker-button"].setAttribute("aria-expanded", "true");
     elements["action-detail"].textContent = `Downloads/${tracker.folder}`;
     updateFilenameTemplateUi();
@@ -5501,11 +5383,7 @@
     applySmartFiltersToControls(Filters.DEFAULT_FILTERS);
     elements["filename-template-input"].value = Templates.DEFAULT_TEMPLATE;
     updateFilenameTemplateUi();
-    elements["sidebar-button"].hidden = responsiveSurface ||
-      !browser.sidebarAction ||
-      typeof browser.sidebarAction.open !== "function";
     updateSidebarFollowButton();
-    updateOpenWindowButton();
     updateSmartFilterButton();
     updateInstagramCollectionFilterUi();
     updateTrackerUi();
@@ -5553,7 +5431,6 @@
     try {
       const platform = await browser.runtime.getPlatformInfo();
       if (platform.os === "android") {
-        elements["sidebar-button"].hidden = true;
         elements["ask-single-input"].checked = false;
         elements["ask-single-input"].disabled = true;
         elements["ask-single-input"].closest("label").title = "Firefox for Android does not support the Save As option.";
@@ -5573,10 +5450,6 @@
     if (scanned) {
       await startLiveCapture({ skipInitialScan: true, quiet: true });
       if (new URL(launchUrl).searchParams.get("collect") === "1") {
-        const pages = new URL(launchUrl).searchParams.get("pages");
-        if (["1", "3", "10"].includes(pages)) {
-          elements["gallery-pages-select"].value = pages;
-        }
         await collectGallery();
       }
     }

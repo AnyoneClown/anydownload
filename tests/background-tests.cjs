@@ -36,9 +36,6 @@ function storageArea(initial = {}) {
   const downloadRequests = [];
   const createdTabs = [];
   const updatedTabs = [];
-  const createdWindows = [];
-  const updatedWindows = [];
-  const liveWindows = new Map();
   const managerTabs = new Map();
   const sourceTabs = new Map();
   const tabGets = [];
@@ -61,8 +58,6 @@ function storageArea(initial = {}) {
   let actionClicked = null;
   let installed = null;
   let runtimeMessage = null;
-  let rejectWindowCreates = false;
-  let nextWindowId = 81;
   let nextManagerTabId = 181;
   let nextUuid = 1;
   let nextTimer = 1;
@@ -355,7 +350,7 @@ function storageArea(initial = {}) {
     tabs: {
       async get(tabId) {
         tabGets.push(tabId);
-        const tab = sourceTabs.get(tabId);
+        const tab = sourceTabs.get(tabId) || managerTabs.get(tabId);
         if (!tab) {
           throw new Error("Source tab is stale");
         }
@@ -363,49 +358,22 @@ function storageArea(initial = {}) {
       },
       async create(details) {
         createdTabs.push(details);
-        return { id: 52, ...details };
+        const tab = {
+          id: nextManagerTabId++, ...details,
+          incognito: [...sourceTabs.values()].some((sourceTab) =>
+            sourceTab.windowId === details.windowId && sourceTab.incognito)
+        };
+        managerTabs.set(tab.id, tab);
+        return tab;
       },
       async update(tabId, details) {
-        const windowId = managerTabs.get(tabId);
-        if (!Number.isInteger(windowId) || !liveWindows.has(windowId)) {
+        const tab = managerTabs.get(tabId);
+        if (!tab) {
           throw new Error("Manager tab is stale");
         }
         updatedTabs.push({ tabId, details });
-        return { id: tabId, windowId, ...details };
-      }
-    },
-    windows: {
-      async create(details) {
-        createdWindows.push(details);
-        if (rejectWindowCreates) {
-          throw new Error("Popup windows are unavailable");
-        }
-        const windowId = nextWindowId++;
-        const tabId = nextManagerTabId++;
-        const managerWindow = {
-          id: windowId,
-          incognito: Boolean(details.incognito),
-          type: details.type,
-          tabs: [{ id: tabId, windowId }]
-        };
-        liveWindows.set(windowId, managerWindow);
-        managerTabs.set(tabId, windowId);
-        return managerWindow;
-      },
-      async get(windowId) {
-        const managerWindow = liveWindows.get(windowId);
-        if (!managerWindow) {
-          throw new Error("Manager window is stale");
-        }
-        return managerWindow;
-      },
-      async update(windowId, details) {
-        const managerWindow = liveWindows.get(windowId);
-        if (!managerWindow) {
-          throw new Error("Manager window is stale");
-        }
-        updatedWindows.push({ windowId, details });
-        return { ...managerWindow, ...details };
+        Object.assign(tab, details);
+        return tab;
       }
     }
   };
@@ -446,7 +414,7 @@ function storageArea(initial = {}) {
   vm.runInNewContext(source, sandbox, { filename: "background.js" });
 
   assert.equal(manifest.action.default_popup, "popup/popup.html", "Toolbar clicks must open the compact popup");
-  assert.doesNotMatch(source, /browser\.action\.openPopup/, "The resizable window must replace action.openPopup");
+  assert.doesNotMatch(source, /browser\.windows\./, "Media lists must use normal browser tabs");
   assert.equal(menuEntries.length, 0, "MV3 menus must be created from runtime.onInstalled");
   assert.equal(typeof installed, "function");
   await installed();
@@ -644,33 +612,31 @@ function storageArea(initial = {}) {
   );
   assert.ok(badgeCalls.some((call) => call.type === "text" && call.details.text === "!"));
 
+  const tabsBeforeManager = createdTabs.length;
   const openResult = await runtimeMessage({
-    type: "OPEN_MANAGER_WINDOW",
+    type: "OPEN_MANAGER_TAB",
     sourceTabId: tab.id
   });
   assert.equal(openResult.ok, true);
   assert.deepEqual(tabGets, [41]);
-  assert.equal(createdWindows.length, 1);
-  assert.equal(createdWindows[0].type, "popup");
-  assert.equal(createdWindows[0].width, 800);
-  assert.equal(createdWindows[0].height, 720);
-  assert.equal(createdWindows[0].focused, true);
-  assert.equal(createdWindows[0].incognito, false);
-  const firstManagerUrl = new URL(createdWindows[0].url);
+  assert.equal(createdTabs.length, tabsBeforeManager + 1);
+  const firstManagerTab = createdTabs[tabsBeforeManager];
+  assert.equal(firstManagerTab.active, true);
+  assert.equal(firstManagerTab.windowId, 7);
+  const firstManagerUrl = new URL(firstManagerTab.url);
   assert.equal(firstManagerUrl.pathname, "/popup/popup.html");
   assert.equal(firstManagerUrl.searchParams.get("sourceTabId"), "41");
   assert.ok(firstManagerUrl.searchParams.get("launch"));
   assert.deepEqual([...firstManagerUrl.searchParams.keys()].sort(), ["launch", "sourceTabId"]);
-  assert.ok(!createdWindows[0].url.includes("example.test"), "Manager URLs must not expose source page data");
-  const normalManager = session.data["imageManagerWindow:normal"];
-  assert.equal(normalManager.incognito, false);
-  assert.equal(normalManager.windowId, 81);
-  assert.equal(normalManager.tabId, 181);
+  assert.ok(!firstManagerTab.url.includes("example.test"), "Manager URLs must not expose source page data");
+  const normalManager = session.data["imageManagerTab:normal"];
+  assert.equal(normalManager.tabId, openResult.tabId);
 
   await menuClicked({ ...contextInfo, menuItemId: "anydownload-open-popup" }, tab);
-  assert.equal(createdWindows.length, 1, "The context menu must reuse the normal manager window");
+  assert.equal(createdTabs.length, tabsBeforeManager + 1, "The context menu must reuse the current window's media tab");
   assert.equal(updatedTabs.length, 1);
   assert.equal(updatedTabs[0].tabId, normalManager.tabId);
+  assert.equal(updatedTabs[0].details.active, true);
   const reusedManagerUrl = new URL(updatedTabs[0].details.url);
   assert.equal(reusedManagerUrl.searchParams.get("sourceTabId"), "41");
   assert.notEqual(
@@ -678,35 +644,21 @@ function storageArea(initial = {}) {
     firstManagerUrl.searchParams.get("launch"),
     "Every launch must reload the manager with a unique URL"
   );
-  assert.equal(updatedWindows[0].windowId, normalManager.windowId);
-  assert.equal(updatedWindows[0].details.focused, true);
-  assert.equal(updatedWindows[0].details.width, undefined, "Reusing a manager must preserve user-resized bounds");
   assert.ok(badgeCalls.some((call) => call.type === "text" && call.details.text === "✓"));
 
   const reopenedResult = await runtimeMessage({
-    type: "OPEN_MANAGER_WINDOW",
-    sourceTabId: tab.id
+    type: "OPEN_MANAGER_TAB",
+    sourceTabId: tab.id,
+    collectGallery: true
   });
   assert.equal(reopenedResult.ok, true);
   assert.equal(reopenedResult.reused, true);
-  assert.equal(createdWindows.length, 1, "Opening again must reuse an existing manager window");
-  assert.equal(updatedTabs.length, 2);
-  assert.equal(updatedTabs[1].tabId, normalManager.tabId);
+  assert.equal(createdTabs.length, tabsBeforeManager + 1);
   const reopenedManagerUrl = new URL(updatedTabs[1].details.url);
   assert.equal(reopenedManagerUrl.searchParams.get("sourceTabId"), "41");
-  assert.equal(reopenedManagerUrl.searchParams.get("live"), null);
-  assert.deepEqual(
-    [...reopenedManagerUrl.searchParams.keys()].sort(),
-    ["launch", "sourceTabId"]
-  );
-  assert.notEqual(
-    reopenedManagerUrl.searchParams.get("launch"),
-    reusedManagerUrl.searchParams.get("launch"),
-    "Every reopen must reload the reused manager"
-  );
-  assert.equal(updatedWindows[1].windowId, normalManager.windowId);
-  assert.equal(updatedWindows[1].details.focused, true);
-  assert.equal(updatedWindows[1].details.width, undefined, "Reusing must preserve user-resized bounds");
+  assert.equal(reopenedManagerUrl.searchParams.get("collect"), "1");
+  assert.equal(reopenedManagerUrl.searchParams.get("pages"), null);
+  assert.notEqual(reopenedManagerUrl.searchParams.get("launch"), reusedManagerUrl.searchParams.get("launch"));
 
   const privateTab = {
     id: 42,
@@ -716,69 +668,59 @@ function storageArea(initial = {}) {
   };
   sourceTabs.set(privateTab.id, privateTab);
   const privateOpenResult = await runtimeMessage({
-    type: "OPEN_MANAGER_WINDOW",
+    type: "OPEN_MANAGER_TAB",
     sourceTabId: privateTab.id
   });
   assert.equal(privateOpenResult.ok, true);
-  assert.equal(createdWindows.length, 2, "Private browsing needs a separate manager window");
-  assert.equal(createdWindows[1].incognito, true);
-  const privateManagerUrl = new URL(createdWindows[1].url);
+  assert.equal(createdTabs.length, tabsBeforeManager + 2, "Private browsing needs a separate media tab");
+  const privateManagerTab = createdTabs[tabsBeforeManager + 1];
+  assert.equal(privateManagerTab.windowId, 8);
+  const privateManagerUrl = new URL(privateManagerTab.url);
   assert.equal(privateManagerUrl.searchParams.get("sourceTabId"), "42");
-  assert.deepEqual([...privateManagerUrl.searchParams.keys()].sort(), ["launch", "sourceTabId"]);
-  assert.ok(!createdWindows[1].url.includes("private.example.test"));
-  const privateManager = session.data["imageManagerWindow:private"];
-  assert.equal(privateManager.incognito, true);
-  assert.notEqual(privateManager.windowId, normalManager.windowId);
+  assert.ok(!privateManagerTab.url.includes("private.example.test"));
+  const privateManager = session.data["imageManagerTab:private"];
+  assert.notEqual(privateManager.tabId, normalManager.tabId);
 
-  liveWindows.delete(normalManager.windowId);
+  managerTabs.delete(normalManager.tabId);
   const replacementTab = { ...tab, id: 43 };
   sourceTabs.set(replacementTab.id, replacementTab);
-  await runtimeMessage({ type: "OPEN_MANAGER_WINDOW", sourceTabId: replacementTab.id });
-  assert.equal(createdWindows.length, 3, "A stale session record must be replaced cleanly");
-  assert.equal(new URL(createdWindows[2].url).searchParams.get("sourceTabId"), "43");
-  assert.notEqual(session.data["imageManagerWindow:normal"].windowId, normalManager.windowId);
+  await runtimeMessage({ type: "OPEN_MANAGER_TAB", sourceTabId: replacementTab.id });
+  assert.equal(createdTabs.length, tabsBeforeManager + 3, "A closed tab must be replaced cleanly");
+  assert.equal(new URL(createdTabs[tabsBeforeManager + 2].url).searchParams.get("sourceTabId"), "43");
 
-  await session.remove("imageManagerWindow:normal");
-  rejectWindowCreates = true;
-  const tabsBeforeWindowFallback = createdTabs.length;
-  const fallbackSourceTab = { ...tab, id: 44, windowId: 9 };
-  sourceTabs.set(fallbackSourceTab.id, fallbackSourceTab);
-  const fallbackResult = await runtimeMessage({
-    type: "OPEN_MANAGER_WINDOW",
-    sourceTabId: fallbackSourceTab.id
-  });
-  rejectWindowCreates = false;
-  assert.equal(fallbackResult.ok, true);
-  assert.equal(createdWindows.length, 4, "Firefox must first attempt a resizable popup window");
-  assert.equal(
-    createdTabs.length,
-    tabsBeforeWindowFallback + 1,
-    "A rejected popup window must fall back to a source-window tab"
-  );
-  const fallbackTab = createdTabs[tabsBeforeWindowFallback];
-  assert.equal(fallbackTab.active, true);
-  assert.equal(fallbackTab.windowId, 9);
-  const fallbackUrl = new URL(fallbackTab.url);
-  assert.equal(fallbackUrl.searchParams.get("sourceTabId"), "44");
-  assert.ok(fallbackUrl.searchParams.get("launch"));
-  assert.equal(session.data["imageManagerWindow:normal"], undefined);
+  const otherWindowSource = { ...tab, id: 44, windowId: 9 };
+  sourceTabs.set(otherWindowSource.id, otherWindowSource);
+  await runtimeMessage({ type: "OPEN_MANAGER_TAB", sourceTabId: otherWindowSource.id });
+  assert.equal(createdTabs.length, tabsBeforeManager + 4, "Open in the source window instead of activating a tab in another window");
+  assert.equal(createdTabs[tabsBeforeManager + 3].windowId, 9);
 
-  const windowsBeforeInvalidRequests = createdWindows.length;
+  const navigatedTab = managerTabs.get(session.data["imageManagerTab:normal"].tabId);
+  navigatedTab.url = "https://example.test/user-navigation";
+  await runtimeMessage({ type: "OPEN_MANAGER_TAB", sourceTabId: otherWindowSource.id });
+  assert.equal(createdTabs.length, tabsBeforeManager + 5, "Do not replace a tab the user navigated away from");
+  assert.equal(navigatedTab.url, "https://example.test/user-navigation");
+
+  session.data["imageManagerTab:normal"] = privateManager;
+  await runtimeMessage({ type: "OPEN_MANAGER_TAB", sourceTabId: tab.id });
+  assert.equal(createdTabs.length, tabsBeforeManager + 6, "A mismatched private tab must not be reused");
+  assert.equal(managerTabs.get(privateManager.tabId).url, privateManagerTab.url);
+
+  const tabsBeforeInvalidRequests = createdTabs.length;
   const invalidResult = await runtimeMessage({
-    type: "OPEN_MANAGER_WINDOW",
+    type: "OPEN_MANAGER_TAB",
     sourceTabId: "41"
   });
   assert.equal(invalidResult.ok, false);
   assert.match(invalidResult.error, /invalid/i);
-  assert.equal(createdWindows.length, windowsBeforeInvalidRequests);
+  assert.equal(createdTabs.length, tabsBeforeInvalidRequests);
 
   const staleResult = await runtimeMessage({
-    type: "OPEN_MANAGER_WINDOW",
+    type: "OPEN_MANAGER_TAB",
     sourceTabId: 999
   });
   assert.equal(staleResult.ok, false);
   assert.match(staleResult.error, /stale/i);
-  assert.equal(createdWindows.length, windowsBeforeInvalidRequests);
+  assert.equal(createdTabs.length, tabsBeforeInvalidRequests);
 
   const downloadsBeforeRejectedVideoArchives = downloadRequests.length;
   const fetchesBeforeRejectedVideoArchives = fetchRequests.length;

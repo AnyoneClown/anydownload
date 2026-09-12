@@ -152,22 +152,13 @@ ui.applySmartFiltersToControls(Filters.DEFAULT_FILTERS);
 ui.wireEvents();
 const get = id => nodes.get(id);
 
-get("tracker-button").listeners.click({ preventDefault() {} });
-assert.equal(get("page-tools-panel").open, true, "Track page opens its settings directly");
-assert.equal(get("tracker-panel").hidden, false);
-assert.equal(get("tracker-interval-select").focused, true);
+get("tracker-panel").showPopover();
+get("tracker-panel").listeners.toggle();
+assert.equal(get("tracker-interval-select").focused, true, "Opening tracking focuses the schedule");
 assert.equal(get("tracker-button").attributes["aria-expanded"], "true");
-get("tracker-button").listeners.click({ preventDefault() {} });
-assert.equal(get("page-tools-panel").open, false, "Track page toggles its open settings closed");
-get("page-tools-panel").listeners.toggle();
-assert.equal(get("tracker-button").attributes["aria-expanded"], "false", "Closing settings resets the tracker button");
-get("tracker-panel").hidden = true;
-get("page-tools-panel").showPopover();
-get("tracker-button").listeners.click({ preventDefault() {} });
-assert.equal(get("page-tools-panel").open, true, "Track page expands tracking when collection settings are already open");
-assert.equal(get("tracker-panel").hidden, false);
-get("page-tools-panel").hidePopover();
-get("page-tools-panel").listeners.toggle();
+get("tracker-panel").hidePopover();
+get("tracker-panel").listeners.toggle();
+assert.equal(get("tracker-button").attributes["aria-expanded"], "false", "Closing tracking resets its button");
 
 get("list-view-button").listeners.click();
 assert.equal(get("image-list").dataset.view, "list");
@@ -411,13 +402,9 @@ for (const sourceId of ["7", "", "-1", "3.5", "9007199254740992", "https://unexp
   first.pageUrl = `${ui.state.pageUrl}#photo-1`;
   second.pageUrl = "https://photos.example/older-gallery";
   clip.pageUrl = ui.state.pageUrl;
-  get("collection-scope-select").value = "page";
-  get("collection-scope-select").listeners.change();
-  assert.deepEqual(Array.from(ui.filteredImages(), item => item.url), [first.url, clip.url],
-    "This page matches normalized page URLs and retains URL fragments as the same page");
+  assert.deepEqual(Array.from(ui.filteredImages(), item => item.url), [first.url, second.url, clip.url],
+    "One collection retains media from this website's previous pages");
   assert.deepEqual([...ui.state.selected], selectedBeforeFilters);
-  get("collection-scope-select").value = "site";
-  get("collection-scope-select").listeners.change();
   get("sort-select").value = "name";
   get("sort-select").listeners.change();
   assert.deepEqual(Array.from(ui.filteredImages(), item => item.url), [clip.url, second.url, first.url]);

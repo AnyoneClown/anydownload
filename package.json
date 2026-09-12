@@ -1,6 +1,6 @@
 {
   "name": "page-image-downloader-firefox",
-  "version": "1.17.0",
+  "version": "1.17.1",
   "private": true,
   "scripts": {
     "test": "node tests/run-tests.cjs && node tests/template-tests.cjs && node tests/download-ledger-tests.cjs && node tests/download-queue-tests.cjs && node tests/collector-tests.cjs && node tests/fapfolder-tests.cjs && node tests/instagram-tests.cjs && node tests/youtube-tests.cjs && node tests/filter-tests.cjs && node tests/tracker-tests.cjs && node tests/tracker-background-tests.cjs && node tests/tracking-page-tests.cjs && node tests/archive-tests.cjs && node tests/archive-page-tests.cjs && node tests/history-page-tests.cjs && node tests/background-tests.cjs && node tests/background-queue-tests.cjs && node tests/dimension-probe-tests.cjs && node tests/gallery-tests.cjs && node tests/popup-ui-tests.cjs && node tests/preview-page-tests.cjs && node tests/cloud-sync-tests.cjs && node tests/cloud-sync-runtime-tests.cjs && node tests/sync-page-tests.cjs && node tests/immich-tests.cjs && node tests/upload-tests.cjs && node tests/upload-page-tests.cjs && node tests/integrations-tests.cjs && node tests/integration-backend-tests.cjs"

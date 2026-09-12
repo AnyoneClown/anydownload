@@ -34,9 +34,7 @@
   const VIDEO_FILE_EXTENSION = /\.(?:m4v|mkv|mov|mp4|ogg|ogv|webm)$/i;
   const VIDEO_FILE_FORMATS = new Set(["m4v", "mkv", "mov", "mp4", "ogg", "ogv", "webm"]);
   const IGNORE_STORAGE_PREFIX = "ignoredImage:";
-  const MANAGER_WINDOW_STORAGE_PREFIX = "imageManagerWindow:";
-  const MANAGER_WINDOW_WIDTH = 800;
-  const MANAGER_WINDOW_HEIGHT = 720;
+  const MANAGER_TAB_STORAGE_PREFIX = "imageManagerTab:";
   const MENU_IDS = Object.freeze({
     root: "anydownload-image-actions",
     download: "anydownload-download-image",
@@ -47,7 +45,7 @@
   });
   const retainedObjectUrls = new Map();
   const badgeTimers = new Map();
-  const managerWindowQueues = new Map();
+  const managerTabQueues = new Map();
   const downloadQueueContexts = new Map();
   const youtubeResolutionCache = new Map();
   const trackerRuns = new Map();
@@ -113,110 +111,64 @@
     createContextMenus();
   }
 
-  function managerWindowStorageKey(incognito) {
-    return `${MANAGER_WINDOW_STORAGE_PREFIX}${incognito ? "private" : "normal"}`;
+  function managerTabStorageKey(incognito) {
+    return `${MANAGER_TAB_STORAGE_PREFIX}${incognito ? "private" : "normal"}`;
   }
 
-  function managerWindowUrl(sourceTabId) {
+  function managerTabUrl(sourceTabId) {
     const launch = encodeURIComponent(createPreviewId());
     return browser.runtime.getURL(
       `popup/popup.html?sourceTabId=${encodeURIComponent(String(sourceTabId))}&launch=${launch}`
     );
   }
 
-  async function fallbackToManagerTab(url, tab) {
-    if (!browser.tabs || typeof browser.tabs.create !== "function") {
-      throw new Error("Firefox cannot open the AnyDownload media window.");
-    }
-    const createProperties = { active: true, url };
-    if (Number.isInteger(tab && tab.windowId)) {
-      createProperties.windowId = tab.windowId;
-    }
-    return browser.tabs.create(createProperties);
-  }
-
-  function openResizableImageWindow(tab, collectGallery) {
+  function openManagerTab(tab, collectGallery) {
     if (!tab || !Number.isInteger(tab.id)) {
       return Promise.reject(new Error("Firefox did not identify the source tab."));
     }
 
     const incognito = Boolean(tab.incognito);
-    const storageKey = managerWindowStorageKey(incognito);
-    const previous = managerWindowQueues.get(storageKey) || Promise.resolve();
+    const storageKey = managerTabStorageKey(incognito);
+    const previous = managerTabQueues.get(storageKey) || Promise.resolve();
     const queued = previous.catch(() => undefined).then(async () => {
-      const url = managerWindowUrl(tab.id) + (collectGallery ? `&collect=1&pages=${collectGallery}` : "");
+      const url = managerTabUrl(tab.id) + (collectGallery ? "&collect=1" : "");
       let stored = null;
       try {
         const values = await browser.storage.session.get(storageKey);
         stored = values && values[storageKey];
       } catch (_error) {
-        // Session storage is an optimization; a fresh manager can still open.
+        // Session storage is an optimization; a fresh tab can still open.
       }
 
-      const canReuse = Boolean(
-        stored &&
-        Number.isInteger(stored.windowId) &&
-        Number.isInteger(stored.tabId) &&
-        Boolean(stored.incognito) === incognito &&
-        browser.windows &&
-        typeof browser.windows.get === "function" &&
-        typeof browser.windows.update === "function" &&
-        browser.tabs &&
-        typeof browser.tabs.update === "function"
-      );
-      if (canReuse) {
+      if (stored && Number.isInteger(stored.tabId)) {
         try {
-          const managerWindow = await browser.windows.get(stored.windowId);
-          if (!managerWindow || Boolean(managerWindow.incognito) !== incognito) {
-            throw new Error("The saved manager window belongs to a different browsing context.");
+          const managerTab = await browser.tabs.get(stored.tabId);
+          if (Boolean(managerTab.incognito) === incognito &&
+              managerTab.windowId === tab.windowId &&
+              managerTab.url.startsWith(browser.runtime.getURL("popup/popup.html?"))) {
+            await browser.tabs.update(managerTab.id, { active: true, url });
+            return { reused: true, tabId: managerTab.id };
           }
-          await browser.tabs.update(stored.tabId, { active: true, url });
-          await browser.windows.update(stored.windowId, { focused: true });
-          return { reused: true, windowId: stored.windowId, tabId: stored.tabId };
         } catch (_error) {
-          await browser.storage.session.remove(storageKey).catch(() => undefined);
-        }
-      } else if (stored) {
-        await browser.storage.session.remove(storageKey).catch(() => undefined);
-      }
-
-      if (browser.windows && typeof browser.windows.create === "function") {
-        try {
-          const managerWindow = await browser.windows.create({
-            url,
-            type: "popup",
-            width: MANAGER_WINDOW_WIDTH,
-            height: MANAGER_WINDOW_HEIGHT,
-            focused: true,
-            incognito
-          });
-          const managerTab = managerWindow && Array.isArray(managerWindow.tabs)
-            ? managerWindow.tabs[0]
-            : null;
-          if (managerWindow && Number.isInteger(managerWindow.id) && managerTab && Number.isInteger(managerTab.id)) {
-            await browser.storage.session.set({
-              [storageKey]: {
-                windowId: managerWindow.id,
-                tabId: managerTab.id,
-                incognito
-              }
-            }).catch(() => undefined);
-          }
-          return { reused: false, windowId: managerWindow && managerWindow.id };
-        } catch (_error) {
-          // Firefox Android and restricted environments may not support popup windows.
+          // The saved tab may have closed; open a replacement below.
         }
       }
 
-      await browser.storage.session.remove(storageKey).catch(() => undefined);
-      const fallbackTab = await fallbackToManagerTab(url, tab);
-      return { reused: false, tabId: fallbackTab && fallbackTab.id, fallback: true };
+      const createProperties = { active: true, url };
+      if (Number.isInteger(tab.windowId)) {
+        createProperties.windowId = tab.windowId;
+      }
+      const managerTab = await browser.tabs.create(createProperties);
+      await browser.storage.session.set({
+        [storageKey]: { tabId: managerTab.id }
+      }).catch(() => undefined);
+      return { reused: false, tabId: managerTab.id };
     });
 
-    managerWindowQueues.set(storageKey, queued);
+    managerTabQueues.set(storageKey, queued);
     queued.finally(() => {
-      if (managerWindowQueues.get(storageKey) === queued) {
-        managerWindowQueues.delete(storageKey);
+      if (managerTabQueues.get(storageKey) === queued) {
+        managerTabQueues.delete(storageKey);
       }
     }).catch(() => undefined);
     return queued;
@@ -3606,10 +3558,10 @@
   if (browser.menus && browser.menus.onClicked) {
     browser.menus.onClicked.addListener((info, tab) => {
       if (info.menuItemId === MENU_IDS.open) {
-        return openResizableImageWindow(tab).then(() => {
+        return openManagerTab(tab).then(() => {
           showActionFeedback(tab && tab.id, true);
         }).catch((error) => {
-          console.error("AnyDownload could not open its media window.", error);
+          console.error("AnyDownload could not open its media tab.", error);
           showActionFeedback(tab && tab.id, false);
         });
       }
@@ -3628,7 +3580,7 @@
       return undefined;
     }
 
-    if (message.type === "OPEN_MANAGER_WINDOW") {
+    if (message.type === "OPEN_MANAGER_TAB") {
       if (!Number.isInteger(message.sourceTabId) || message.sourceTabId < 0) {
         return Promise.resolve({
           ok: false,
@@ -3636,9 +3588,7 @@
         });
       }
       return browser.tabs.get(message.sourceTabId)
-        .then((tab) => openResizableImageWindow(tab, message.collectGallery === true
-          ? [1, 3, 10].includes(message.galleryPages) ? message.galleryPages : 10
-          : 0))
+        .then((tab) => openManagerTab(tab, message.collectGallery === true))
         .then((result) => ({ ok: true, ...result }))
         .catch((error) => ({
           ok: false,

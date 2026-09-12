@@ -22,16 +22,9 @@
           <button id="tracking-dashboard-button" class="nav-link" type="button" title="Background trackers" aria-label="Open background trackers">
             <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r="2"/></svg><span>Trackers</span>
           </button>
+          <button id="sync-button" class="nav-link" type="button" disabled><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="6" r="3"/><path d="M4 17v-2a6 6 0 0 1 12 0v2"/></svg><span>Account</span></button>
+          <button id="integrations-button" class="nav-link" type="button" disabled><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M7 2v4m6-4v4M5 6h10v3a5 5 0 0 1-10 0V6Zm5 8v4"/></svg><span>Integrations</span></button>
         </nav>
-        <div class="header-actions">
-          <button id="open-window-button" class="icon-button open-window-button" type="button" title="Open in a resizable window" aria-label="Open in a resizable window" disabled>
-            <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M8 4H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-3M11 3h6v6M9 11l8-8"/></svg>
-          </button>
-        </div>
-        <div class="workspace-actions" role="group" aria-label="Account and integrations">
-          <button id="sync-button" class="secondary-button" type="button" disabled><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="6" r="3"/><path d="M4 17v-2a6 6 0 0 1 12 0v2"/></svg>Account</button>
-          <button id="integrations-button" class="secondary-button" type="button" disabled><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M7 2v4m6-4v4M5 6h10v3a5 5 0 0 1-10 0V6Zm5 8v4"/></svg>Integrations</button>
-        </div>
       </header>
 
       <section class="controls" aria-label="Media controls">
@@ -43,16 +36,10 @@
             <a id="editor-source-link" class="text-button" target="_blank" rel="noopener noreferrer" hidden>Open source page</a>
           </div>
           <div class="gallery-toolbar">
-            <label class="compact-field collection-scope-field">
-              <span class="visually-hidden">Collection scope</span>
-              <select id="collection-scope-select"><option value="site">Saved website</option><option value="page">This page</option></select>
-            </label>
-            <button id="collect-gallery-button" class="secondary-button" type="button" disabled>Collect gallery</button>
-            <button id="stop-gallery-button" class="secondary-button" type="button" hidden>Stop collecting</button>
-            <button id="tracker-button" class="secondary-button tracker-button" type="button" popovertarget="page-tools-panel" aria-expanded="false" aria-controls="tracker-panel" disabled>Track page</button>
-            <button class="icon-button" type="button" popovertarget="page-tools-panel" aria-label="Collection settings" title="Collection settings">
-              <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="4" cy="10" r="1"/><circle cx="10" cy="10" r="1"/><circle cx="16" cy="10" r="1"/></svg>
-            </button>
+            <button id="collect-gallery-button" class="secondary-button" type="button" aria-describedby="scan-help" disabled>Find more media</button>
+            <button id="stop-gallery-button" class="secondary-button" type="button" hidden>Stop scanning</button>
+            <button id="tracker-button" class="secondary-button tracker-button" type="button" popovertarget="tracker-panel" aria-expanded="false" aria-controls="tracker-panel" disabled>Track page</button>
+            <p id="scan-help" class="field-help">Scrolls this page and checks linked pages (up to 10).</p>
           </div>
         </div>
         <div class="search-toolbar">
@@ -61,18 +48,18 @@
             <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg>
             <input id="filter-input" type="search" placeholder="Search media…" autocomplete="off">
           </label>
+          <button id="smart-filters-button" class="secondary-button filter-toggle-button" type="button" popovertarget="smart-filter-panel" aria-expanded="false" aria-controls="smart-filter-panel">Filters</button>
+        </div>
+        <div id="smart-filter-panel" class="smart-filter-panel settings-popover" popover aria-labelledby="filter-heading">
+          <div class="popover-heading"><h2 id="filter-heading">Filter your collection</h2><button class="icon-button" type="button" popovertarget="smart-filter-panel" popovertargetaction="hide" aria-label="Close filters">×</button></div>
           <label class="compact-field media-type-field">
-            <span class="visually-hidden">Media type</span>
+            <span>Media type</span>
             <select id="media-type-filter-select">
               <option value="any">All media</option>
               <option value="image">Images</option>
               <option value="video">Videos</option>
             </select>
           </label>
-          <button id="smart-filters-button" class="secondary-button filter-toggle-button" type="button" popovertarget="smart-filter-panel" aria-expanded="false" aria-controls="smart-filter-panel">Filters</button>
-        </div>
-        <div id="smart-filter-panel" class="smart-filter-panel settings-popover" popover aria-labelledby="filter-heading">
-          <div class="popover-heading"><h2 id="filter-heading">Filter your collection</h2><button class="icon-button" type="button" popovertarget="smart-filter-panel" popovertargetaction="hide" aria-label="Close filters">×</button></div>
           <label class="option-row photos-only-toggle" title="Hide likely logos, icons, avatars, trackers, and other non-photo assets">
             <input id="photos-only-input" type="checkbox">
             <span>Photos only</span>
@@ -117,6 +104,10 @@
             <button id="downloaded-button" class="text-button downloaded-view-button" type="button" aria-pressed="false" disabled>Hide downloaded (0)</button>
           </div>
           <button id="reset-filters-button" class="text-button" type="button">Reset</button>
+          <label class="option-row scan-backgrounds" title="Include CSS background images on the next scan">
+            <input id="backgrounds-input" type="checkbox" checked><span>Include background images on the next scan</span>
+          </label>
+          <button id="clear-gallery-button" class="text-button danger-button" type="button" title="Clear saved media and selections for this website. Downloaded files and history are kept. Undo is available until you leave this website or close the manager." disabled>Clear saved media for this website</button>
         </div>
         <div class="summary-row">
           <strong id="summary-label" role="status" aria-live="polite">0 media files</strong>
@@ -185,24 +176,8 @@
         <p id="filename-template-help" class="field-help" role="status" aria-live="polite">Tokens: {filename}, {name}, {ext}, {index}, {hostname}, {page-title}, {width}, {height}, {date}. The zero-padded {index} follows selected page order.</p>
       </div>
     </section>
-    <section id="page-tools-panel" class="settings-popover page-tools-panel" popover aria-labelledby="page-tools-heading">
-      <div class="popover-heading"><h2 id="page-tools-heading">Collection settings</h2><button class="icon-button" type="button" popovertarget="page-tools-panel" popovertargetaction="hide" aria-label="Close collection settings">×</button></div>
-      <label class="compact-field">
-        <span>When collecting a gallery</span>
-        <select id="gallery-pages-select" aria-label="Gallery pagination limit">
-          <option value="1">Scroll this page</option>
-          <option value="3">Up to 3 pages</option>
-          <option value="10" selected>Up to 10 pages</option>
-        </select>
-      </label>
-      <label class="option-row" title="Include CSS background images on the next scan">
-        <input id="backgrounds-input" type="checkbox" checked><span>Include background images on the next scan</span>
-      </label>
-      <div class="page-tool-actions">
-        <button id="sidebar-button" class="secondary-button sidebar-button" type="button" title="Open Firefox Sidebar" aria-label="Open Firefox Sidebar">Open Firefox Sidebar</button>
-        <button id="clear-gallery-button" class="text-button danger-button" type="button" title="Clear saved media and selections for this website. Downloaded files and history are kept. Undo is available until you leave this website or close the manager." disabled>Clear website collection</button>
-      </div>
-      <div id="tracker-panel" class="tracker-panel" hidden>
+    <section id="tracker-panel" class="tracker-panel settings-popover" popover aria-labelledby="tracker-heading">
+      <div class="popover-heading"><h2 id="tracker-heading">Track this page</h2><button class="icon-button" type="button" popovertarget="tracker-panel" popovertargetaction="hide" aria-label="Close tracking settings">×</button></div>
         <div class="tracker-heading">
           <div>
             <strong>Background tracker</strong>
@@ -303,7 +278,6 @@
           <button id="tracker-pause-button" class="tracker-action" type="button" hidden>Pause</button>
           <button id="tracker-delete-button" class="tracker-action danger" type="button" hidden>Remove</button>
         </div>
-      </div>
     </section>
 
     <dialog id="media-preview-dialog" class="media-preview-dialog" aria-labelledby="media-preview-title">

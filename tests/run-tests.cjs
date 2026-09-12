@@ -64,7 +64,7 @@ const trackingJs = fs.readFileSync(path.join(root, "tracking/tracking.js"), "utf
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.name, "AnyDownload — Page Media Downloader");
-assert.equal(manifest.version, "1.17.0");
+assert.equal(manifest.version, "1.17.1");
 assert.equal(manifest.action.default_title, "Download page media");
 assert.equal(Core.MAX_BATCH_TOTAL_URL_LENGTH, 2000000);
 assert.deepEqual(manifest.permissions.sort(), ["activeTab", "alarms", "downloads", "menus", "notifications", "scripting", "storage"]);
@@ -164,8 +164,7 @@ assert.match(popupCss, /html\.responsive-surface,\s*html\.responsive-surface bod
 assert.match(popupCss, /html\.responsive-surface \.app-shell\s*\{[^}]*height:\s*100dvh;/s);
 assert.match(popupCss, /\.image-list\s*\{[^}]*overflow-x:\s*hidden;/s);
 assert.match(popupCss, /\.action-bar\s*\{[^}]*min-width:\s*0;/s);
-assert.match(popupHtml, /id="open-window-button"[^>]*title="Open in a resizable window"[^>]*aria-label="Open in a resizable window"[^>]*disabled/);
-for (const panel of ["download-settings-panel", "page-tools-panel", "smart-filter-panel"]) {
+for (const panel of ["download-settings-panel", "tracker-panel", "smart-filter-panel"]) {
   assert.match(popupHtml, new RegExp(`id="${panel}"[^>]*popover`));
   assert.match(popupHtml, new RegExp(`popovertarget="${panel}"`));
 }
@@ -177,6 +176,10 @@ assert.match(popupHtml, /class="folder-options"/);
 assert.match(popupHtml, /id="history-button"[^>]*title="Download queue and statistics"/);
 assert.match(popupHtml, /id="queue-badge"[^>]*hidden/);
 assert.match(popupHtml, /id="tracking-dashboard-button"[^>]*title="Background trackers"/);
+const popupWorkspaceNav = popupHtml.match(/<nav\b[^>]*class="workspace-nav"[^>]*>([\s\S]*?)<\/nav>/)?.[1] || "";
+for (const controlId of ["history-button", "tracking-dashboard-button", "sync-button", "integrations-button"]) {
+  assert.match(popupWorkspaceNav, new RegExp(`id="${controlId}"[^>]*class="nav-link"`), `${controlId} must be in the main navigation`);
+}
 assert.match(popupJs, /runtime\.getURL\("tracking\/tracking\.html"\)/);
 assert.match(popupHtml, /id="filename-template-button"[^>]*aria-controls="filename-template-panel"/);
 assert.match(popupHtml, /id="filename-template-input"[^>]*value="\{index\}-\{filename\}"[^>]*maxlength="240"/);
@@ -188,7 +191,12 @@ for (const removedControlId of [
   "duplicates-button",
   "hide-duplicates-input",
   "live-capture-button",
-  "rescan-button"
+  "rescan-button",
+  "open-window-button",
+  "sidebar-button",
+  "collection-scope-select",
+  "gallery-pages-select",
+  "page-tools-panel"
 ]) {
   assert.doesNotMatch(
     popupHtml,
@@ -221,7 +229,6 @@ for (const removedTopActionId of ["bulk-download-button", "archive-download-butt
 assert.doesNotMatch(popupCss, /\.bulk-download-button\b/);
 assert.doesNotMatch(popupCss, /\.archive-download-button\b/);
 assert.match(popupHtml, /id="sidebar-follow-button"[^>]*hidden>Enable auto-follow<\/button>/);
-assert.match(popupHtml, /id="sidebar-button"[^>]*title="Open Firefox Sidebar"[^>]*aria-label="Open Firefox Sidebar"/);
 assert.match(popupHtml, /id="instagram-collections-button"[^>]*hidden>Stories &amp; highlights<\/button>/);
 assert.match(popupHtml, /id="instagram-collection-filter-select"/);
 for (const collectionFilter of ["all", "posts", "story", "highlights"]) {
@@ -234,7 +241,7 @@ for (const collectionFilter of ["all", "posts", "story", "highlights"]) {
 assert.match(popupHtml, /id="smart-filter-panel"[^>]*popover/);
 assert.match(popupHtml, /id="smart-filters-button"[^>]*aria-expanded="false"[^>]*aria-controls="smart-filter-panel"/);
 assert.match(popupHtml, /id="tracker-button"[^>]*aria-controls="tracker-panel"[^>]*disabled/);
-assert.match(popupHtml, /id="tracker-panel"[^>]*hidden/);
+assert.match(popupHtml, /id="tracker-panel"[^>]*popover/);
 assert.match(popupHtml, /id="tracker-download-initial-input"[^>]*type="checkbox"/);
 for (const trackerAction of ["review", "notify", "download"]) {
   assert.match(popupHtml, new RegExp(`<option value=["']${trackerAction}["']`));
@@ -266,6 +273,13 @@ assert.match(
   /<div id="smart-filter-panel"[^>]*popover[^>]*>[\s\S]*?<input id="photos-only-input"[^>]*type="checkbox"[\s\S]*?<\/div>/,
   "Photos only must live inside the Filters popover"
 );
+const popupFilters = popupHtml.slice(popupHtml.indexOf('<div id="smart-filter-panel"'), popupHtml.indexOf('<div class="summary-row"'));
+for (const controlId of ["media-type-filter-select", "backgrounds-input", "clear-gallery-button"]) {
+  assert.match(popupFilters, new RegExp(`id="${controlId}"`), `${controlId} must live in Filters`);
+}
+assert.match(popupHtml, /id="collect-gallery-button"[^>]*aria-describedby="scan-help"[^>]*>Find more media<\/button>/);
+assert.match(popupHtml, /id="scan-help"[^>]*>Scrolls this page and checks linked pages \(up to 10\)\./);
+assert.doesNotMatch(popupHtml, /Collection settings|Saved website|>This page<|>Collect gallery</);
 assert.match(popupHtml, /id="media-type-filter-select"/);
 for (const format of ["mp4", "webm", "ogv", "mov", "m4v", "mkv"]) {
   assert.match(popupHtml, new RegExp(`<option value=["']${format}["']`));
@@ -296,21 +310,18 @@ assert.match(popupJs, /launchOptionsFromUrl/);
 assert.match(popupJs, /sidebar:\s*params\.get\("sidebar"\) === "1"/);
 assert.doesNotMatch(popupJs, /params\.get\("live"\)/);
 assert.match(popupJs, /const sidebarMode = launchOptions\.sidebar/);
-assert.match(popupJs, /const responsiveSurface = managerWindowMode \|\| sidebarMode/);
+assert.match(popupJs, /const responsiveSurface = managerTabMode \|\| sidebarMode/);
 assert.match(popupJs, /initialize\(\)\.catch\(handleInitializationError\)/);
 assert.match(popupJs, /AnyDownload popup initialization failed/);
 assert.match(popupJs, /elements\["folder-help"\]\.hidden = false/);
 assert.match(popupJs, /elements\["folder-help"\]\.hidden = true/);
 assert.match(popupJs, /setAttribute\("aria-invalid", "true"\)/);
 assert.match(popupJs, /browser\.tabs\.get\(state\.sourceTabId\)/);
-assert.match(popupJs, /classList\.add\("manager-window"\)/);
+assert.doesNotMatch(popupJs, /manager-window|managerWindowMode|openManagerWindow|openFirefoxSidebar/);
 assert.match(popupJs, /classList\.add\("sidebar-panel"\)/);
 assert.match(popupJs, /classList\.add\("responsive-surface"\)/);
-assert.match(popupJs, /type:\s*"OPEN_MANAGER_WINDOW"/);
+assert.match(popupJs, /type:\s*"OPEN_MANAGER_TAB"/);
 assert.match(popupJs, /sourceTabId:\s*state\.sourceTabId/);
-assert.match(popupJs, /elements\["open-window-button"\]\.addEventListener\("click", openManagerWindow\)/);
-assert.match(popupJs, /browser\.sidebarAction\.open\(\)/);
-assert.match(popupJs, /elements\["sidebar-button"\]\.addEventListener\("click", openFirefoxSidebar\)/);
 assert.match(popupJs, /browser\.tabs\.onActivated\.addListener/);
 assert.match(popupJs, /browser\.tabs\.onUpdated\.addListener/);
 assert.match(popupJs, /else if \(changeInfo\.url\)/);
@@ -323,7 +334,12 @@ for (const removedElementId of [
   "duplicates-button",
   "hide-duplicates-input",
   "live-capture-button",
-  "rescan-button"
+  "rescan-button",
+  "open-window-button",
+  "sidebar-button",
+  "collection-scope-select",
+  "gallery-pages-select",
+  "page-tools-panel"
 ]) {
   assert.doesNotMatch(
     popupJs,
@@ -441,7 +457,7 @@ assert.match(backgroundJs, /func:\s*collectYouTubeMediaFromPage/);
 assert.match(backgroundJs, /browser\.menus\.onClicked\.addListener/);
 assert.match(backgroundJs, /targetElementId/);
 assert.doesNotMatch(backgroundJs, /browser\.action\.onClicked\.addListener/);
-assert.match(backgroundJs, /message\.type === "OPEN_MANAGER_WINDOW"/);
+assert.match(backgroundJs, /message\.type === "OPEN_MANAGER_TAB"/);
 assert.match(backgroundJs, /const Tracker = globalThis\.AnyDownloadTracker/);
 assert.match(backgroundJs, /const DownloadLedger = globalThis\.AnyDownloadLedger/);
 assert.match(backgroundJs, /GET_MEDIA_DOWNLOAD_STATUS/);
@@ -459,11 +475,10 @@ assert.match(backgroundJs, /"UPSERT_TRACKER"/);
 assert.match(backgroundJs, /"GET_TRACKERS"/);
 assert.match(backgroundJs, /"SET_ALL_TRACKERS_ENABLED"/);
 assert.match(backgroundJs, /browser\.tabs\.get\(message\.sourceTabId\)/);
-assert.match(backgroundJs, /function managerWindowUrl\(sourceTabId\)/);
-assert.match(backgroundJs, /openResizableImageWindow\(tab\)/);
+assert.match(backgroundJs, /function managerTabUrl\(sourceTabId\)/);
+assert.match(backgroundJs, /openManagerTab\(tab\)/);
 assert.doesNotMatch(backgroundJs, /liveCapture|[?&]live=1/);
-assert.match(backgroundJs, /browser\.windows\.create/);
-assert.match(backgroundJs, /type:\s*"popup"/);
+assert.doesNotMatch(backgroundJs, /browser\.windows|OPEN_MANAGER_WINDOW|managerWindowUrl|openResizableImageWindow/);
 assert.match(backgroundJs, /sourceTabId/);
 assert.doesNotMatch(backgroundJs, /browser\.action\.openPopup/);
 assert.match(backgroundJs, /message\.type === "DOWNLOAD_ARCHIVE"/);

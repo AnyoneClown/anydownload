@@ -4,6 +4,15 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.17.1] - 2026-09-12
+
+### Changed
+
+- Placed **Account** and **Integrations** beside **Downloads** and **Trackers** in the main navigation.
+- Moved media type and background-image options into **Filters**, removed the **Saved website**/**This page** switch and three-dot Collection settings menu, and made **Track page** open its own settings panel.
+- Renamed **Collect gallery** to **Find more media** with a visible explanation of automatic scrolling and the ten-page search limit. Website collections remain saved; their clear action is in **Filters**.
+- Removed the separate resizable window. **Find more media** and context-menu **Open media list…** actions now use a browser tab; Firefox Sidebar remains available from Firefox's sidebar menu.
+
 ## [1.17.0] - 2026-09-12
 
 ### Changed

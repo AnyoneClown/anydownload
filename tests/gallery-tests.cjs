@@ -81,6 +81,8 @@ function popupHarness(stored = { local: [], session: [] }) {
   const timers = new Map();
   let timerId = 0;
   let scrolls = 0;
+  const fetchedPages = [];
+  let continuePagination = false;
   let sourceImages = [photo("one")];
   let scanWait = null;
   let scanStarted = null;
@@ -116,7 +118,12 @@ function popupHarness(stored = { local: [], session: [] }) {
         return {
           html, title: "page two", head: new Element("head"),
           createElement(tag) { return new Element(tag); },
-          querySelector() { return null; }
+          querySelector(selector) {
+            if (continuePagination && selector === "a[rel~='next']") {
+              return { getAttribute() { return `${siteKey}/page${Number(new URL(html).pathname.slice(5)) + 1}`; } };
+            }
+            return null;
+          }
         };
       }
     },
@@ -160,7 +167,8 @@ function popupHarness(stored = { local: [], session: [] }) {
             return [{ result: { top: 1000, height: 1600, bottom: true, nextLinks: ["/page2"] } }];
           }
           if (func.name === "fetchPage") {
-            return [{ result: { html: "second page", bytes: 20, url: args[0] } }];
+            fetchedPages.push(args[0]);
+            return [{ result: { html: args[0], bytes: 20, url: args[0] } }];
           }
           if (func.name === "collectLiveGalleryFingerprint") {
             return [{ result: { fingerprint: "test", pageUrl: tab.url } }];
@@ -199,10 +207,10 @@ function popupHarness(stored = { local: [], session: [] }) {
   popup.wireSourceTabLifecycle();
   elements.get("folder-input").value = "Website media";
   elements.get("filename-template-input").value = "{page-title}-{index}-{filename}";
-  elements.get("gallery-pages-select").value = "3";
   elements.get("backgrounds-input").checked = true;
   return {
-    popup, tab, stored, elements,
+    popup, tab, stored, elements, fetchedPages,
+    enableNextPages() { continuePagination = true; },
     setImages(images) { sourceImages = images; },
     delayScan(promise) {
       scanWait = promise;
@@ -364,10 +372,9 @@ async function checkSelectionDuringScan() {
   assert.equal(popup.state.liveScanning, false);
 }
 
-async function checkCurrentPageMembership() {
+async function checkSavedCollectionView() {
   const first = popupHarness();
   await first.popup.scanPage();
-  first.popup.state.collectionScope = "page";
   const urls = () => Array.from(first.popup.filteredImages(), (item) => item.url);
   const notify = () => first.popup.handleGalleryStorageChanges({ [Gallery.STORAGE_KEY]: { newValue: first.stored.local } }, "local");
   const second = popupHarness(first.stored);
@@ -376,23 +383,22 @@ async function checkCurrentPageMembership() {
   second.setImages([shared, { ...photo("other-only"), pageUrl: second.tab.url }]);
   await second.popup.scanPage();
   notify();
-  assert.equal(first.popup.state.images.find((item) => item.url === shared.url).pageUrl, second.tab.url);
-  assert.deepEqual(urls(), [shared.url], "Another manager's latest source attribution must not hide a shared image from This page");
+  assert.deepEqual(urls(), [shared.url, photo("other-only").url],
+    "The saved collection shows refreshed and newly discovered media from other pages");
 
   await first.popup.collectGallery();
-  assert.ok(urls().includes(photo("two").url), "Live source scans remember virtualized discoveries even when their saved page differs");
-  assert.ok(!urls().includes(photo("three").url), "Fetched Next-page images are not discoveries on the active page");
+  const collected = urls();
+  assert.ok(collected.includes(photo("two").url), "Virtualized source-page discoveries remain visible");
+  assert.ok(collected.includes(photo("three").url), "Fetched Next-page discoveries appear in the same collection");
   await first.popup.clearSiteGallery();
   assert.deepEqual(urls(), []);
   await first.popup.undoClearSiteGallery();
-  assert.ok(urls().some((url) => url.startsWith(photo("one").url)), "Undo restores local membership as well as shared gallery records");
-  assert.ok(urls().includes(photo("two").url), "Undo restores discovered membership whose saved source belongs to a different page");
+  assert.deepEqual(urls(), collected, "Undo restores every page's saved media");
 
   first.navigate(`${siteKey}/other-page`);
-  assert.ok(!urls().includes(photo("two").url), "Same-site navigation resets membership from the previous page");
-  assert.ok(urls().includes(photo("other-only").url), "Restored records fall back to saved page attribution before a new scan");
+  assert.deepEqual(urls(), collected, "Same-site navigation preserves the entire collection");
   first.navigate(`${siteKey}/one`);
-  assert.ok(!urls().includes(photo("two").url), "Returning to a page does not resurrect discarded local membership");
+  assert.deepEqual(urls(), collected, "Returning to a page preserves the entire collection");
 
   first.setImages([photo("one")]);
   await first.popup.scanPage();
@@ -400,19 +406,22 @@ async function checkCurrentPageMembership() {
   changed = Gallery.updateSites(changed.sites, { siteKey, epoch: changed.gallery.epoch, records: [shared] });
   first.stored.local = changed.sites;
   notify();
-  assert.deepEqual(urls(), [], "A newer clear epoch discards old membership even when an identity is immediately re-added elsewhere");
+  assert.deepEqual(urls(), [shared.url], "A newer clear epoch replaces old records with the current saved collection");
 
-  first.popup.state.images = [photo("one")];
-  first.popup.renderImages();
-  first.popup.state.images = [];
-  first.popup.renderImages();
-  first.popup.state.images = [shared];
-  assert.deepEqual(urls(), [], "Membership is pruned when a media identity leaves the bounded gallery");
-  first.popup.state.images = [photo("one")];
-  first.popup.renderImages();
-  first.popup.state.incognito = true;
-  first.popup.state.images = [shared];
-  assert.deepEqual(urls(), [], "Private context changes cannot retain normal-window membership");
+  const normalUrls = urls();
+  first.popup.handleGalleryStorageChanges({ [Gallery.STORAGE_KEY]: { newValue: [] } }, "session");
+  assert.deepEqual(urls(), normalUrls, "Private storage changes cannot replace the normal collection");
+}
+
+async function checkFixedPageLimit() {
+  const harness = popupHarness();
+  harness.enableNextPages();
+  await harness.popup.scanPage();
+  await harness.popup.collectGallery();
+  assert.equal(harness.fetchedPages.length, Gallery.MAX_PAGES - 1,
+    "A never-ending Next chain must stop at the fixed total page cap, including the source page");
+  assert.equal(new Set(harness.fetchedPages).size, harness.fetchedPages.length);
+  assert.match(harness.elements.get("notice").textContent, /Stopped at the 10-page limit/);
 }
 
 async function checkPhotoStory() {
@@ -609,7 +618,8 @@ function checkScrolling() {
 (async () => {
   await checkPopup();
   await checkSelectionDuringScan();
-  await checkCurrentPageMembership();
+  await checkSavedCollectionView();
+  await checkFixedPageLimit();
   await checkPhotoStory();
   await checkUndoAndFilteredScan();
   await checkFetch();
@@ -621,7 +631,7 @@ function checkScrolling() {
   stoppable.popup.stopGalleryCollection();
   await collecting;
   assert.ok(stoppable.popup.state.images.length > 0);
-  assert.match(stoppable.elements.get("notice").textContent, /Collection stopped/);
+  assert.match(stoppable.elements.get("notice").textContent, /Scan stopped/);
   assert.ok(stoppable.scrolls < 10, "Stop must end automatic scrolling promptly");
   console.log("All saved-gallery and collection checks passed.");
 })().catch((error) => {
