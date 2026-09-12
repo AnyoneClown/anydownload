@@ -4,7 +4,10 @@ create schema if not exists anydownload_private;
 revoke all on schema anydownload_private from public, anon, authenticated;
 revoke all on schema vault from public, anon, authenticated;
 revoke all on all tables in schema vault from public, anon, authenticated;
-revoke all on all functions in schema vault from public, anon, authenticated;
+-- Hosted Vault owns internal crypto functions that postgres cannot re-grant.
+-- Schema access above blocks them; restrict the public secret API explicitly.
+revoke all on function vault.create_secret(text, text, text, uuid),
+  vault.update_secret(uuid, text, text, text, uuid) from public, anon, authenticated;
 
 create table public.anydownload_connections (
   id uuid primary key default gen_random_uuid(),

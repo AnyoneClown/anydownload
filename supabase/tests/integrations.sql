@@ -1,6 +1,20 @@
 -- Run as postgres in a DEVELOPMENT Supabase project after both migrations.
 -- This uses synthetic credentials and rolls back every change.
 begin;
+do $$
+begin
+  if exists (
+    select 1 from unnest(array['anon', 'authenticated']) r
+    where has_schema_privilege(r, 'vault', 'USAGE') or
+      has_table_privilege(r, 'vault.secrets', 'SELECT,INSERT,UPDATE,DELETE') or
+      has_table_privilege(r, 'vault.decrypted_secrets', 'SELECT')
+  ) or exists (
+    select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      cross join unnest(array['anon', 'authenticated']) r
+    where n.nspname = 'vault' and has_function_privilege(r, p.oid, 'EXECUTE')
+  ) then raise exception 'Vault grants allow direct client access'; end if;
+end;
+$$;
 insert into auth.users(id) values
   ('a11d0000-0000-4000-8000-000000000011'),
   ('a11d0000-0000-4000-8000-000000000012');

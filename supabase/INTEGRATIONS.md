@@ -2,7 +2,7 @@
 
 ## Maintainer: enable encrypted connections
 
-The integration migration and Edge Function in this change are **not deployed** to the shared project. Existing Google sign-in is reused; no Google Drive access is requested or granted.
+The integration migration and `external-integrations` Edge Function are **deployed** to the shared project as of 2026-09-12. AnyDownload 1.16.0 can use them without another extension update; reopen Integrations if it previously reported that connections could not load. Existing Google sign-in is reused; no Google Drive access is requested or granted. The steps below apply when deploying another project.
 
 1. Apply [`20260912090936_external_integrations.sql`](migrations/20260912090936_external_integrations.sql) to a development Supabase project after the cloud-sync migration. Supabase Vault must be available; the migration enables it. Run [`tests/integrations.sql`](tests/integrations.sql) as the database owner before applying the migration to the intended project.
 2. Deploy the endpoint using the repository's [`config.toml`](config.toml):
@@ -56,6 +56,12 @@ Metadata has `id`, `provider`, `serverUrl`, and `defaultAlbumId`. Save without a
 `npm test` includes the provider, upload runner, progress page, credential client, cloud runtime, and backend handler checks. Node 22.13+ is required for the backend test's built-in TypeScript stripping; no dependency is added. `node tests/integration-backend-tests.cjs` runs the actual handler with mocked Auth/Data APIs and checks authentication, bounds, metadata redaction, HTTP methods, and safe no-store errors. `deno check supabase/functions/external-integrations/index.ts` typechecks the Edge Function.
 
 On 2026-09-12 the migration and rollback SQL tests passed in disposable PostgreSQL 16 with Supabase Auth roles and the Vault API **emulated using pgcrypto**. This validates SQL syntax, RLS/ownership checks, replacement, origin binding, and cleanup; it does **not** verify the hosted Vault extension or deployed Edge Function. The rollback left zero synthetic users or secrets. No live Immich upload or Tailscale connection was exercised during these backend checks.
+
+Later that day the migration and Edge Function version 1 were deployed to the shared project with real Vault 0.3.1. The migration revokes access to Vault's public secret API explicitly because hosted `postgres` cannot change Supabase-owned internal crypto-function grants. Hosted read-only checks confirmed that neither `anon` nor `authenticated` has Vault schema, table, or routine access, private secret references remain inaccessible, and connection metadata has forced RLS with read-only client access. Missing and invalid sessions both return HTTP 401 with `Cache-Control: no-store` from the live endpoint. The full local test suite passed. Authenticated save/retrieve and actual Immich uploads remain unverified: automatic approval review blocked synthetic-user/Vault mutation tests on the shared project, and Firefox UI inspection timed out.
+
+The performance advisor returned no findings. The security advisor reports [RLS with no policy](https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy) on the private secret-reference table, which intentionally denies direct client access, and an unrelated [disabled leaked-password protection](https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection) warning. The extension uses Google sign-in; no Auth settings were changed.
+
+For an opt-in end-to-end backend check, `node tests/integrations-live-tests.cjs` accepts fresh disposable user tokens through `ANYDOWNLOAD_TEST_TOKEN_A` and `ANYDOWNLOAD_TEST_TOKEN_B`. It refuses accounts with existing connections, uses synthetic keys and non-routable `.invalid` origins, checks both directions of account isolation and no-store responses, and deletes its own connection IDs in `finally`. It contacts only the bundled Supabase project. Obtain approval before creating disposable accounts in the shared project, and delete those accounts after testing. This check has not yet been run against the hosted backend.
 
 Run the real Vault test in a development Supabase project after applying the migration:
 

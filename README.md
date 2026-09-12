@@ -16,7 +16,7 @@ Google sign-in opens a regular browser tab and returns automatically to the Sync
 
 ## Upload images to Immich
 
-Open **Integrations & uploads** in Collection settings, sign in through the existing Sync page, select Immich, and use **Test & save connection** with your server URL and API key. This release targets Immich 3.2.0 and supports HTTP(S) LAN addresses and Tailscale hostnames. The required Vault migration and authenticated backend endpoint must be deployed first; see the [integration setup guide](supabase/INTEGRATIONS.md).
+Open **Integrations & uploads** in Collection settings, sign in through the existing Sync page, select Immich, and use **Test & save connection** with your server URL and API key. This release targets Immich 3.2.0 and supports HTTP(S) LAN addresses and Tailscale hostnames. The Vault migration and authenticated backend endpoint are deployed to the shared service; see the [integration setup guide](supabase/INTEGRATIONS.md).
 
 Choose **Upload selected** in the manager, then your connection and either **Library — no album** or **Load writable albums**. Keep Upload Progress open until it finishes. The page also accepts images from your device and reopens saved uploads for explicit retry. Locally downloaded images remain eligible: check them in the manager or choose their local files. Upload and album results are independent of the local-download ledger. Keys are encrypted in Supabase Vault; image bytes travel directly from Firefox to Immich. Google sign-in does not grant Google Drive access.
 

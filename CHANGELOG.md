@@ -4,6 +4,10 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Deployed the missing Immich connection backend to the shared service on 2026-09-12, resolving the missing endpoint behind **Could not load connections**. Narrowed Vault permission revocation to its public API so the migration works with hosted Supabase permissions. Available to existing 1.16.0 installations without an extension update.
+
 ## [1.16.0] - 2026-09-12
 
 ### Added
@@ -28,7 +32,7 @@ All notable changes to AnyDownload are documented here.
 
 ### Deployment note
 
-- Immich connections require separate deployment of the included Supabase Vault migration and `external-integrations` Edge Function. They are not yet deployed to the shared service. Automated checks pass; live Immich uploads and hosted Vault remain unverified. See [setup instructions](supabase/INTEGRATIONS.md).
+- At publication, the Supabase Vault migration and `external-integrations` Edge Function were not deployed to the shared service. Both were deployed later on 2026-09-12; see the current [deployment and verification status](supabase/INTEGRATIONS.md). Live Immich uploads remain unverified.
 
 ## [1.15.0] - 2026-09-12
 
