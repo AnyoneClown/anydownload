@@ -4,6 +4,12 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-09-12
+
+### Added
+
+- Optional Google sign-in through Supabase and automatic cross-device sync for settings, filters, filename templates, ignored-media rules, and completed-download records. Sync preserves offline edits and deletions; active queues, destination folders, saved galleries, and private-session data stay on the device. Includes a Supabase migration and sign-in callback setup guide.
+
 ### Fixed
 
 - Photo checkboxes and **Select matches only** remain available during live library scans, and selections survive scan results and refreshed media URLs.

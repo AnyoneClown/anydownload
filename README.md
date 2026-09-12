@@ -4,6 +4,16 @@ This repository contains a working Manifest V3 Firefox extension. It scans the *
 
 The manifest targets Firefox desktop 140+ and Firefox for Android 142+. Firefox desktop first opens a compact toolbar popup; its **Open window** button moves the same media manager into a separate resizable window, and its sidebar button opens the persistent Firefox Sidebar. The manager and sidebar can watch an infinite-scroll gallery while you keep using the page, and the sidebar can automatically follow active-tab changes after one explicit permission grant. Firefox for Android falls back to an extension tab and does not support the sidebar, optional Save As dialog, or extension context menus.
 
+## Optional cloud sync
+
+Open **Sync** in the manager or either dashboard to connect a Supabase project and sign in with Google. Cloud sync is off until you explicitly enable it. Enter the shared project URL and public publishable key from [the Supabase setup guide](supabase/README.md), accept the sync consent and Firefox permissions, save the project, and choose **Continue with Google**. The guide also covers deploying your own project; Google client secrets never belong in the extension.
+
+Sync shares filename templates, filters, media layout, background-image preferences, ignored-media rules, and completed-download records between devices signed into the same account. It keeps a local offline copy and merges individual edits and removals. Sync checks for a changed cloud revision every 15 minutes and shortly after local changes; unchanged revisions do not download the full record. Simultaneous edits to the same record favor the device currently saving its local edit. Existing local records are merged on first sign-in. Records remain bounded to 500 per website and 5,000 overall for each of ignored media and completed downloads, with a 4 MiB maximum cloud snapshot.
+
+Destination folders, Save As preferences, active download queues, downloaded files, history/statistics, saved galleries, and trackers remain device-specific. Private-window data and private preference edits are never uploaded. Ignored-media records include a website origin and media hash; completed records include the origin, media fingerprint, filename, media type, and completion time. Supabase stores this metadata and the Google account identity under per-user database access rules. It is not end-to-end encrypted. Google passwords and website login cookies are never stored by AnyDownload.
+
+Google sign-in opens a regular browser tab and returns automatically to the Sync page on desktop and Android using a short-lived PKCE code. Tokens are stored in normal extension storage and excluded from synchronization. **Sign out / stop sync** retains local and cloud data and stops synchronization. This first version binds an installation to one Google account and project even after sign-out, preventing an accidental upload to another account. Reconnect with that same account to resume. Removing the extension removes its local cache; account/cloud deletion is currently managed in Supabase.
+
 ## Try it in two minutes
 
 1. Open Firefox and enter `about:debugging` in the address bar.
@@ -297,7 +307,7 @@ Normal Firefox Release and Beta builds require Mozilla signing for permanent ins
 3. Build a ZIP with `web-ext build --source-dir extension`.
 4. Submit it through the [Firefox Add-on Developer Hub](https://addons.mozilla.org/developers/) as a listed add-on, or use Mozilla's unlisted signing channel for private distribution.
 
-The manifest declares `data_collection_permissions.required: ["none"]` because this implementation sends no browsing/media information to an analytics or cloud service. If you later add telemetry or remote processing, update that declaration and the privacy experience. See Mozilla's [Firefox built-in data consent guide](https://extensionworkshop.com/documentation/develop/firefox-builtin-data-consent/) and [signing overview](https://extensionworkshop.com/documentation/publish/signing-and-distribution-overview/).
+The manifest declares no required data collection and declares optional account, browsing, download-activity, and website-content data for cloud sync. The Sync page requests explicit consent and exact Supabase-project access; Firefox versions with built-in optional data permissions also request those permissions. Revoking cloud permissions stops cloud requests while local downloads continue. See Mozilla's [Firefox built-in data consent guide](https://extensionworkshop.com/documentation/develop/firefox-builtin-data-consent/) and [signing overview](https://extensionworkshop.com/documentation/publish/signing-and-distribution-overview/).
 
 ## Known boundaries
 

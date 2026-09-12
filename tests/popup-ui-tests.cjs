@@ -67,6 +67,7 @@ for (const [tag, id] of Array.from(html.matchAll(/<[^>]+\bid="([^"]+)"[^>]*>/g),
 const saved = {};
 const previewSession = {};
 const openedTabs = [];
+const settingsMessages = [];
 const context = vm.createContext({
   URL, URLSearchParams, console,
   crypto: require("node:crypto").webcrypto,
@@ -82,7 +83,16 @@ const context = vm.createContext({
       local: { set: async value => Object.assign(saved, value) },
       session: { set: async value => Object.assign(previewSession, value) }
     },
-    runtime: { getURL: file => `moz-extension://test/${file}` },
+    runtime: {
+      getURL: file => `moz-extension://test/${file}`,
+      sendMessage: async message => {
+        settingsMessages.push(message);
+        assert.equal(message.type, "CLOUD_LOCAL_WRITE");
+        if (message.action === "set") Object.assign(saved, message.values);
+        else for (const key of [].concat(message.keys)) delete saved[key];
+        return { ok: true };
+      }
+    },
     tabs: { create: async properties => openedTabs.push(properties) }
   },
   document: {
@@ -101,11 +111,13 @@ let source = fs.readFileSync(path.join(__dirname, "../extension/popup/popup.js")
 const entry = '  document.addEventListener("DOMContentLoaded", () => {';
 assert.ok(source.includes(entry));
 source = source.replace(entry, `  globalThis.ui = { cacheElements, wireEvents, applyMediaView, applySmartFiltersToControls,
-    updateSummary, renderImages, makeImageRow, requireValidFilenameTemplate, requestDownloads, focusIgnoredToggle, state, elements };
+    updateSummary, renderImages, makeImageRow, requireValidFilenameTemplate, requestDownloads, focusIgnoredToggle, persistSettings, ignoreStorageArea, handleSettingsStorageChanges, state, elements };
 ${entry}`);
 vm.runInContext(source, context);
 const ui = context.ui;
 ui.cacheElements();
+assert.equal(ui.state.incognito, true, "Settings writes start disabled until the source context is known");
+ui.state.incognito = false;
 ui.applySmartFiltersToControls(Filters.DEFAULT_FILTERS);
 ui.wireEvents();
 const get = id => nodes.get(id);
@@ -246,7 +258,35 @@ for (const sourceId of ["7", "", "-1", "3.5", "9007199254740992", "https://unexp
   assert.equal(new URL(link.href).searchParams.get("sourceTabId"), sourceId === "7" ? "7" : null);
 }
 
-previewButton.listeners.click().then(() => {
+previewButton.listeners.click().then(async () => {
+  const writesBeforePrivate = settingsMessages.length;
+  ui.state.incognito = true;
+  await ui.persistSettings({ filenameTemplate: "private-{name}.{ext}", destinationFolder: "private" });
+  get("list-view-button").listeners.click();
+  get("ask-single-input").listeners.change();
+  get("backgrounds-input").listeners.change();
+  assert.equal(settingsMessages.length, writesBeforePrivate, "Private settings must never reach cloud/local persistence");
+  await ui.ignoreStorageArea(true).set({ privateRule: 1 });
+  assert.equal(previewSession.privateRule, 1);
+  assert.equal(settingsMessages.length, writesBeforePrivate, "Private ignores must stay in session storage");
+  ui.state.incognito = false;
+  context.browser.extension = { inIncognitoContext: true };
+  await ui.persistSettings({ filenameTemplate: "still-private-{name}.{ext}" });
+  assert.equal(settingsMessages.length, writesBeforePrivate, "Firefox's private extension context also prevents persistence");
+  context.browser.extension.inIncognitoContext = false;
+  await ui.persistSettings({ filenameTemplate: Templates.DEFAULT_TEMPLATE });
+  assert.equal(settingsMessages.at(-1).type, "CLOUD_LOCAL_WRITE");
+  await ui.ignoreStorageArea(false).set({ normalRule: 1 });
+  await ui.ignoreStorageArea(false).remove("normalRule");
+  assert.equal(saved.normalRule, undefined);
+  assert.equal(settingsMessages.at(-1).action, "remove", "Ignore removal must use the same background lock as sync");
+  assert.deepEqual(Array.from(settingsMessages.at(-1).keys), ["normalRule"], "Single-item Restore sends the background's key-array format");
+  get("filename-template-input").value = "edited-{name}.{ext}";
+  ui.handleSettingsStorageChanges({ filenameTemplate: { oldValue: Templates.DEFAULT_TEMPLATE, newValue: "cloud-{name}.{ext}" } }, "local");
+  assert.equal(get("filename-template-input").value, "edited-{name}.{ext}", "Incoming sync must preserve an unsaved template edit");
+  get("filename-template-input").value = Templates.DEFAULT_TEMPLATE;
+  ui.handleSettingsStorageChanges({ filenameTemplate: { oldValue: Templates.DEFAULT_TEMPLATE, newValue: "cloud-{name}.{ext}" } }, "local");
+  assert.equal(get("filename-template-input").value, "cloud-{name}.{ext}", "Unedited settings update in open managers");
   assert.equal(openedTabs.length, 1);
   const id = new URL(openedTabs[0].url).searchParams.get("id");
   assert.equal(previewSession[`imagePreview:${id}`].url, first.url);

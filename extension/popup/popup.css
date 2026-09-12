@@ -1038,7 +1038,7 @@ svg {
   }
 }
 
-@media (max-width: 390px) {
+@media (max-width: 520px) {
   .app-header {
     flex-wrap: wrap;
   }
@@ -1057,7 +1057,9 @@ svg {
   .header-actions {
     margin-left: auto;
   }
+}
 
+@media (max-width: 390px) {
   .media-type-field {
     flex-basis: 95px;
   }

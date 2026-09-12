@@ -693,7 +693,7 @@
     busy: false,
     hasStoredFolder: false,
     hideDownloaded: false,
-    incognito: false,
+    incognito: true,
     ignoredKeys: new Set(),
     explicitRedownloads: new Set(),
     filenameTemplate: Templates.DEFAULT_TEMPLATE,
@@ -826,6 +826,7 @@
       "smart-filter-panel",
       "smart-filters-button",
       "summary-label",
+      "sync-button",
       "tracking-dashboard-button",
       "tracker-button",
       "tracker-action-select",
@@ -1198,7 +1199,7 @@
       state.trackerPageUrl = state.pageUrl;
       state.hasStoredFolder = true;
       populateTrackerControls(state.tracker);
-      await browser.storage.local.set({
+      await persistSettings({
         destinationFolder: folder.value,
         filenameTemplate: template.value,
         smartFilters: filters
@@ -1478,6 +1479,84 @@
     }
   }
 
+  async function openCloudSync() {
+    if (state.incognito) return;
+    const createProperties = {
+      active: true,
+      url: browser.runtime.getURL("sync/sync.html") +
+        (Number.isInteger(state.sourceTabId) ? `?sourceTabId=${state.sourceTabId}` : "")
+    };
+    if (Number.isInteger(state.sourceWindowId)) {
+      createProperties.windowId = state.sourceWindowId;
+    }
+    await browser.tabs.create(createProperties).catch(() => {
+      setNotice("Firefox could not open cloud sync. Please try again.", "error");
+    });
+  }
+
+  async function writeNormalStorage(action, value) {
+    let response;
+    try {
+      response = await browser.runtime.sendMessage({
+        type: "CLOUD_LOCAL_WRITE", action,
+        ...(action === "set" ? { values: value } : { keys: value })
+      });
+    } catch (_error) {
+      // Keep transport failures free of account/session details.
+    }
+    if (!response || !response.ok) {
+      throw new Error("Firefox could not save these changes. Please try again.");
+    }
+  }
+
+  function persistSettings(values) {
+    return state.incognito || browser.extension && browser.extension.inIncognitoContext
+      ? Promise.resolve() : writeNormalStorage("set", values);
+  }
+
+  function handleSettingsStorageChanges(changes, areaName) {
+    if (areaName !== "local" || state.incognito) return;
+    let changed = false;
+    for (const [key, id, normalize] of [
+      ["askForSingle", "ask-single-input", Boolean],
+      ["includeBackgrounds", "backgrounds-input", (value) => value !== false]
+    ]) {
+      const change = changes[key];
+      const input = elements[id];
+      if (change && !input.disabled && document.activeElement !== input && input.checked === normalize(change.oldValue)) {
+        input.checked = normalize(change.newValue);
+        changed = true;
+      }
+    }
+    const folder = changes.destinationFolder;
+    if (folder && document.activeElement !== elements["folder-input"] &&
+      (!state.hasStoredFolder || elements["folder-input"].value === folder.oldValue)) {
+      elements["folder-input"].value = folder.newValue || Core.DEFAULT_FOLDER;
+      state.hasStoredFolder = Boolean(folder.newValue);
+      changed = true;
+    }
+    const template = changes.filenameTemplate;
+    if (template && document.activeElement !== elements["filename-template-input"] &&
+      elements["filename-template-input"].value === (template.oldValue || Templates.DEFAULT_TEMPLATE)) {
+      const validated = Templates.validate(template.newValue);
+      elements["filename-template-input"].value = validated.ok ? validated.value : Templates.DEFAULT_TEMPLATE;
+      changed = true;
+    }
+    const filters = changes.smartFilters;
+    if (filters && !["photos-only-input", "media-type-filter-select", "format-filter-select"].some(
+      (id) => document.activeElement === elements[id]
+    ) && JSON.stringify(state.smartFilters) === JSON.stringify(Filters.normalizeFilters(filters.oldValue))) {
+      applySmartFiltersToControls(filters.newValue);
+      changed = true;
+    }
+    if (changes.mediaLayout) applyMediaView(changes.mediaLayout.newValue);
+    if (changed) {
+      refreshRenderedFilenamePreviews();
+      updateSmartFilterButton();
+      renderImages();
+    }
+  }
+
   async function openDownloadHistory() {
     const createProperties = {
       active: true,
@@ -1571,7 +1650,8 @@
   }
 
   function setIncognitoContext(value) {
-    const nextValue = Boolean(value);
+    const nextValue = Boolean(value || browser.extension && browser.extension.inIncognitoContext);
+    elements["sync-button"].disabled = nextValue;
     if (state.incognito === nextValue) {
       return;
     }
@@ -1769,7 +1849,11 @@
   }
 
   function ignoreStorageArea(incognito) {
-    return incognito ? browser.storage.session : browser.storage.local;
+    return incognito ? browser.storage.session : {
+      get: (keys) => browser.storage.local.get(keys),
+      set: (values) => writeNormalStorage("set", values),
+      remove: (keys) => writeNormalStorage("remove", Array.isArray(keys) ? keys : [keys])
+    };
   }
 
   function ignoreStoragePrefix(siteKey) {
@@ -2356,7 +2440,7 @@
   }
 
   function persistSmartFilters() {
-    browser.storage.local.set({ smartFilters: state.smartFilters }).catch(() => undefined);
+    persistSettings({ smartFilters: state.smartFilters }).catch((error) => setNotice(error.message, "error"));
   }
 
   function handleSmartFilterChange() {
@@ -4108,7 +4192,7 @@
       if (!state.incognito) {
         storedSettings.destinationFolder = folder.value;
       }
-      await browser.storage.local.set(storedSettings);
+      await persistSettings(storedSettings);
       await loadIgnoredKeys();
       for (const image of state.images) {
         if (isImageIgnored(image)) {
@@ -4202,7 +4286,7 @@
       if (!state.incognito) {
         storedSettings.destinationFolder = folder.value;
       }
-      await browser.storage.local.set(storedSettings);
+      await persistSettings(storedSettings);
       await loadIgnoredKeys();
       for (const image of state.images) {
         if (isImageIgnored(image)) {
@@ -4894,7 +4978,7 @@
     for (const view of ["grid", "list"]) {
       elements[`${view}-view-button`].addEventListener("click", () => {
         applyMediaView(view);
-        browser.storage.local.set({ mediaLayout: view }).catch(() => undefined);
+        persistSettings({ mediaLayout: view }).catch((error) => setNotice(error.message, "error"));
       });
     }
     elements["collect-gallery-button"].addEventListener("click", () => {
@@ -4910,6 +4994,7 @@
     elements["sidebar-button"].addEventListener("click", openFirefoxSidebar);
     elements["history-button"].addEventListener("click", openDownloadHistory);
     elements["tracking-dashboard-button"].addEventListener("click", openTrackingDashboard);
+    elements["sync-button"].addEventListener("click", openCloudSync);
     elements["tracker-button"].addEventListener("click", () => {
       const panel = elements["tracker-panel"];
       panel.hidden = !panel.hidden;
@@ -4947,7 +5032,7 @@
       if (result.ok) {
         elements["filename-template-input"].value = result.value;
         state.filenameTemplate = result.value;
-        await browser.storage.local.set({ filenameTemplate: result.value });
+        await persistSettings({ filenameTemplate: result.value }).catch((error) => setNotice(error.message, "error"));
       }
       refreshRenderedFilenamePreviews();
       updateSummary();
@@ -4957,17 +5042,15 @@
       if (folder.ok) {
         elements["folder-input"].value = folder.value;
         state.hasStoredFolder = true;
-        if (!state.incognito) {
-          await browser.storage.local.set({ destinationFolder: folder.value });
-        }
+        await persistSettings({ destinationFolder: folder.value }).catch((error) => setNotice(error.message, "error"));
       }
       updateSummary();
     });
     elements["ask-single-input"].addEventListener("change", () => {
-      browser.storage.local.set({ askForSingle: elements["ask-single-input"].checked });
+      persistSettings({ askForSingle: elements["ask-single-input"].checked }).catch((error) => setNotice(error.message, "error"));
     });
     elements["backgrounds-input"].addEventListener("change", () => {
-      browser.storage.local.set({ includeBackgrounds: elements["backgrounds-input"].checked });
+      persistSettings({ includeBackgrounds: elements["backgrounds-input"].checked }).catch((error) => setNotice(error.message, "error"));
     });
     elements["photos-only-input"].addEventListener("change", handleSmartFilterChange);
     for (const id of [
@@ -5095,6 +5178,7 @@
     browser.storage.onChanged.addListener(handleTrackerStorageChanges);
     browser.storage.onChanged.addListener(handleDownloadStatusStorageChanges);
     browser.storage.onChanged.addListener(handleGalleryStorageChanges);
+    browser.storage.onChanged.addListener(handleSettingsStorageChanges);
     try {
       const stored = await browser.storage.local.get([
         "destinationFolder",

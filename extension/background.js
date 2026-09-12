@@ -54,6 +54,7 @@
   let trackerMutationQueue = Promise.resolve();
   let galleryMutationQueue = Promise.resolve();
   let archiveInProgress = false;
+  let cloudSync = null;
 
   function acknowledgeMenuCreation() {
     // Reading lastError prevents duplicate-ID errors from becoming uncaught when
@@ -708,6 +709,10 @@
   }
 
   async function storeContextIgnoreRule(image, info, tab) {
+    return storageOperation(Boolean(tab && tab.incognito), () => storeContextIgnoreRuleLocked(image, info, tab));
+  }
+
+  async function storeContextIgnoreRuleLocked(image, info, tab) {
     const siteKey = Core.siteKeyForUrl(
       info && (info.pageUrl || info.frameUrl) || tab && tab.url || ""
     );
@@ -1486,16 +1491,23 @@
     return downloadQueueContexts.get(key);
   }
 
-  function queueOperation(incognito, callback) {
+  function storageOperation(incognito, callback) {
     const context = queueContext(incognito);
     const result = context.operation
       .catch(() => undefined)
       .then(async () => {
-        await loadQueueLocked(context);
+        if (!incognito && cloudSync) await cloudSync.recover();
         return callback(context);
       });
     context.operation = result.then(() => undefined, () => undefined);
     return result;
+  }
+
+  function queueOperation(incognito, callback) {
+    return storageOperation(incognito, async (context) => {
+      await loadQueueLocked(context);
+      return callback(context);
+    });
   }
 
   async function persistQueueLocked(context) {
@@ -3486,6 +3498,12 @@
       folder: batch.folder,
       errors: failures.slice(0, 10)
     };
+  }
+
+  if (globalThis.AnyDownloadCloudRuntime) {
+    cloudSync = globalThis.AnyDownloadCloudRuntime.start(browser, {
+      withStorageLock: (callback) => storageOperation(false, callback)
+    });
   }
 
   browser.runtime.onInstalled.addListener(() =>

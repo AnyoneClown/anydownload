@@ -64,7 +64,7 @@ const trackingJs = fs.readFileSync(path.join(root, "tracking/tracking.js"), "utf
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.name, "AnyDownload — Page Media Downloader");
-assert.equal(manifest.version, "1.13.2");
+assert.equal(manifest.version, "1.14.0");
 assert.equal(manifest.action.default_title, "Download page media");
 assert.equal(Core.MAX_BATCH_TOTAL_URL_LENGTH, 2000000);
 assert.deepEqual(manifest.permissions.sort(), ["activeTab", "alarms", "downloads", "menus", "notifications", "scripting", "storage"]);
@@ -84,6 +84,8 @@ assert.deepEqual(
     "shared/download-ledger.js",
     "shared/gallery.js",
     "shared/download-queue.js",
+    "shared/cloud-sync.js",
+    "shared/cloud-sync-runtime.js",
     "background.js"
   ]
 );
@@ -98,6 +100,8 @@ assert.deepEqual(
   ["none"]
 );
 assert.equal(manifest.browser_specific_settings.gecko_android.strict_min_version, "142.0");
+assert.deepEqual(manifest.browser_specific_settings.gecko.data_collection_permissions.optional,
+  ["authenticationInfo", "personallyIdentifyingInfo", "browsingActivity", "websiteActivity", "websiteContent"]);
 assert.match(popupHtml, /^<!doctype html>/i, "Popup must use standards mode for reliable Firefox sizing");
 const popupScriptSources = Array.from(
   popupHtml.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*><\/script>/gi),

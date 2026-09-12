@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AnyDownload — Page Media Downloader",
-  "version": "1.13.2",
+  "version": "1.14.0",
   "description": "Download and track page media, Instagram collections, and basic progressive YouTube videos with safe bulk queues.",
   "permissions": [
     "activeTab",
@@ -50,6 +50,8 @@
       "shared/download-ledger.js",
       "shared/gallery.js",
       "shared/download-queue.js",
+      "shared/cloud-sync.js",
+      "shared/cloud-sync-runtime.js",
       "background.js"
     ]
   },
@@ -60,6 +62,13 @@
       "data_collection_permissions": {
         "required": [
           "none"
+        ],
+        "optional": [
+          "authenticationInfo",
+          "personallyIdentifyingInfo",
+          "browsingActivity",
+          "websiteActivity",
+          "websiteContent"
         ]
       }
     },
