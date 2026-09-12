@@ -4,6 +4,8 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-09-12
+
 ### Added
 
 - Immich connections with account-owned encrypted API keys, direct Firefox uploads to HTTP(S) LAN/Tailscale servers, writable album selection, and a visible upload tab with separate upload/album results and explicit retries. Includes Supabase Vault migration, authenticated credential operations, and setup instructions.
@@ -23,6 +25,10 @@ All notable changes to AnyDownload are documented here.
 - The gallery, Downloads, and Tracking retain keyboard focus through live updates. Dashboard updates announce concise status summaries instead of rebuilding whole-list announcements.
 - Open gallery previews follow refreshed media URLs and close cleanly when their media is removed.
 - Archive Progress explains that its tab must remain open and opens workspace navigation separately while a ZIP is running; failed-image retries keep previously saved parts.
+
+### Deployment note
+
+- Immich connections require separate deployment of the included Supabase Vault migration and `external-integrations` Edge Function. They are not yet deployed to the shared service. Automated checks pass; live Immich uploads and hosted Vault remain unverified. See [setup instructions](supabase/INTEGRATIONS.md).
 
 ## [1.15.0] - 2026-09-12
 
