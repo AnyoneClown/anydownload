@@ -802,6 +802,7 @@
       "preview-download-button", "preview-tab-button", "preview-source-link",
       "action-detail",
       "archive-footer-button",
+      "upload-button", "integrations-button",
       "ask-single-input",
       "backgrounds-input",
       "clear-ignored-button",
@@ -1514,6 +1515,15 @@
     });
   }
 
+  async function openIntegrations() {
+    if (state.incognito) return;
+    await browser.tabs.create({ active: true,
+      url: browser.runtime.getURL("integrations/integrations.html") +
+        (Number.isInteger(state.sourceTabId) ? `?sourceTabId=${state.sourceTabId}` : ""),
+      ...(Number.isInteger(state.sourceWindowId) ? { windowId: state.sourceWindowId } : {})
+    }).catch(() => setNotice("Firefox could not open Integrations. Please try again.", "error"));
+  }
+
   async function writeNormalStorage(action, value) {
     let response;
     try {
@@ -1672,6 +1682,7 @@
   function setIncognitoContext(value) {
     const nextValue = Boolean(value || browser.extension && browser.extension.inIncognitoContext);
     elements["sync-button"].disabled = nextValue;
+    elements["integrations-button"].disabled = nextValue;
     if (state.incognito === nextValue) {
       return;
     }
@@ -3021,6 +3032,7 @@
     elements["select-none-button"].textContent = hasFilter ? "Deselect matches" : "Deselect";
     elements["download-button"].hidden = state.showIgnored;
     elements["archive-footer-button"].hidden = state.showIgnored;
+    elements["upload-button"].hidden = state.showIgnored || state.incognito;
     elements["selected-label"].textContent = state.showIgnored
       ? `${ignoredCount.toLocaleString()} ignored here`
       : `${selected.toLocaleString()} selected${hiddenSelected ? ` · ${hiddenSelected.toLocaleString()} hidden` : ""}`;
@@ -3061,6 +3073,9 @@
     elements["archive-footer-button"].title = selectedHasVideo
       ? "ZIP archives currently support image-only selections"
       : "Download selected images as ZIP archives";
+    elements["upload-button"].disabled = state.incognito || state.busy || Boolean(galleryCollection) ||
+      selected === 0 || selected > 500 || selectedHasVideo || !template.ok;
+    elements["upload-button"].title = "Upload up to 500 selected images, including previously downloaded images";
     updateInstagramCollectionsButton();
     elements["image-list"].setAttribute(
       "aria-label",
@@ -4475,6 +4490,38 @@
     return requestDownloads(selectedDownloadableImages());
   }
 
+  async function uploadSelectedImages() {
+    if (state.incognito || state.busy || galleryCollection) return;
+    const images = selectedDownloadableImages();
+    if (!images.length || images.length > 500 || images.some((item) => mediaTypeFor(item) !== "image")) {
+      setNotice("Choose between 1 and 500 images to upload.", "error");
+      return;
+    }
+    const template = requireValidFilenameTemplate();
+    if (!template) return;
+    const id = createPreviewId();
+    const key = `uploadJobRequest:${id}`;
+    state.busy = true;
+    updateSummary();
+    try {
+      await browser.storage.session.set({ [key]: {
+        createdAt: Date.now(), incognito: false,
+        items: renderedDownloadItems(images, template.value).map(({ url, filename }) => ({ url, filename }))
+      } });
+      await browser.tabs.create({ active: true,
+        url: browser.runtime.getURL(`upload/upload.html?request=${encodeURIComponent(id)}`),
+        ...(Number.isInteger(state.sourceWindowId) ? { windowId: state.sourceWindowId } : {})
+      });
+      setNotice("Choose your destination in Upload Progress. Keep that tab open during uploads.", "success");
+    } catch (_error) {
+      await browser.storage.session.remove(key).catch(() => undefined);
+      setNotice("Firefox could not open Upload Progress. Please try again.", "error");
+    } finally {
+      state.busy = false;
+      updateSummary();
+    }
+  }
+
   async function finishArchiveDownload(images, folder, permissionPromise, templateValue) {
     try {
       const granted = await permissionPromise;
@@ -5261,6 +5308,7 @@
     elements["history-button"].addEventListener("click", openDownloadHistory);
     elements["tracking-dashboard-button"].addEventListener("click", openTrackingDashboard);
     elements["sync-button"].addEventListener("click", openCloudSync);
+    elements["integrations-button"].addEventListener("click", openIntegrations);
     elements["tracker-button"].addEventListener("click", () => {
       const panel = elements["tracker-panel"];
       panel.hidden = !panel.hidden;
@@ -5372,6 +5420,7 @@
       renderImages();
     });
     elements["archive-footer-button"].addEventListener("click", downloadSelectedArchive);
+    elements["upload-button"].addEventListener("click", uploadSelectedImages);
     elements["download-button"].addEventListener("click", downloadSelectedImages);
   }
 

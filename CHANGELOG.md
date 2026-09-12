@@ -6,6 +6,7 @@ All notable changes to AnyDownload are documented here.
 
 ### Added
 
+- Immich connections with account-owned encrypted API keys, direct Firefox uploads to HTTP(S) LAN/Tailscale servers, writable album selection, and a visible upload tab with separate upload/album results and explicit retries. Includes Supabase Vault migration, authenticated credential operations, and setup instructions.
 - In-gallery image and direct-video previews with Previous/Next, arrow-key navigation, Escape, selection, download, and optional full-tab preview. Standalone previews can return to their source and survive reload within the existing five-minute expiry.
 - **This page** and **Saved website** views, 350-item pagination, filename/resolution sorting, and minimum-width, minimum-height, and orientation filters. Unknown sizes are excluded while a size or orientation filter is active.
 - Tracker review selection, **Download selected**/**Dismiss selected**, a tracker filter, visible destinations, partial-failure feedback, and an **Edit tracker** shortcut to the existing settings editor.

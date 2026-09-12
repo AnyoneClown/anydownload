@@ -2,6 +2,8 @@
 
 AnyDownload uses Supabase Auth for Google sign-in and a PostgreSQL row per user for optional device sync. Local storage remains the offline working copy. The extension calls Supabase's Auth and Data APIs directly; no database password, server SDK, or separate application server is required.
 
+External upload connections use the same account and a separate encrypted backend. See the [Immich integration setup](INTEGRATIONS.md) for the required Vault migration, endpoint deployment, key permissions, and LAN/Tailscale access.
+
 ## Shared project
 
 Created on 2026-09-11 in **AnyoneClown's Org**, region **eu-central-1 (Frankfurt)**. Supabase quoted **$0/month** at creation.
@@ -31,7 +33,7 @@ The shared project is already configured. To deploy a build against another proj
    supabase functions deploy sync-callback --project-ref PROJECT
    ```
 
-   [`config.toml`](config.toml) disables JWT verification for this callback because the browser reaches it before the extension has exchanged the sign-in code. The function returns static plain text, reads no parameters, and stores no credentials. Other functions keep their normal verification settings. See [per-function configuration](https://supabase.com/docs/guides/functions/function-configuration).
+   [`config.toml`](config.toml) disables JWT verification for this callback because the browser reaches it before the extension has exchanged the sign-in code. The function returns static plain text, reads no parameters, and stores no credentials. The separate integration endpoint verifies its authenticated user inside its handler; see its [setup guide](INTEGRATIONS.md). See [per-function configuration](https://supabase.com/docs/guides/functions/function-configuration).
 4. In **Authentication → URL Configuration**, add this allowed redirect URL, substituting the same project reference:
 
    ```text

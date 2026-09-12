@@ -1126,6 +1126,7 @@ svg {
 
   .action-buttons {
     flex-direction: row;
+    flex-wrap: wrap;
     align-items: stretch;
     width: 100%;
   }

@@ -1,0 +1,13 @@
+.page-shell { max-width: 760px; }
+.card { margin: 18px 0; padding: 22px; }
+h2 { margin: 0 0 16px; font-size: 18px; }
+label { display: block; margin: 16px 0 6px; font-weight: 600; }
+input, select { width: 100%; min-height: 44px; padding: 10px; color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); }
+.hint { color: var(--ink-muted); font-size: 13px; line-height: 1.6; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0; }
+button { min-height: 44px; padding: 10px 16px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong); color: var(--ink); background: var(--surface-raised); cursor: pointer; }
+.primary-button { background: var(--brand); color: var(--on-brand); border-color: var(--brand); }
+button:disabled, input:disabled, select:disabled { opacity: .6; cursor: default; }
+#status, #error { overflow-wrap: anywhere; }
+#error { padding: 12px; color: var(--danger); background: var(--danger-soft); border-radius: var(--radius-sm); }
+@media (max-width: 480px) { .card { padding: 16px; } .actions button { width: 100%; } }

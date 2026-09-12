@@ -85,6 +85,7 @@ assert.deepEqual(
     "shared/gallery.js",
     "shared/download-queue.js",
     "shared/cloud-sync.js",
+    "shared/integrations.js",
     "shared/cloud-sync-runtime.js",
     "background.js"
   ]

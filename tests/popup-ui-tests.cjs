@@ -507,6 +507,29 @@ for (const sourceId of ["7", "", "-1", "3.5", "9007199254740992", "https://unexp
   assert.equal(clearedVideo.paused, true);
   assert.equal(clearedVideo.src, "", "Clearing the collection releases active video playback");
 
+  ui.state.images = [first];
+  ui.state.incognito = false;
+  first.downloadStatus = "downloaded";
+  first.downloadFingerprint = "previous-local-download";
+  ui.state.explicitRedownloads.add(first.downloadFingerprint);
+  ui.state.selected.add(first.url);
+  get("filename-template-input").value = "{filename}";
+  ui.updateSummary();
+  assert.equal(get("upload-button").disabled, false, "Previously downloaded images remain eligible for explicit upload");
+  const downloadsBeforeUpload = downloadMessages.length;
+  await get("upload-button").listeners.click();
+  const uploadId = new URL(openedTabs.at(-1).url).searchParams.get("request");
+  assert.equal(previewSession[`uploadJobRequest:${uploadId}`].items[0].url, first.url);
+  assert.equal(downloadMessages.length, downloadsBeforeUpload, "Upload does not enqueue a local download");
+  assert.equal(first.downloadStatus, "downloaded", "Upload does not overwrite local completion state");
+  const tabsBeforePrivateUpload = openedTabs.length;
+  ui.state.incognito = true;
+  ui.updateSummary();
+  assert.equal(get("upload-button").hidden, true);
+  await get("upload-button").listeners.click();
+  assert.equal(openedTabs.length, tabsBeforePrivateUpload);
+  ui.state.incognito = false;
+
   const tracker = context.AnyDownloadTracker.normalizeTracker({
     id: "tracker-editor-001", url: "https://tracked.example/album", pageTitle: "Tracked album",
     folder: "Tracked photos", filenameTemplate: "{filename}", intervalMinutes: 60,

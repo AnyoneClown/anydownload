@@ -1,2 +1,6 @@
 [functions.sync-callback]
 verify_jwt = false
+
+[functions.external-integrations]
+# Verify via Auth /user in the handler, which also puts no-store on auth failures.
+verify_jwt = false

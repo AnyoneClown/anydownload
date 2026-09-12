@@ -1,12 +1,12 @@
 (function attachCloudRuntime(root, factory) {
   "use strict";
-  const api = factory(root.AnyDownloadCloudSync, root.ImageDownloaderCore);
+  const api = factory(root.AnyDownloadCloudSync, root.ImageDownloaderCore, root.AnyDownloadIntegrations);
   if (typeof module === "object" && module.exports) {
-    module.exports = factory(require("./cloud-sync.js"), require("./core.js"));
+    module.exports = factory(require("./cloud-sync.js"), require("./core.js"), require("./integrations.js"));
   } else {
     root.AnyDownloadCloudRuntime = api;
   }
-})(globalThis, function createCloudRuntime(Model, Core) {
+})(globalThis, function createCloudRuntime(Model, Core, Integrations) {
   "use strict";
 
   const STATE_KEY = "cloudSync:v1";
@@ -28,6 +28,7 @@
     const withStorageLock = options.withStorageLock || ((callback) => callback());
     let operations = Promise.resolve();
     let generation = 0;
+    let integrationGeneration = 0;
     const requests = new Set();
     let applying = false;
     let needsRecovery = true;
@@ -47,6 +48,11 @@
     function cancel() {
       generation += 1;
       for (const controller of requests) controller.abort();
+    }
+
+    function invalidateIntegrations() {
+      integrationGeneration += 1;
+      browser.runtime.sendMessage?.({ type: "INTEGRATIONS_CHANGED" }).catch(() => undefined);
     }
 
     async function permitted(state) {
@@ -361,9 +367,74 @@
         const url = new URL(sender.url);
         const base = new URL(browser.runtime.getURL("/"));
         return url.protocol === base.protocol && url.host === base.host &&
-          (syncPageOnly ? url.pathname === "/sync/sync.html" :
+          (Array.isArray(syncPageOnly) ? syncPageOnly.includes(url.pathname) : syncPageOnly ? url.pathname === "/sync/sync.html" :
             ["/popup/popup.html", "/sidebar/sidebar.html"].includes(url.pathname));
       } catch (_error) { return false; }
+    }
+
+    async function integrationStatus() {
+      const state = await load();
+      const signedIn = Boolean(state.consent && state.session && state.owner &&
+        UUID.test(state.session.userId) && state.session.userId === state.owner.userId &&
+        state.config?.url === CONFIG.url && state.owner.project === CONFIG.url);
+      return { ok: true, signedIn, ownerId: signedIn ? state.session.userId : "", email: signedIn ? state.session.email || "" : "" };
+    }
+
+    async function integrationRequest(message, epoch) {
+      if (epoch !== integrationGeneration) return { ok: false, code: "stopped" };
+      let payload;
+      try {
+        const state = await load();
+        const current = await integrationStatus();
+        if (!current.signedIn) return { ok: false, code: "signin" };
+        if (!await permitted(state)) return { ok: false, code: "permission" };
+        const { action } = message;
+        const fields = ["type", "action"];
+        const body = { action };
+        if (["save", "credential", "delete", "defaultAlbum"].includes(action)) {
+          fields.push("connectionId");
+          if (message.connectionId !== undefined || action !== "save") {
+            if (!UUID.test(message.connectionId)) return { ok: false, code: "invalid" };
+            body.connectionId = message.connectionId;
+          }
+        }
+        if (action === "save") {
+          fields.push("provider", "serverUrl", "apiKey", "defaultAlbumId");
+          const normalized = Integrations.connection({ id: message.connectionId || "00000000-0000-0000-0000-000000000000",
+            provider: message.provider, serverUrl: message.serverUrl, defaultAlbumId: message.defaultAlbumId });
+          if (!Integrations.validKey(message.apiKey)) return { ok: false, code: "invalid" };
+          Object.assign(body, { provider: normalized.provider, serverUrl: normalized.serverUrl, apiKey: message.apiKey });
+          if (Object.hasOwn(message, "defaultAlbumId")) body.defaultAlbumId = normalized.defaultAlbumId;
+        } else if (action === "defaultAlbum") {
+          fields.push("defaultAlbumId");
+          if (message.defaultAlbumId !== null && !UUID.test(message.defaultAlbumId)) return { ok: false, code: "invalid" };
+          body.defaultAlbumId = message.defaultAlbumId;
+        } else if (!["list", "credential", "delete"].includes(action)) return { ok: false, code: "invalid" };
+        if (Object.keys(message).some(key => !fields.includes(key))) return { ok: false, code: "invalid" };
+        if (epoch !== integrationGeneration) return { ok: false, code: "stopped" };
+        try { payload = await api(state, "/functions/v1/external-integrations", { method: "POST", body }); }
+        finally { if (body.apiKey) body.apiKey = ""; }
+        const latest = await load();
+        if (epoch !== integrationGeneration || Integrations.identity(state) !== Integrations.identity(latest) || !await permitted(latest)) {
+          return { ok: false, code: "stopped" };
+        }
+        if (action === "list") {
+          if (!Array.isArray(payload?.connections) || payload.connections.length > 20) return { ok: false, code: "invalid" };
+          return { ok: true, connections: payload.connections.map(Integrations.connection) };
+        }
+        if (action === "delete") return payload?.deleted === true ? { ok: true, deleted: true } : { ok: false, code: "invalid" };
+        const result = Integrations.connection(payload?.connection);
+        if (body.connectionId && result.id !== body.connectionId) return { ok: false, code: "invalid" };
+        if (action !== "credential") return { ok: true, connection: result };
+        if (!Integrations.validKey(payload.apiKey)) return { ok: false, code: "invalid" };
+        return { ok: true, connection: result, apiKey: payload.apiKey, ownerId: current.ownerId };
+      } catch (error) {
+        // Credential operations never call report(): no server text or key reaches durable sync errors.
+        return { ok: false, code: error.status === 401 ? "signin" : error.status === 404 ? "missing" :
+          error.status === 400 ? "invalid" : error.status === 409 ? "limit" : "failed" };
+      } finally {
+        if (payload && Object.hasOwn(payload, "apiKey")) payload.apiKey = "";
+      }
     }
 
     async function localWrite(message) {
@@ -398,11 +469,22 @@
     }
 
     browser.runtime.onMessage.addListener((message, sender) => {
-      if (!message || !["CLOUD_SYNC", "CLOUD_LOCAL_WRITE"].includes(message.type)) return undefined;
+      if (!message || !["CLOUD_SYNC", "CLOUD_LOCAL_WRITE", "INTEGRATIONS"].includes(message.type)) return undefined;
+      if (message.type === "INTEGRATIONS") {
+        const pages = ["/integrations/integrations.html"];
+        if (["status", "list", "credential", "defaultAlbum"].includes(message.action)) pages.push("/upload/upload.html");
+        if (["status", "list"].includes(message.action)) pages.push("/popup/popup.html", "/sidebar/sidebar.html");
+        if (!trusted(sender, pages)) return Promise.resolve({ ok: false, code: "private" });
+        if (message.action === "status") return ready.then(integrationStatus);
+        if (["save", "delete"].includes(message.action)) invalidateIntegrations();
+        const epoch = integrationGeneration;
+        return enqueue(() => integrationRequest(message, epoch));
+      }
       if (!trusted(sender, message.type === "CLOUD_SYNC")) return Promise.resolve({ ok: false, error: "Cloud sync is available only in normal extension pages." });
       if (message.type === "CLOUD_LOCAL_WRITE") return localWrite(message).catch((error) => ({ ok: false, error: error.message }));
       if (message.action === "status") return ready.then(status);
       if (["signout", "pause"].includes(message.action)) cancel();
+      if (message.action === "signout") invalidateIntegrations();
       return enqueue(async () => {
         try {
           if (message.action !== "signout") await local(() => undefined);
@@ -449,12 +531,18 @@
       if (login && login.tabId === tabId) await browser.storage.session.remove(LOGIN_KEY);
     }));
     browser.storage.onChanged.addListener((changes, area) => {
-      if (area !== "local" || applying) return;
+      if (area !== "local") return;
+      const account = changes[STATE_KEY];
+      if (account && Integrations.identity(account.oldValue) !== Integrations.identity(account.newValue)) {
+        cancel();
+        invalidateIntegrations();
+      }
+      if (applying) return;
       if (Object.keys(changes).some((key) => Model.SETTINGS_KEYS.includes(key) || key.startsWith("ignoredImage:") || key === "downloadLedger:v1")) {
         return scheduleChanges().catch(() => undefined);
       }
     });
-    browser.permissions.onRemoved.addListener(cancel);
+    browser.permissions.onRemoved.addListener(() => { cancel(); invalidateIntegrations(); });
     browser.alarms.onAlarm.addListener((alarm) => {
       if (alarm && [ALARM, CHANGE_ALARM].includes(alarm.name)) return sync();
     });

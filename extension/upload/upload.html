@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AnyDownload — Upload Progress</title>
+    <link rel="stylesheet" href="../shared/theme.css">
+    <link rel="stylesheet" href="../sync/sync.css">
+    <link rel="stylesheet" href="upload.css">
+  </head>
+  <body class="dashboard">
+    <main class="page-shell">
+      <nav class="actions" aria-label="Workspace">
+        <a href="../popup/popup.html" data-source-link>Media</a>
+        <a href="../integrations/integrations.html" data-source-link>Integrations</a>
+        <a href="../sync/sync.html" data-source-link>Account &amp; sign-in</a>
+        <a href="upload.html">Upload history</a>
+      </nav>
+      <h1>Upload Progress</h1>
+      <p id="account-status" role="status">Checking your account…</p>
+      <p id="private-notice" hidden>External uploads are unavailable in private windows. Your private downloads still work.</p>
+      <p id="error-banner" role="alert" hidden></p>
+      <div id="upload-content" hidden>
+        <section class="card" aria-labelledby="destination-heading">
+          <h2 id="destination-heading">Destination</h2>
+          <label for="connection-select">Connected provider</label>
+          <select id="connection-select"></select>
+          <p id="connection-note" class="muted"></p>
+          <div class="actions"><button id="albums-button" type="button">Load writable albums</button></div>
+          <label for="album-select">Album</label>
+          <select id="album-select"><option value="">Library — no album</option></select>
+          <p class="muted">Your album choice is remembered for this connection. Loading albums asks Firefox for access to your server.</p>
+          <label for="local-files">Choose images from this device</label>
+          <input id="local-files" type="file" accept="image/*" multiple>
+          <p id="selection-note" class="muted">Choose images here, or use Upload selected in the media manager.</p>
+          <div class="actions">
+            <button id="start-button" class="primary-button" type="button" disabled>Upload images</button>
+            <button id="retry-button" type="button" hidden>Retry unfinished images</button>
+            <button id="cancel-button" type="button" disabled>Cancel</button>
+          </div>
+        </section>
+        <section class="card" aria-labelledby="progress-heading">
+          <h2 id="progress-heading">Ready</h2>
+          <p>Keep this tab open. Closing it or Firefox interrupts the transfer. Reopen a saved upload below to retry unfinished steps; transfers do not resume automatically.</p>
+          <progress id="upload-progress" max="1" value="0" aria-label="Images completed"></progress>
+          <p id="progress-summary" role="status" aria-live="polite">No upload started.</p>
+          <ol id="results-list" aria-label="Per-image upload results"></ol>
+        </section>
+        <section class="card" aria-labelledby="history-heading">
+          <h2 id="history-heading">Saved uploads on this device</h2>
+          <p class="muted">Separate from local download history. Removing a record does not delete images from Immich.</p>
+          <ul id="history-list"></ul>
+        </section>
+      </div>
+    </main>
+    <script src="../shared/navigation.js"></script>
+    <script src="../shared/core.js"></script>
+    <script src="../shared/immich.js"></script>
+    <script src="../shared/image-fetch.js"></script>
+    <script src="../shared/uploads.js"></script>
+    <script src="../shared/integrations.js"></script>
+    <script src="upload.js"></script>
+  </body>
+</html>

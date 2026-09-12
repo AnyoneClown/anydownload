@@ -14,6 +14,12 @@ Destination folders, Save As preferences, active download queues, downloaded fil
 
 Google sign-in opens a regular browser tab and returns automatically to the Sync page on desktop and Android using a short-lived PKCE code. Tokens are stored in normal extension storage and excluded from synchronization. **Sign out** retains local and cloud data and stops synchronization. An installation stays bound to its Google account after sign-out, preventing an accidental upload to another account. Reconnect with that same account to resume. Updates preserve existing sessions for the shared project. An installation previously configured for another project keeps its local data but requires fresh consent and sign-in to the shared project. Removing the extension removes its local cache; account/cloud deletion is currently managed in Supabase.
 
+## Upload images to Immich
+
+Open **Integrations & uploads** in Collection settings, sign in through the existing Sync page, select Immich, and use **Test & save connection** with your server URL and API key. This release targets Immich 3.2.0 and supports HTTP(S) LAN addresses and Tailscale hostnames. The required Vault migration and authenticated backend endpoint must be deployed first; see the [integration setup guide](supabase/INTEGRATIONS.md).
+
+Choose **Upload selected** in the manager, then your connection and either **Library — no album** or **Load writable albums**. Keep Upload Progress open until it finishes. The page also accepts images from your device and reopens saved uploads for explicit retry. Locally downloaded images remain eligible: check them in the manager or choose their local files. Upload and album results are independent of the local-download ledger. Keys are encrypted in Supabase Vault; image bytes travel directly from Firefox to Immich. Google sign-in does not grant Google Drive access.
+
 ## Try it in two minutes
 
 1. Open Firefox and enter `about:debugging` in the address bar.

@@ -41,6 +41,7 @@ function harness({ stored = {}, session = {}, fetch: handler } = {}) {
   const local = clone(stored);
   const temporary = clone(session);
   const calls = [];
+  const notifications = [];
   const tabs = new Map();
   const alarms = [];
   const clearedAlarms = [];
@@ -69,7 +70,8 @@ function harness({ stored = {}, session = {}, fetch: handler } = {}) {
     };
   }
   const browser = {
-    runtime: { id: "anydownload@test", getURL: (path) => `${EXTENSION}/${path.replace(/^\//, "")}`, onMessage: event() },
+    runtime: { id: "anydownload@test", getURL: (path) => `${EXTENSION}/${path.replace(/^\//, "")}`, onMessage: event(),
+      async sendMessage(message) { notifications.push(clone(message)); } },
     storage: { local: storage(local, "local"), session: storage(temporary, "session"), onChanged: changed },
     permissions: {
       contains: async () => permissions.origins,
@@ -103,7 +105,7 @@ function harness({ stored = {}, session = {}, fetch: handler } = {}) {
     }
   });
   return {
-    browser, local, temporary, calls, tabs, alarms, clearedAlarms, hooks, permissions, sender, runtime,
+    browser, local, temporary, calls, notifications, tabs, alarms, clearedAlarms, hooks, permissions, sender, runtime,
     async message(action, values = {}, from = sender()) { return (await browser.runtime.onMessage.emit({ type: "CLOUD_SYNC", action, ...values }, from))[0]; },
     async write(values, from = sender("popup/popup.html")) { return (await browser.runtime.onMessage.emit({ type: "CLOUD_LOCAL_WRITE", action: "set", values }, from))[0]; },
     async callback(url, id = temporary[LOGIN].tabId, tab = { id, incognito: false }) { await browser.tabs.onUpdated.emit(id, { url }, tab); }
@@ -489,7 +491,101 @@ async function syncProgressAndCancellation() {
   assert.equal(h.local[STATE].journal, undefined, "Cancelled responses are never applied");
 }
 
+async function integrationsSecurity() {
+  const id = "33333333-3333-4333-8333-333333333333";
+  const saved = { id, provider: "immich", serverUrl: "http://192.168.0.103:2283", defaultAlbumId: null };
+  const secret = "immich-test-key-not-for-storage";
+  let release;
+  let delay = false;
+  let failed = false;
+  const h = harness({ stored: { [STATE]: signedState() }, async fetch(call) {
+    if (call.url.endsWith("/auth/v1/logout?scope=local")) return response({});
+    assert.ok(call.url.endsWith("/functions/v1/external-integrations"));
+    assert.equal(call.method, "POST");
+    assert.equal(call.credentials, "omit");
+    assert.equal(call.redirect, "error");
+    assert.equal(call.cache, "no-store");
+    assert.equal(call.headers.Authorization, "Bearer access-old");
+    assert.equal(call.body.userId, undefined);
+    if (failed) return response({ error: secret }, 500);
+    if (delay) await new Promise(resolve => { release = resolve; });
+    if (call.body.action === "list") return response({ connections: [{ ...saved, apiKey: secret }] });
+    if (call.body.action === "delete") return response({ deleted: true, apiKey: secret });
+    return response({ connection: { ...saved, apiKey: secret }, apiKey: secret });
+  } });
+  await h.runtime.ready;
+  const invoke = async (action, values = {}, from = h.sender("integrations/integrations.html")) =>
+    (await h.browser.runtime.onMessage.emit({ type: "INTEGRATIONS", action, ...values }, from))[0];
+  const status = await invoke("status");
+  assert.deepEqual(status, { ok: true, signedIn: true, ownerId: USER, email: "user@example.test" });
+  const listed = await invoke("list");
+  assert.deepEqual(listed, { ok: true, connections: [saved] });
+  assert.equal(JSON.stringify(listed).includes(secret), false);
+  for (const from of [h.sender("popup/popup.html"), h.sender("sync/sync.html"), h.sender("content/collector.js"),
+    h.sender("upload/upload.html", { tab: { incognito: true } }),
+    h.sender("integrations/integrations.html", { id: "other@test" }),
+    h.sender("integrations/integrations.html", { url: "https://evil.test/integrations/integrations.html" })]) {
+    assert.equal((await invoke("credential", { connectionId: id }, from)).ok, false);
+  }
+  assert.equal((await invoke("save", { provider: "immich", serverUrl: saved.serverUrl, apiKey: secret }, h.sender("upload/upload.html"))).ok, false);
+  const credential = await invoke("credential", { connectionId: id }, h.sender("upload/upload.html"));
+  assert.deepEqual(credential, { ok: true, connection: saved, apiKey: secret, ownerId: USER });
+  const count = h.calls.length;
+  for (const values of [{ connectionId: id, userId: OTHER_USER }, { connectionId: id, token: "forged" }, { connectionId: "bad-id" }]) {
+    assert.equal((await invoke("credential", values)).ok, false);
+  }
+  assert.equal(h.calls.length, count, "Extra authorization fields and bad IDs never reach the endpoint");
+  const beforeDefault = h.notifications.length;
+  assert.equal((await invoke("defaultAlbum", { connectionId: id, defaultAlbumId: null }, h.sender("upload/upload.html"))).ok, true);
+  assert.equal(h.notifications.length, beforeDefault, "Saving an album does not invalidate an upcoming upload");
+  assert.equal((await invoke("save", { connectionId: id, provider: "immich", serverUrl: saved.serverUrl, apiKey: secret })).ok, true);
+  assert.equal(h.notifications.at(-1).type, "INTEGRATIONS_CHANGED");
+  assert.equal(JSON.stringify(h.local).includes(secret), false);
+  failed = true;
+  const failure = await invoke("credential", { connectionId: id });
+  assert.deepEqual(failure, { ok: false, code: "failed" });
+  assert.equal(JSON.stringify(h.local).includes(secret), false, "Credential error responses never enter durable sync error reporting");
+  assert.equal(h.local[STATE].error, undefined);
+  failed = false;
+  delay = true;
+  const pending = invoke("credential", { connectionId: id });
+  while (!release) await new Promise(setImmediate);
+  const signout = h.message("signout");
+  assert.equal(h.notifications.at(-1).type, "INTEGRATIONS_CHANGED", "Signout invalidates keys before its queued state write");
+  release();
+  assert.equal((await pending).ok, false, "A key arriving after signout was requested is discarded");
+  await signout;
+  assert.equal((await invoke("status")).signedIn, false);
+  assert.equal((await invoke("credential", { connectionId: id })).ok, false);
+
+  let releaseList;
+  const queued = harness({ stored: { [STATE]: signedState() }, async fetch(call) {
+    if (call.url.includes("/auth/v1/logout")) return response({});
+    if (call.body.action === "list") await new Promise(resolve => { releaseList = resolve; });
+    return response(call.body.action === "credential" ? { connection: saved, apiKey: secret } : { connections: [] });
+  } });
+  await queued.runtime.ready;
+  const queue = action => queued.browser.runtime.onMessage.emit({ type: "INTEGRATIONS", action,
+    ...(action === "credential" ? { connectionId: id } : {}) }, queued.sender("upload/upload.html")).then(results => results[0]);
+  const blockedList = queue("list");
+  while (!releaseList) await new Promise(setImmediate);
+  const queuedCredential = queue("credential");
+  const queuedSignout = queued.message("signout");
+  releaseList();
+  assert.deepEqual(await queuedCredential, { ok: false, code: "stopped" },
+    "Signout invalidates credentials queued before it, even if they have not started yet");
+  await Promise.all([blockedList, queuedSignout]);
+  assert.equal(queued.calls.some(call => call.body?.action === "credential"), false,
+    "An invalidated queued credential never reaches the backend");
+
+  const wrongOwner = harness({ stored: { [STATE]: signedState({ owner: { userId: OTHER_USER, project: PROJECT } }) } });
+  await wrongOwner.runtime.ready;
+  const denied = (await wrongOwner.browser.runtime.onMessage.emit({ type: "INTEGRATIONS", action: "credential", connectionId: id }, wrongOwner.sender("upload/upload.html")))[0];
+  assert.equal(denied.ok, false);
+  assert.equal(wrongOwner.calls.length, 0, "A mismatched owner cannot retrieve another account's key");
+}
+
 (async () => {
-  for (const check of [consentAndTrust, sharedProjectMigration, authentication, refreshAndOwnership, syncConflictsAndConcurrentEdits, revokedPermissions, journalRecovery, automaticDevices, syncProgressAndCancellation]) await check();
+  for (const check of [consentAndTrust, sharedProjectMigration, authentication, refreshAndOwnership, syncConflictsAndConcurrentEdits, revokedPermissions, journalRecovery, automaticDevices, syncProgressAndCancellation, integrationsSecurity]) await check();
   console.log("Cloud sync runtime tests passed.");
 })().catch((error) => { console.error(error); process.exitCode = 1; });
