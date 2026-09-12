@@ -95,6 +95,7 @@ h2 {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  flex-wrap: wrap;
 }
 
 .danger-button,
@@ -157,6 +158,15 @@ progress::-moz-progress-bar {
 .progress-description {
   min-height: 20px;
   margin: 0;
+  font-size: 13px;
+}
+
+.keep-open-notice {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--brand);
+  color: var(--brand-ink);
+  background: var(--brand-soft);
   font-size: 13px;
 }
 
@@ -335,7 +345,7 @@ progress::-moz-progress-bar {
   }
 
   .status-row,
-  .section-heading {
+.section-heading {
     align-items: flex-start;
   }
 
@@ -350,5 +360,12 @@ progress::-moz-progress-bar {
   .quiet-button,
   .show-file-button {
     transition: none;
+  }
+}
+
+@media (pointer: coarse) {
+  button {
+    min-width: 44px;
+    min-height: 44px;
   }
 }

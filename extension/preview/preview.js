@@ -11,6 +11,7 @@
     meta: document.getElementById("image-meta"),
     name: document.getElementById("image-name"),
     original: document.getElementById("original-link"),
+    source: document.getElementById("source-link"),
     stage: document.getElementById("preview-stage"),
     footer: document.getElementById("preview-footer"),
     video: document.getElementById("preview-video")
@@ -114,12 +115,40 @@
     const key = `imagePreview:${id}`;
     const area = browser.storage.session;
     const stored = await area.get(key);
-    await area.remove(key);
-    const payload = stored[key];
+    let cached;
+    try {
+      cached = JSON.parse(sessionStorage.getItem("imagePreview"));
+    } catch (_error) {
+      // Storage may be unavailable; the original session payload still works.
+    }
+    const payload = stored[key] || (cached && cached.id === id ? cached.payload : null);
     const validateUrl = typeof Core.validateMediaUrl === "function"
       ? Core.validateMediaUrl
       : Core.validateDownloadUrl;
     const urlResult = validateUrl(payload && payload.url);
+    const sourceResult = validateUrl(payload && payload.sourceUrl);
+    if (sourceResult.ok && /^https?:/i.test(sourceResult.value)) {
+      elements.source.href = sourceResult.value;
+      elements.source.hidden = false;
+      if (Number.isSafeInteger(payload.sourceTabId) && payload.sourceTabId >= 0) {
+        elements.source.addEventListener("click", async (event) => {
+          if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) {
+            return;
+          }
+          event.preventDefault();
+          try {
+            const tab = await browser.tabs.get(payload.sourceTabId);
+            if (tab && tab.url === sourceResult.value) {
+              await browser.tabs.update(payload.sourceTabId, { active: true });
+            } else {
+              location.assign(sourceResult.value);
+            }
+          } catch (_error) {
+            location.assign(sourceResult.value);
+          }
+        });
+      }
+    }
     const createdAt = Number(payload && payload.createdAt);
     const age = Date.now() - createdAt;
     if (
@@ -129,8 +158,15 @@
       age < -60000 ||
       age > MAX_PREVIEW_AGE_MS
     ) {
+      await area.remove(key);
+      try { sessionStorage.removeItem("imagePreview"); } catch (_error) { /* Storage may be unavailable. */ }
       throw new Error("This preview has expired. Return to the page and open it again.");
     }
+
+    // One payload per tab survives reload, expires after five minutes, and is
+    // discarded when the tab closes; do not retain it in shared session storage.
+    try { sessionStorage.setItem("imagePreview", JSON.stringify({ id, payload })); } catch (_error) { /* Preview still opens. */ }
+    await area.remove(key);
 
     const mediaType = String(payload.mediaType || "image").toLowerCase() === "video"
       ? "video"

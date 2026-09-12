@@ -15,6 +15,7 @@ class Element {
     this.textContent = "";
     this.dataset = {};
     this.children = [];
+    this.isConnected = true;
     this.attributes = {};
     this.listeners = {};
     const classes = new Set();
@@ -28,14 +29,22 @@ class Element {
     };
   }
   setAttribute(name, value) { this.attributes[name] = value; }
-  removeAttribute(name) { delete this.attributes[name]; }
+  getAttribute(name) { return this.attributes[name] ?? null; }
+  removeAttribute(name) { delete this.attributes[name]; if (name === "src") this.src = ""; }
   addEventListener(name, callback) { this.listeners[name] = callback; }
   append(...children) {
     this.children.push(...children);
     for (const child of children) child.parentElement = this;
   }
   appendChild(child) { this.append(child); }
-  replaceChildren(...children) { this.children = children; }
+  replaceChildren(...children) { this.children = []; this.append(...children); }
+  querySelectorAll(selector) {
+    return this.children.flatMap(child => [
+      ...(selector.split(",").map(tag => tag.trim().toUpperCase()).includes(child.tagName) ? [child] : []),
+      ...child.querySelectorAll(selector)
+    ]);
+  }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   matches(selector) { return selector === ":popover-open" && this.open === true; }
   closest(selector) {
     return selector.split(", ").includes(this.tagName.toLowerCase())
@@ -49,25 +58,35 @@ class Element {
     }
     if (this.type === "checkbox") this.listeners.change?.();
   }
-  focus() { this.focused = true; }
+  focus() { this.focused = true; context.document.activeElement = this; }
   showPopover() { this.open = true; }
   hidePopover() { this.open = false; }
+  showModal() { this.open = true; }
+  close() { this.open = false; this.listeners.close?.(); }
+  pause() { this.paused = true; }
+  load() { this.reloaded = true; }
 }
 
 const html = fs.readFileSync(path.join(__dirname, "../extension/popup/popup.html"), "utf8");
 const nodes = new Map();
 for (const [tag, id] of Array.from(html.matchAll(/<[^>]+\bid="([^"]+)"[^>]*>/g), match => [match[0], match[1]])) {
   assert.ok(!nodes.has(id), `Duplicate popup ID: ${id}`);
-  const node = new Element();
+  const node = new Element(/^<(\w+)/.exec(tag)[1]);
   node.value = /\bvalue="([^"]*)"/.exec(tag)?.[1] || "";
   node.hidden = /\bhidden\b/.test(tag);
   node.checked = /\bchecked\b/.test(tag);
   nodes.set(id, node);
 }
+for (const match of html.matchAll(/<select[^>]+id="([^"]+)"[^>]*>([\s\S]*?)<\/select>/g)) {
+  const select = nodes.get(match[1]);
+  select.options = Array.from(match[2].matchAll(/<option[^>]+value="([^"]*)"[^>]*>/g), option => ({ value: option[1] }));
+  select.value = select.options[0]?.value || "";
+}
 const saved = {};
 const previewSession = {};
 const openedTabs = [];
 const settingsMessages = [];
+const downloadMessages = [];
 const context = vm.createContext({
   URL, URLSearchParams, console,
   crypto: require("node:crypto").webcrypto,
@@ -80,12 +99,21 @@ const context = vm.createContext({
   setTimeout: () => 1, clearTimeout() {}, addEventListener() {},
   browser: {
     storage: {
-      local: { set: async value => Object.assign(saved, value) },
-      session: { set: async value => Object.assign(previewSession, value) }
+      local: { get: async () => saved, set: async value => Object.assign(saved, value) },
+      session: { get: async () => previewSession, set: async value => Object.assign(previewSession, value),
+        remove: async key => { delete previewSession[key]; } }
     },
     runtime: {
       getURL: file => `moz-extension://test/${file}`,
       sendMessage: async message => {
+        if (message.type === "DOWNLOAD_BATCH") {
+          downloadMessages.push(message);
+          return { ok: true, queued: message.items.length, failed: 0, total: message.items.length };
+        }
+        if (message.type === "GET_MEDIA_DOWNLOAD_STATUS") return {
+          ok: true, statuses: message.items.map(() => ({ status: "new" }))
+        };
+        if (message.type === "GET_DOWNLOAD_DASHBOARD") return { ok: true, snapshot: { summary: {} } };
         settingsMessages.push(message);
         assert.equal(message.type, "CLOUD_LOCAL_WRITE");
         if (message.action === "set") Object.assign(saved, message.values);
@@ -111,7 +139,9 @@ let source = fs.readFileSync(path.join(__dirname, "../extension/popup/popup.js")
 const entry = '  document.addEventListener("DOMContentLoaded", () => {';
 assert.ok(source.includes(entry));
 source = source.replace(entry, `  globalThis.ui = { cacheElements, wireEvents, applyMediaView, applySmartFiltersToControls,
-    updateSummary, renderImages, makeImageRow, requireValidFilenameTemplate, requestDownloads, focusIgnoredToggle, persistSettings, ignoreStorageArea, handleSettingsStorageChanges, state, elements };
+    updateSummary, renderImages, makeImageRow, requireValidFilenameTemplate, requestDownloads, finishArchiveDownload,
+    filteredImages, selectedDownloadableImages, resetMediaFilters, openGalleryPreview, openImagePreview,
+    moveGalleryPreview, initializeTrackerEditor, saveTracker, focusIgnoredToggle, persistSettings, ignoreStorageArea, handleSettingsStorageChanges, state, elements };
 ${entry}`);
 vm.runInContext(source, context);
 const ui = context.ui;
@@ -140,7 +170,7 @@ get("filter-input").value = "lake";
 ui.updateSummary();
 assert.equal(get("selected-label").textContent, "2 selected · 1 hidden");
 assert.equal(get("download-button").textContent, "Download 2 files");
-assert.match(get("action-detail").textContent, /includes files hidden/);
+assert.match(get("selection-warning").textContent, /includes 1 files hidden/);
 assert.equal(ui.state.selected.size, 2, "Searching must preserve existing selections");
 
 get("smart-filter-panel").open = true;
@@ -258,7 +288,32 @@ for (const sourceId of ["7", "", "-1", "3.5", "9007199254740992", "https://unexp
   assert.equal(new URL(link.href).searchParams.get("sourceTabId"), sourceId === "7" ? "7" : null);
 }
 
-previewButton.listeners.click().then(async () => {
+(async () => {
+  previewButton.focus();
+  previewButton.listeners.click();
+  assert.equal(get("media-preview-dialog").open, true, "Preview opens inside the gallery");
+  assert.equal(openedTabs.length, 0);
+  assert.equal(get("media-preview-stage").children[0].src, first.url);
+  get("media-preview-dialog").listeners.keydown({ key: "ArrowRight", target: get("preview-selected-input"), preventDefault() {} });
+  assert.equal(get("media-preview-stage").children[0].src, first.url, "Arrow keys on form controls must keep their native behavior");
+  assert.equal(get("media-preview-position").textContent, "1 of 2");
+  assert.equal(get("preview-previous-button").disabled, true);
+  get("preview-next-button").listeners.click();
+  assert.equal(get("media-preview-stage").children[0].src, second.url);
+  assert.equal(get("preview-next-button").disabled, true);
+  get("media-preview-dialog").listeners.keydown({ key: "ArrowLeft", target: get("close-preview-button"), preventDefault() {} });
+  assert.equal(get("media-preview-stage").children[0].src, first.url);
+  get("preview-selected-input").checked = false;
+  get("preview-selected-input").listeners.change();
+  assert.equal(ui.state.selected.has(first.url), false);
+  get("preview-selected-input").checked = true;
+  get("preview-selected-input").listeners.change();
+  assert.equal(ui.state.selected.has(first.url), true);
+  get("close-preview-button").listeners.click();
+  assert.equal(get("media-preview-dialog").open, false);
+  assert.equal(context.document.activeElement, previewButton, "Closing preview restores keyboard focus to its opener");
+  ui.state.pageUrl = "https://photos.example/gallery";
+  await ui.openImagePreview(first);
   const writesBeforePrivate = settingsMessages.length;
   ui.state.incognito = true;
   await ui.persistSettings({ filenameTemplate: "private-{name}.{ext}", destinationFolder: "private" });
@@ -290,6 +345,215 @@ previewButton.listeners.click().then(async () => {
   assert.equal(openedTabs.length, 1);
   const id = new URL(openedTabs[0].url).searchParams.get("id");
   assert.equal(previewSession[`imagePreview:${id}`].url, first.url);
-  assert.deepEqual([...ui.state.selected], [first.url, second.url], "Preview must preserve download selection");
+  assert.equal(previewSession[`imagePreview:${id}`].sourceUrl, ui.state.pageUrl);
+  assert.equal(previewSession[`imagePreview:${id}`].sourceTabId, 7);
+  assert.deepEqual(new Set(ui.state.selected), new Set([first.url, second.url]), "Preview must preserve download selection");
+
+  const clip = { url: "https://photos.example/clip.mp4", width: 1920, height: 1080, mediaType: "video" };
+  ui.state.images = [first, second, clip];
+  ui.state.selected.clear();
+  for (const image of ui.state.images) ui.state.selected.add(image.url);
+  const selectedBeforeFilters = [...ui.state.selected];
+  get("media-type-filter-select").value = "video";
+  get("media-type-filter-select").listeners.change();
+  assert.deepEqual(Array.from(ui.filteredImages(), item => item.url), [clip.url]);
+  assert.deepEqual([...ui.state.selected], selectedBeforeFilters, "Media-type filters preserve hidden selections");
+  get("min-width-input").value = "2500";
+  get("min-width-input").listeners.change();
+  assert.equal(ui.filteredImages().length, 0);
+  assert.deepEqual(Array.from(ui.selectedDownloadableImages(), item => item.url), selectedBeforeFilters);
+  get("selected-label").listeners.click();
+  assert.equal(ui.state.showSelected, true);
+  assert.equal(get("selected-label").attributes["aria-pressed"], "true");
+  assert.equal(ui.filteredImages().length, 3, "Review selected must reveal every selected file despite the filters");
+  get("back-to-collection-button").listeners.click();
+  assert.equal(ui.state.showSelected, false);
+  assert.equal(ui.filteredImages().length, 0, "Returning to the collection preserves its filters");
+  ui.resetMediaFilters();
+
+  first.instagramCollections = [{ type: "post", id: "post-one" }];
+  second.instagramCollections = [{ type: "story", id: "story-two" }];
+  get("instagram-collection-filter-select").value = "story";
+  get("instagram-collection-filter-select").listeners.change();
+  assert.deepEqual(Array.from(ui.filteredImages(), item => item.url), [second.url]);
+  assert.deepEqual([...ui.state.selected], selectedBeforeFilters, "Instagram collection filters preserve selections");
+  ui.resetMediaFilters();
+  first.downloadStatus = "downloaded";
+  first.downloadFingerprint = "completed-first";
+  ui.state.explicitRedownloads.add(first.downloadFingerprint);
+  get("downloaded-button").listeners.click();
+  assert.equal(ui.filteredImages().some(item => item.url === first.url), false);
+  assert.equal(ui.state.selected.has(first.url), true, "Hide downloaded must preserve deliberate redownload selections");
+  assert.equal(ui.state.explicitRedownloads.has(first.downloadFingerprint), true);
+  ui.resetMediaFilters();
+  delete first.downloadStatus;
+  delete first.downloadFingerprint;
+  ui.state.explicitRedownloads.clear();
+
+  ui.state.pageUrl = "https://photos.example/scope-gallery";
+  first.pageUrl = `${ui.state.pageUrl}#photo-1`;
+  second.pageUrl = "https://photos.example/older-gallery";
+  clip.pageUrl = ui.state.pageUrl;
+  get("collection-scope-select").value = "page";
+  get("collection-scope-select").listeners.change();
+  assert.deepEqual(Array.from(ui.filteredImages(), item => item.url), [first.url, clip.url],
+    "This page matches normalized page URLs and retains URL fragments as the same page");
+  assert.deepEqual([...ui.state.selected], selectedBeforeFilters);
+  get("collection-scope-select").value = "site";
+  get("collection-scope-select").listeners.change();
+  get("sort-select").value = "name";
+  get("sort-select").listeners.change();
+  assert.deepEqual(Array.from(ui.filteredImages(), item => item.url), [clip.url, second.url, first.url]);
+  get("sort-select").value = "resolution";
+  get("sort-select").listeners.change();
+  assert.equal(ui.filteredImages()[0].url, clip.url);
+  assert.deepEqual(Array.from(ui.state.images, item => item.url), [first.url, second.url, clip.url],
+    "Sorting the view must not change page discovery order");
+
+  ui.state.sort = "page";
+  ui.state.images = Array.from({ length: 701 }, (_, index) => ({ ...first, url: `https://photos.example/${index}.jpg` }));
+  ui.state.selected.clear();
+  ui.state.galleryPage = 0;
+  ui.renderImages();
+  const rows = () => get("image-list").children.flatMap(node => node.tagName === "ARTICLE" ? [node] : node.children.filter(child => child.tagName === "ARTICLE"));
+  assert.equal(rows().length, 350);
+  assert.equal(get("gallery-pagination").hidden, false);
+  assert.equal(get("previous-page-button").disabled, true);
+  get("next-page-button").listeners.click();
+  assert.equal(ui.state.galleryPage, 1);
+  assert.equal(rows().length, 350);
+  get("next-page-button").listeners.click();
+  assert.equal(ui.state.galleryPage, 2);
+  assert.equal(rows().length, 1, "The final page makes items beyond the rendering limit browsable");
+  rows()[0].children[0].checked = true;
+  rows()[0].children[0].listeners.change();
+  assert.equal(ui.state.selected.has(ui.state.images[700].url), true);
+  assert.equal(get("next-page-button").disabled, true);
+  get("previous-page-button").listeners.click();
+  assert.equal(ui.state.selected.size, 1, "Paging preserves selection");
+  get("min-width-input").value = "1200";
+  get("min-width-input").listeners.change();
+  assert.equal(ui.state.galleryPage, 0, "Changing filters resets pagination");
+
+  ui.resetMediaFilters();
+  ui.state.images = [first, second];
+  ui.state.selected.clear();
+  ui.state.selected.add(first.url);
+  ui.state.selected.add(second.url);
+  get("folder-input").value = "Website media";
+  get("filename-template-input").value = Templates.DEFAULT_TEMPLATE;
+  get("media-type-filter-select").value = "video";
+  get("media-type-filter-select").listeners.change();
+  await ui.finishArchiveDownload(ui.selectedDownloadableImages(), { value: "Website media" }, Promise.resolve(true), Templates.DEFAULT_TEMPLATE);
+  const archive = Object.entries(previewSession).find(([key]) => key.startsWith("archiveJobRequest:"))?.[1];
+  assert.ok(archive, "Filtered selections must still create an archive");
+  assert.deepEqual(Array.from(archive.items, item => item.url), [first.url, second.url]);
+  await ui.requestDownloads(ui.selectedDownloadableImages());
+  assert.deepEqual(Array.from(downloadMessages.at(-1).items, item => item.url), [first.url, second.url],
+    "Downloads must enqueue selected files hidden by any view filter");
+  ui.openGalleryPreview(first);
+  get("preview-download-button").listeners.click();
+  await new Promise(setImmediate);
+  assert.equal(get("media-preview-dialog").open, false);
+  assert.deepEqual(Array.from(downloadMessages.at(-1).items, item => item.url), [first.url],
+    "The preview Download action queues its current media file");
+
+  ui.state.images = [clip];
+  ui.openGalleryPreview(clip);
+  const playing = get("media-preview-stage").children[0];
+  assert.equal(playing.tagName, "VIDEO");
+  assert.equal(playing.controls, true);
+  get("close-preview-button").listeners.click();
+  assert.equal(playing.paused, true, "Closing an inline video must stop playback");
+  assert.equal(playing.src, "");
+  assert.equal(playing.reloaded, true, "Closing video must release its media connection");
+
+  ui.resetMediaFilters();
+  const signed = [
+    { ...first, url: "https://photos.example/signed.jpg?token=old" },
+    { ...second, identityKey: "carousel:item-2", url: "https://photos.example/old-path.jpg" }
+  ];
+  ui.state.images = signed;
+  ui.state.selected.clear();
+  ui.openGalleryPreview(signed[0]);
+  const refreshed = [
+    { ...signed[0], url: "https://photos.example/signed.jpg?token=new" },
+    { ...signed[1], url: "https://photos.example/new-path.jpg" }
+  ];
+  ui.state.images = refreshed;
+  ui.updateSummary();
+  get("preview-selected-input").checked = true;
+  get("preview-selected-input").listeners.change();
+  assert.deepEqual([...ui.state.selected], [refreshed[0].url], "Preview selection follows a refreshed signed URL");
+  await get("preview-tab-button").listeners.click();
+  const refreshedPreviewId = new URL(openedTabs.at(-1).url).searchParams.get("id");
+  assert.equal(previewSession[`imagePreview:${refreshedPreviewId}`].url, refreshed[0].url,
+    "Opening the preview in a tab uses the current media URL");
+  get("preview-next-button").listeners.click();
+  assert.equal(get("media-preview-dialog").open, true);
+  assert.equal(get("media-preview-stage").children[0].src, refreshed[1].url,
+    "Next finds the refreshed adapter record by stable identity");
+  get("preview-download-button").listeners.click();
+  await new Promise(setImmediate);
+  assert.deepEqual(Array.from(downloadMessages.at(-1).items, item => item.url), [refreshed[1].url],
+    "Preview download uses the latest record after live URL rotation");
+
+  ui.state.images = [clip];
+  ui.openGalleryPreview(clip);
+  const clearedVideo = get("media-preview-stage").children[0];
+  ui.state.images = [];
+  ui.renderImages();
+  assert.equal(get("media-preview-dialog").open, false, "An external collection clear closes a preview whose record disappeared");
+  assert.equal(clearedVideo.paused, true);
+  assert.equal(clearedVideo.src, "", "Clearing the collection releases active video playback");
+
+  const tracker = context.AnyDownloadTracker.normalizeTracker({
+    id: "tracker-editor-001", url: "https://tracked.example/album", pageTitle: "Tracked album",
+    folder: "Tracked photos", filenameTemplate: "{filename}", intervalMinutes: 60,
+    filters: { ...Filters.DEFAULT_FILTERS, minWidth: 1600, orientation: "landscape" },
+    matching: { includeText: "keep", excludeText: "skip", includePatterns: ["*/full/*"], excludePatterns: [], maxDownloadsPerRun: 50 },
+    action: "review", enabled: false
+  });
+  assert.ok(tracker);
+  const trackerMessages = [];
+  let availableTrackers = [tracker];
+  const editorBrowser = {
+    ...context.browser,
+    extension: { inIncognitoContext: true },
+    permissions: { request: async () => true },
+    runtime: { ...context.browser.runtime, sendMessage: async message => {
+      trackerMessages.push(message);
+      if (message.type === "GET_TRACKERS") return { ok: true, trackers: availableTrackers };
+      assert.equal(message.type, "UPSERT_TRACKER", "Editing a tracker must not overwrite gallery preferences");
+      return { ok: true, tracker: { ...tracker, ...message.tracker } };
+    } }
+  };
+  const editor = vm.createContext({ ...context, browser: editorBrowser,
+    location: { href: `moz-extension://test/popup/popup.html?editTrackerId=${tracker.id}` } });
+  vm.runInContext(source, editor);
+  editor.ui.cacheElements();
+  await assert.rejects(editor.ui.initializeTrackerEditor(), /private windows/);
+  assert.equal(trackerMessages.length, 0, "Private edit links must not load normal trackers");
+  editorBrowser.extension.inIncognitoContext = false;
+  get("filter-input").value = "unrelated gallery search";
+  await editor.ui.initializeTrackerEditor();
+  assert.equal(editor.ui.state.tracker.id, tracker.id);
+  assert.equal(editor.ui.state.pageUrl, tracker.url);
+  assert.equal(get("folder-input").value, tracker.folder);
+  assert.equal(get("min-width-input").value, "1600");
+  assert.equal(get("orientation-filter-select").value, "landscape");
+  assert.equal(get("tracker-include-text-input").value, "keep");
+  get("tracker-interval-select").value = "360";
+  await editor.ui.saveTracker();
+  const updatedTracker = trackerMessages.find(message => message.type === "UPSERT_TRACKER").tracker;
+  assert.equal(updatedTracker.url, tracker.url, "Editing must preserve the tracked page instead of using the current tab");
+  assert.equal(updatedTracker.intervalMinutes, 360);
+  assert.equal(updatedTracker.filters.minWidth, 1600);
+  assert.equal(updatedTracker.filters.orientation, "landscape");
+  assert.equal(updatedTracker.query, "keep");
+  assert.equal(updatedTracker.matching.excludeText, "skip");
+  assert.equal(editor.ui.state.tracker.enabled, false, "Updating a paused tracker must preserve its state");
+  availableTrackers = [];
+  await assert.rejects(editor.ui.initializeTrackerEditor(), /no longer exists/);
   console.log("Popup UI tests passed: card selection, preview buttons, layout, filters, validation, and navigation.");
-}).catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); process.exitCode = 1; });

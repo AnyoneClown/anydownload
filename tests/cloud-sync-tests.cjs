@@ -35,9 +35,14 @@ assert.deepEqual(clean, {
   includeBackgrounds: true,
   [ledgerKey]: ledgerEntry,
   mediaLayout: "grid",
-  smartFilters: { mediaType: "any", photosOnly: true, format: "jpeg" }
+  smartFilters: { mediaType: "any", photosOnly: true, format: "jpeg", minWidth: 0, minHeight: 0, orientation: "any" }
 });
 assert.deepEqual(Sync.snapshot(Sync.toStorage(clean)), clean, "Snapshot round trips preserve allowed data only");
+assert.deepEqual(Sync.normalizeSnapshot({ smartFilters: {
+  mediaType: "any", photosOnly: true, format: "jpeg"
+} }).smartFilters, clean.smartFilters, "Existing cloud filter records must acquire the new defaults without failing sync");
+const dimensions = { smartFilters: { ...clean.smartFilters, minWidth: 1920, minHeight: 1080, orientation: "landscape" } };
+assert.deepEqual(Sync.snapshot(Sync.toStorage(dimensions)), dimensions, "Dimension and orientation preferences must round trip through cloud sync");
 assert.deepEqual(Sync.toStorage({}), { [Ledger.STORAGE_KEY]: Ledger.emptyState() });
 assert.equal(Sync.equal({ a: { b: 1 }, c: false }, { c: false, a: { b: 1 } }), true);
 assert.equal(Sync.equal({}, { a: undefined }), false);
@@ -66,6 +71,9 @@ for (const bad of [
   { mediaLayout: "unknown" },
   { smartFilters: { mediaType: "any", photosOnly: false, format: "jpeg", token: "secret" } },
   { smartFilters: { mediaType: "any", photosOnly: false, format: "jpg" } },
+  { smartFilters: { ...clean.smartFilters, minWidth: -1 } },
+  { smartFilters: { ...clean.smartFilters, minHeight: "400" } },
+  { smartFilters: { ...clean.smartFilters, orientation: "diagonal" } },
   { [ignoreKey]: "100" },
   { [ignoreKey]: -1 },
   { [ignoreKey]: Number.MAX_SAFE_INTEGER + 1 },

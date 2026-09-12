@@ -138,10 +138,10 @@ for (const resourcePath of popupResourcePaths) {
 assert.match(popupCss, /html,\s*body\s*\{[^}]*width:\s*470px;[^}]*height:\s*600px;[^}]*min-width:\s*0;[^}]*min-height:\s*0;/s);
 assert.doesNotMatch(popupCss, /html,\s*body\s*\{[^}]*max-(?:width|height):/s);
 assert.match(popupCss, /\.app-shell\s*\{[^}]*height:\s*600px;[^}]*min-height:\s*0;[^}]*overflow:\s*hidden;/s);
-assert.match(popupCss, /\.app-shell\s*\{[^}]*grid-template-rows:\s*auto auto auto minmax\(0,\s*1fr\) auto;/s);
+assert.match(popupCss, /\.app-shell\s*\{[^}]*grid-template-rows:\s*auto auto auto auto minmax\(0,\s*1fr\) auto auto;/s);
 assert.match(
   popupCss,
-  /\.app-shell\s*\{[^}]*grid-template-areas:\s*"header"\s*"controls"\s*"notice"\s*"media"\s*"actions";/s,
+  /\.app-shell\s*\{[^}]*grid-template-areas:\s*"header"\s*"controls"\s*"notice"\s*"undo"\s*"media"\s*"pagination"\s*"actions";/s,
   "Hidden notices must not shift the footer into the flexible media row during scanning"
 );
 for (const [selector, area] of [
@@ -271,22 +271,8 @@ for (const format of ["mp4", "webm", "ogv", "mov", "m4v", "mkv"]) {
 }
 assert.match(popupHtml, /id="format-filter-select"/);
 assert.match(popupHtml, /id="reset-filters-button"/);
-for (const removedSmartFilterId of [
-  "min-width-input",
-  "min-height-input",
-  "orientation-filter-select",
-  "include-unknown-input"
-]) {
-  assert.doesNotMatch(
-    popupHtml,
-    new RegExp(`id=["']${removedSmartFilterId}["']`),
-    `${removedSmartFilterId} must not remain in the Filters panel`
-  );
-  assert.doesNotMatch(
-    popupJs,
-    new RegExp(`elements\\["${removedSmartFilterId}"\\]`),
-    `${removedSmartFilterId} must not remain wired in popup.js`
-  );
+for (const id of ["min-width-input", "min-height-input", "orientation-filter-select", "sort-select"]) {
+  assert.ok(popupHtml.includes(`id="${id}"`), `${id} must be available in the Filters panel`);
 }
 assert.match(popupJs, /browser\.tabs\.create\(createProperties\)/);
 assert.match(popupJs, /browser\.storage\.session\.set\(\{ \[key\]: payload \}\)/);
@@ -565,9 +551,9 @@ assert.match(trackingHtml, /id="total-stat"/);
 assert.match(trackingHtml, /id="active-stat"/);
 assert.match(trackingHtml, /id="issues-stat"/);
 assert.match(trackingHtml, /id="pending-stat"/);
-assert.match(trackingHtml, /id="review-list"[^>]*aria-live="polite"/);
+assert.match(trackingHtml, /id="review-status"[^>]*role="status"/);
 assert.match(trackingJs, /TRACKER_REVIEW_ACTION/);
-assert.match(trackingHtml, /id="tracker-list"[^>]*aria-live="polite"/);
+assert.doesNotMatch(trackingHtml, /id="(?:tracker-list|review-list)"[^>]*aria-live/);
 assert.match(trackingHtml, /id="pause-all-button"/);
 assert.match(trackingHtml, /id="resume-all-button"/);
 assert.match(trackingHtml, /href="\.\.\/history\/history\.html">Downloads<\/a>/);

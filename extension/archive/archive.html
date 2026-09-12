@@ -35,7 +35,8 @@
         </div>
 
         <progress id="job-progress" max="1" value="0" aria-describedby="progress-description"></progress>
-        <p id="progress-description" class="progress-description" aria-live="polite">Waiting to start</p>
+        <p id="progress-description" class="progress-description" role="status" aria-live="polite" aria-atomic="true">Waiting to start</p>
+        <p id="keep-open-notice" class="keep-open-notice">Keep this tab open until finished. Workspace links open in a new tab while your archive is running.</p>
 
         <dl class="stats" aria-label="Archive statistics">
           <div>
@@ -66,7 +67,7 @@
         <p class="section-label">Archive not created</p>
         <h2 id="fatal-heading">This archive job could not continue</h2>
         <p id="fatal-message"></p>
-        <p>Return to AnyDownload on the source page, select the images, and start the ZIP again.</p>
+        <p>Retry failed images below, or return to AnyDownload on the source page to select images and start another ZIP.</p>
       </section>
 
       <div class="results-grid">
@@ -79,7 +80,7 @@
             <button id="show-downloads-button" class="quiet-button" type="button" hidden>Open Downloads</button>
           </div>
           <p id="downloads-empty" class="empty-state">Archive files will appear here as Firefox finishes them.</p>
-          <ol id="downloads-list" class="result-list" aria-live="polite"></ol>
+          <ol id="downloads-list" class="result-list"></ol>
         </section>
 
         <section class="card" aria-labelledby="failures-heading">
@@ -88,9 +89,10 @@
               <p class="section-label">Skipped items</p>
               <h2 id="failures-heading">Fetch failures</h2>
             </div>
+            <button id="retry-failures-button" class="quiet-button" type="button" title="Create a new ZIP with only the failed images. Previously saved ZIP files stay in Downloads." hidden>Retry failed images</button>
           </div>
           <p id="failures-empty" class="empty-state">No failures so far.</p>
-          <ol id="failures-list" class="result-list failure-list" aria-live="polite"></ol>
+          <ol id="failures-list" class="result-list failure-list"></ol>
         </section>
       </div>
     </main>

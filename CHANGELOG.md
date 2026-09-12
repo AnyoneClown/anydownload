@@ -4,6 +4,25 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- In-gallery image and direct-video previews with Previous/Next, arrow-key navigation, Escape, selection, download, and optional full-tab preview. Standalone previews can return to their source and survive reload within the existing five-minute expiry.
+- **This page** and **Saved website** views, 350-item pagination, filename/resolution sorting, and minimum-width, minimum-height, and orientation filters. Unknown sizes are excluded while a size or orientation filter is active.
+- Tracker review selection, **Download selected**/**Dismiss selected**, a tracker filter, visible destinations, partial-failure feedback, and an **Edit tracker** shortcut to the existing settings editor.
+- Downloads search by filename or source website, file-level status filtering within mixed-result batches, and **Retry failed images** in Archive Progress.
+
+### Changed
+
+- Search and media filters now change visibility without clearing selections. The clickable selected count reveals the whole batch, hidden selections are called out, and **Select matches only** explicitly replaces the selection with matching media across collection pages.
+- A more compact popup header and footer leave room for media while keeping destination and validation warnings readable. Infrequent collection actions live in Collection settings, and touch controls have larger targets.
+- **Clear website collection** names its scope and offers Undo until the source context changes or the manager closes. **Clear completed details** in Downloads explains that downloaded files and summaries remain.
+
+### Fixed
+
+- The gallery, Downloads, and Tracking retain keyboard focus through live updates. Dashboard updates announce concise status summaries instead of rebuilding whole-list announcements.
+- Open gallery previews follow refreshed media URLs and close cleanly when their media is removed.
+- Archive Progress explains that its tab must remain open and opens workspace navigation separately while a ZIP is running; failed-image retries keep previously saved parts.
+
 ## [1.15.0] - 2026-09-12
 
 ### Changed

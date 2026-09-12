@@ -30,6 +30,7 @@ const ELEMENT_IDS = [
   "refresh-button",
   "resume-all-button",
   "retry-failed-button",
+  "search-input",
   "status-filter",
   "success-detail",
   "success-stat"
@@ -42,6 +43,7 @@ class FakeElement {
     this.children = [];
     this.className = "";
     this.disabled = false;
+    this.dataset = {};
     this.hidden = false;
     this.listeners = new Map();
     this.max = 1;
@@ -49,7 +51,7 @@ class FakeElement {
     this.textContent = "";
     this.title = "";
     this.type = "";
-    this.value = id === "status-filter" ? "all" : 0;
+    this.value = id === "status-filter" ? "all" : id === "search-input" ? "" : 0;
   }
 
   addEventListener(type, listener) {
@@ -64,6 +66,23 @@ class FakeElement {
         this.children.push(child);
       }
     }
+    this.children.forEach((child) => { child.parentElement = this; });
+  }
+
+  setAttribute(name, value) { this[name] = value; }
+
+  focus() { this.ownerDocument.activeElement = this; }
+
+  closest(selector) {
+    if (selector === "[data-focus-scope]" && this.dataset.focusScope ||
+        selector === ".job-card" && this.className === "job-card") {
+      return this;
+    }
+    return this.parentElement ? this.parentElement.closest(selector) : null;
+  }
+
+  querySelectorAll() {
+    return descendants(this).filter((element) => element.dataset.focusKey || element.dataset.focusScope);
   }
 
   replaceChildren(...children) {
@@ -84,6 +103,8 @@ class FakeDocument {
   constructor() {
     this.elements = new Map(ELEMENT_IDS.map((id) => [id, new FakeElement("div", id)]));
     this.listeners = new Map();
+    this.activeElement = null;
+    this.elements.forEach((element) => { element.ownerDocument = this; });
   }
 
   addEventListener(type, listener) {
@@ -97,7 +118,9 @@ class FakeDocument {
   }
 
   createElement(tagName) {
-    return new FakeElement(tagName);
+    const element = new FakeElement(tagName);
+    element.ownerDocument = this;
+    return element;
   }
 
   getElementById(id) {
@@ -355,12 +378,62 @@ async function exerciseDownloadsApiFailures() {
   assert.equal(unsupportedShow.disabled, true);
 }
 
+async function exerciseFileFiltersAndLiveFocus() {
+  const snapshot = emptySnapshot({
+    summary: { total: 3, active: 1, failed: 1, complete: 1 },
+    jobs: [{
+      id: "mixed-job", label: "Photos", source: "https://gallery.example/album", status: "in_progress",
+      counts: { total: 3, active: 1, failed: 1, complete: 1, pending: 1 },
+      tasks: [
+        { id: "active", filename: "active.jpg", status: "in_progress", bytesReceived: 1 },
+        { id: "failed", filename: "missing.jpg", status: "interrupted" },
+        { id: "complete", filename: "saved.jpg", status: "complete" }
+      ]
+    }]
+  });
+  const page = await loadHistoryPage({ snapshot, downloads: {} });
+  const list = page.document.getElementById("job-list");
+  const filter = page.document.getElementById("status-filter");
+  filter.value = "failed";
+  await filter.dispatch("change");
+  assert.deepEqual(descendants(list).filter((element) => element.className === "task-title").map((element) => element.textContent), ["missing.jpg"],
+    "Failed files in active batches must be discoverable without showing unrelated files");
+  const retry = descendants(list).find((element) => element.dataset.focusKey === "task:failed:retry");
+  retry.focus();
+  snapshot.jobs[0].tasks[0].bytesReceived = 2;
+  await page.document.getElementById("refresh-button").dispatch("click");
+  assert.notEqual(page.document.activeElement, retry, "The test must exercise an actual DOM rebuild");
+  assert.equal(page.document.activeElement.dataset.focusKey, "task:failed:retry");
+  snapshot.jobs[0].tasks[1].status = "queued";
+  await page.document.activeElement.dispatch("click");
+  assert.equal(page.document.activeElement, filter, "When the retried row leaves the filter, focus must reach a usable control");
+  filter.value = "all";
+  await filter.dispatch("change");
+  const pause = descendants(list).find((element) => element.dataset.focusKey === "task:active:pause");
+  pause.focus();
+  snapshot.jobs[0].tasks[0].status = "paused";
+  await pause.dispatch("click");
+  assert.equal(page.document.activeElement.dataset.focusScope, "task:active", "A changed task action must keep focus in its own row");
+  const search = page.document.getElementById("search-input");
+  search.value = "SAVED.JPG";
+  await search.dispatch("input");
+  assert.deepEqual(descendants(list).filter((element) => element.className === "task-title").map((element) => element.textContent), ["saved.jpg"]);
+  search.value = "gallery.example";
+  await search.dispatch("input");
+  assert.equal(descendants(list).filter((element) => element.className === "task-row").length, 3);
+  search.value = "does-not-exist";
+  await search.dispatch("input");
+  assert.equal(list.children.length, 0);
+  assert.equal(page.document.getElementById("history-empty").hidden, false);
+}
+
 Promise.resolve()
   .then(exercisePrivateContextAndStats)
   .then(exerciseWindowContextFallback)
   .then(exerciseRetryControls)
   .then(exerciseUnchangedRefreshSkipsDomRebuild)
   .then(exerciseDownloadsApiFailures)
+  .then(exerciseFileFiltersAndLiveFocus)
   .then(() => {
     console.log("All download dashboard page checks passed.");
   })

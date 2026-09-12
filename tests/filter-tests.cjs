@@ -41,7 +41,10 @@ assert.deepEqual(Filters.normalizeFilters({
 }), {
   mediaType: "video",
   photosOnly: true,
-  format: "jpeg"
+  format: "jpeg",
+  minWidth: 300,
+  minHeight: 0,
+  orientation: "portrait"
 });
 assert.deepEqual(Filters.normalizeFilters({
   mediaType: "audio",
@@ -54,14 +57,17 @@ assert.deepEqual(Filters.normalizeFilters({
 }), {
   mediaType: "any",
   photosOnly: false,
-  format: "any"
+  format: "any",
+  minWidth: 0,
+  minHeight: 1000000,
+  orientation: "any"
 });
 
 const hostileFilters = {};
-for (const legacyFilter of ["minWidth", "minHeight", "orientation", "includeUnknown"]) {
-  Object.defineProperty(hostileFilters, legacyFilter, {
+for (const filter of ["minWidth", "minHeight", "orientation", "includeUnknown"]) {
+  Object.defineProperty(hostileFilters, filter, {
     get() {
-      throw new Error(`The removed ${legacyFilter} filter must not be read`);
+      throw new Error(`Unsafe ${filter} getter`);
     }
   });
 }
@@ -75,8 +81,8 @@ assert.deepEqual(
     orientation: "portrait",
     includeUnknown: false
   }),
-  Filters.DEFAULT_FILTERS,
-  "Removed dimension, orientation, and unknown-size settings must be ignored"
+  { ...Filters.DEFAULT_FILTERS, orientation: "portrait" },
+  "Unsafe dimension values must fall back to zero without affecting safe filters"
 );
 
 assert.equal(Filters.imageFileType({ url: "https://cdn.test/photo.JPG?size=large" }), "jpeg");
@@ -109,6 +115,10 @@ assert.equal(
   "png",
   "Normalized-filter caching must not retain a stale mutated value"
 );
+Object.assign(mutableNormalizedFilters, { minWidth: "640", minHeight: 480, orientation: "PORTRAIT" });
+assert.deepEqual(Filters.normalizeFilters(mutableNormalizedFilters), {
+  ...Filters.DEFAULT_FILTERS, format: "png", minWidth: 640, minHeight: 480, orientation: "portrait"
+}, "Cached normalized filters must follow dimension and orientation edits");
 
 const normalPhoto = {
   url: "https://gallery.test/holidays/sunset-001.webp",
@@ -166,7 +176,22 @@ assert.equal(Filters.matchesSmartFilters(normalPhoto, {
   minHeight: 999999,
   orientation: "portrait",
   includeUnknown: false
-}), true, "Removed filter criteria must not affect matching");
+}), false, "Dimension and orientation filters must reject non-matching media");
+assert.equal(Filters.matchesSmartFilters(normalPhoto, { minWidth: 1920, minHeight: 1080 }), true);
+assert.equal(Filters.matchesSmartFilters(normalPhoto, { minWidth: 1921 }), false);
+assert.equal(Filters.matchesSmartFilters(normalPhoto, { minHeight: 1081 }), false);
+assert.equal(Filters.matchesSmartFilters(normalPhoto, { orientation: "landscape" }), true);
+assert.equal(Filters.matchesSmartFilters(normalPhoto, { orientation: "square" }), false);
+assert.equal(Filters.matchesSmartFilters({ ...normalPhoto, width: 600, height: 800 }, { orientation: "portrait" }), true);
+assert.equal(Filters.matchesSmartFilters({ ...normalPhoto, width: 800, height: 800 }, { orientation: "square" }), true);
+assert.equal(Filters.matchesSmartFilters(unknownSize, {}), true);
+assert.equal(Filters.matchesSmartFilters(unknownSize, { minWidth: 1 }), false);
+assert.equal(Filters.matchesSmartFilters(unknownSize, { minHeight: 1 }), false);
+assert.equal(Filters.matchesSmartFilters(unknownSize, { orientation: "square" }), false,
+  "Unknown dimensions must not be mistaken for a square");
+assert.equal(Filters.matchesSmartFilters({ ...unknownSize, width: 800 }, { minWidth: 640 }), true,
+  "A known width may satisfy a width-only constraint");
+assert.equal(Filters.matchesSmartFilters({ ...unknownSize, width: 800 }, { orientation: "landscape" }), false);
 assert.equal(Filters.matchesSmartFilters(
   { url: "https://site.test/logo.png", width: 0, height: 0 },
   { photosOnly: true }
@@ -197,7 +222,10 @@ assert.equal(Filters.hasActiveSmartFilters({
   minHeight: 1,
   orientation: "square",
   includeUnknown: false
-}), false);
+}), true);
+assert.equal(Filters.hasActiveSmartFilters({ minWidth: 1 }), true);
+assert.equal(Filters.hasActiveSmartFilters({ minHeight: 1 }), true);
+assert.equal(Filters.hasActiveSmartFilters({ orientation: "portrait" }), true);
 assert.equal(Filters.hasActiveSmartFilters({ format: "invalid", minWidth: -5 }), false);
 
 console.log("All smart-filter checks passed.");

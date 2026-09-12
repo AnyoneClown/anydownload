@@ -68,6 +68,8 @@ class Element {
   matches(selector) { return selector === ":popover-open" && this.popoverOpen === true; }
   showPopover() { this.popoverOpen = true; }
   hidePopover() { this.popoverOpen = false; }
+  showModal() { this.open = true; }
+  close() { this.open = false; this.listeners.get("close")?.(); }
   focus() { this.focused = true; }
   querySelectorAll() { return []; }
   querySelector() { return null; }
@@ -186,9 +188,9 @@ function popupHarness(stored = { local: [], session: [] }) {
   const source = fs.readFileSync(`${__dirname}/../extension/popup/popup.js`, "utf8");
   vm.runInContext(source.replace('  document.addEventListener("DOMContentLoaded",', `
     globalThis.testPopup = {
-      state, elements, scanPage, saveCurrentGallery, clearSiteGallery, collectGallery,
+      state, elements, scanPage, saveCurrentGallery, clearSiteGallery, undoClearSiteGallery, collectGallery,
       stopGalleryCollection, resetSidebarPageState, beginSidebarTransition, handleGalleryStorageChanges,
-      renderedDownloadItems, wireSourceTabLifecycle, mergeScanResults, wireEvents, renderImages, makeImageRow,
+      renderedDownloadItems, wireSourceTabLifecycle, mergeScanResults, wireEvents, renderImages, makeImageRow, filteredImages,
       prepare() { cacheElements(); applySmartFiltersToControls(Filters.DEFAULT_FILTERS); }
     };
     document.addEventListener("DOMContentLoaded",`), context);
@@ -292,7 +294,7 @@ async function checkPopup() {
   assert.equal(Gallery.getSite(stored.local, siteKey).records.length, 0);
   assert.equal(JSON.stringify(Gallery.getSite(stored.local, "https://other.test")), otherGallery);
   assert.equal(clearing.elements.get("clear-gallery-button").disabled, true);
-  assert.equal(clearing.elements.get("collect-gallery-button").focused, true);
+  assert.equal(clearing.elements.get("undo-clear-button").focused, true);
   assert.match(clearing.elements.get("notice").textContent, /Downloaded files and history are kept/);
   const fresh = popupHarness(stored);
   fresh.setImages([photo("current-page")]);
@@ -362,6 +364,57 @@ async function checkSelectionDuringScan() {
   assert.equal(popup.state.liveScanning, false);
 }
 
+async function checkCurrentPageMembership() {
+  const first = popupHarness();
+  await first.popup.scanPage();
+  first.popup.state.collectionScope = "page";
+  const urls = () => Array.from(first.popup.filteredImages(), (item) => item.url);
+  const notify = () => first.popup.handleGalleryStorageChanges({ [Gallery.STORAGE_KEY]: { newValue: first.stored.local } }, "local");
+  const second = popupHarness(first.stored);
+  second.tab.url = `${siteKey}/other-page`;
+  const shared = { ...photo("one"), pageUrl: second.tab.url, url: `${photo("one").url}?token=fresh` };
+  second.setImages([shared, { ...photo("other-only"), pageUrl: second.tab.url }]);
+  await second.popup.scanPage();
+  notify();
+  assert.equal(first.popup.state.images.find((item) => item.url === shared.url).pageUrl, second.tab.url);
+  assert.deepEqual(urls(), [shared.url], "Another manager's latest source attribution must not hide a shared image from This page");
+
+  await first.popup.collectGallery();
+  assert.ok(urls().includes(photo("two").url), "Live source scans remember virtualized discoveries even when their saved page differs");
+  assert.ok(!urls().includes(photo("three").url), "Fetched Next-page images are not discoveries on the active page");
+  await first.popup.clearSiteGallery();
+  assert.deepEqual(urls(), []);
+  await first.popup.undoClearSiteGallery();
+  assert.ok(urls().some((url) => url.startsWith(photo("one").url)), "Undo restores local membership as well as shared gallery records");
+  assert.ok(urls().includes(photo("two").url), "Undo restores discovered membership whose saved source belongs to a different page");
+
+  first.navigate(`${siteKey}/other-page`);
+  assert.ok(!urls().includes(photo("two").url), "Same-site navigation resets membership from the previous page");
+  assert.ok(urls().includes(photo("other-only").url), "Restored records fall back to saved page attribution before a new scan");
+  first.navigate(`${siteKey}/one`);
+  assert.ok(!urls().includes(photo("two").url), "Returning to a page does not resurrect discarded local membership");
+
+  first.setImages([photo("one")]);
+  await first.popup.scanPage();
+  let changed = Gallery.updateSites(first.stored.local, { siteKey, action: "clear" });
+  changed = Gallery.updateSites(changed.sites, { siteKey, epoch: changed.gallery.epoch, records: [shared] });
+  first.stored.local = changed.sites;
+  notify();
+  assert.deepEqual(urls(), [], "A newer clear epoch discards old membership even when an identity is immediately re-added elsewhere");
+
+  first.popup.state.images = [photo("one")];
+  first.popup.renderImages();
+  first.popup.state.images = [];
+  first.popup.renderImages();
+  first.popup.state.images = [shared];
+  assert.deepEqual(urls(), [], "Membership is pruned when a media identity leaves the bounded gallery");
+  first.popup.state.images = [photo("one")];
+  first.popup.renderImages();
+  first.popup.state.incognito = true;
+  first.popup.state.images = [shared];
+  assert.deepEqual(urls(), [], "Private context changes cannot retain normal-window membership");
+}
+
 async function checkPhotoStory() {
   const still = { ...photo("story-photo"), identityKey: "instagram:story:alice:alice:102",
     sourceProvider: "instagram", mediaType: "image", originalMediaType: 1,
@@ -402,6 +455,64 @@ async function checkPhotoStory() {
   await reopened.popup.scanPage();
   assert.equal(reopened.popup.state.images[0].url, still.url);
   assert.equal(reopened.popup.state.images[0].mediaType, "image");
+}
+
+async function checkUndoAndFilteredScan() {
+  const harness = popupHarness();
+  const { popup, stored, elements } = harness;
+  harness.setImages([photo("one"), photo("two")]);
+  await popup.scanPage();
+  popup.state.selected.delete(photo("one").url);
+  await popup.saveCurrentGallery();
+  const beforeClear = Gallery.getSite(stored.local, siteKey);
+  await popup.clearSiteGallery();
+  assert.equal(elements.get("gallery-undo").hidden, false);
+  await popup.undoClearSiteGallery();
+  assert.deepEqual(Array.from(popup.state.images, image => image.url), [photo("one").url, photo("two").url],
+    "Undo restores the saved website collection");
+  assert.deepEqual(Array.from(popup.state.selected), [photo("two").url], "Undo restores deliberate checked and unchecked states");
+  assert.ok(Gallery.getSite(stored.local, siteKey).epoch > beforeClear.epoch,
+    "Undo must use the post-clear epoch so stale managers cannot resurrect the old collection");
+  assert.equal(elements.get("gallery-undo").hidden, true);
+
+  await popup.clearSiteGallery();
+  stored.local = Gallery.updateSites(stored.local, { siteKey, action: "clear" }).sites;
+  await popup.undoClearSiteGallery();
+  assert.equal(Gallery.getSite(stored.local, siteKey).records.length, 0,
+    "An intervening clear from another manager must invalidate Undo");
+
+  harness.setImages([photo("again")]);
+  await popup.scanPage();
+  await popup.clearSiteGallery();
+  popup.beginSidebarTransition(2, null);
+  await popup.undoClearSiteGallery();
+  assert.equal(Gallery.getSite(stored.local, siteKey).records.length, 0,
+    "Undo cannot restore into an abandoned source context");
+
+  const privateWindow = popupHarness(stored);
+  privateWindow.tab.incognito = true;
+  privateWindow.setImages([photo("private-undo")]);
+  await privateWindow.popup.scanPage();
+  const normalBefore = JSON.stringify(stored.local);
+  await privateWindow.popup.clearSiteGallery();
+  await privateWindow.popup.undoClearSiteGallery();
+  assert.equal(privateWindow.popup.state.images[0].url, photo("private-undo").url);
+  assert.equal(JSON.stringify(stored.local), normalBefore, "Private Undo must never write normal storage");
+  assert.equal(Gallery.getSite(stored.session, siteKey).records[0].url, photo("private-undo").url);
+
+  const filtered = popupHarness();
+  const clip = { ...photo("clip"), url: "https://cdn.test/clip.mp4", mediaType: "video" };
+  filtered.setImages([photo("one"), clip]);
+  await filtered.popup.scanPage();
+  filtered.popup.wireEvents();
+  filtered.elements.get("media-type-filter-select").value = "video";
+  filtered.elements.get("media-type-filter-select").listeners.get("change")();
+  assert.equal(filtered.popup.state.selected.has(photo("one").url), true);
+  const addedClip = { ...clip, url: "https://cdn.test/added.mp4" };
+  filtered.setImages([photo("one"), clip, photo("new-image"), addedClip]);
+  await filtered.popup.scanPage({ preserveSelection: true, live: true });
+  assert.deepEqual(Array.from(filtered.popup.state.selected), [photo("one").url, clip.url, addedClip.url],
+    "Rescans preserve known hidden selections while only auto-selecting eligible new items");
 }
 
 async function checkFetch() {
@@ -498,7 +609,9 @@ function checkScrolling() {
 (async () => {
   await checkPopup();
   await checkSelectionDuringScan();
+  await checkCurrentPageMembership();
   await checkPhotoStory();
+  await checkUndoAndFilteredScan();
   await checkFetch();
   checkScrolling();
   const stoppable = popupHarness();

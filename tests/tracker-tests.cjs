@@ -200,7 +200,9 @@ const normalized = Tracker.normalizeTracker({
 assert.ok(normalized);
 assert.equal(normalized.intervalMinutes, Tracker.MIN_INTERVAL_MINUTES);
 assert.equal(normalized.url, "https://example.test/gallery");
-assert.deepEqual(normalized.filters, { mediaType: "image", photosOnly: false, format: "jpeg" });
+assert.deepEqual(normalized.filters, {
+  mediaType: "image", photosOnly: false, format: "jpeg", minWidth: 0, minHeight: 0, orientation: "any"
+});
 assert.equal(normalized.seen.length, 1);
 assert.deepEqual(normalized.matching.includePatterns, ["*.jpg", "*.webp"]);
 assert.deepEqual(normalized.matching.excludePatterns, ["*/thumbs/*", "*/avatars/*"]);

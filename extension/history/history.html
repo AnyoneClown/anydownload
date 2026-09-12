@@ -45,7 +45,7 @@
           </div>
         </div>
         <progress id="queue-progress" max="1" value="0" aria-labelledby="queue-heading" aria-describedby="queue-description"></progress>
-        <p id="queue-description" class="muted" role="status" aria-live="polite">No downloads are queued.</p>
+        <p id="queue-description" class="muted" role="status" aria-live="polite" aria-atomic="true">No downloads are queued.</p>
       </section>
 
       <section class="stats-grid" aria-label="Download statistics">
@@ -78,8 +78,12 @@
             <h2 id="history-heading">Your files</h2>
           </div>
           <div class="history-tools">
+            <label class="history-search">
+              <span class="visually-hidden">Search filenames or source websites</span>
+              <input id="search-input" type="search" placeholder="Filename or source website" maxlength="500">
+            </label>
             <label>
-              <span class="visually-hidden">Filter download history</span>
+              <span class="visually-hidden">Filter files by status</span>
               <select id="status-filter">
                 <option value="all">All statuses</option>
                 <option value="active">Active</option>
@@ -89,13 +93,13 @@
               </select>
             </label>
             <button id="retry-failed-button" class="quiet-button" type="button" hidden>Retry failed</button>
-            <button id="clear-completed-button" class="quiet-button" type="button">Clear completed</button>
+            <button id="clear-completed-button" class="quiet-button" type="button" title="Remove detailed rows from completed batches; keep summaries and downloaded files.">Clear completed details</button>
           </div>
         </div>
 
         <div id="error-banner" class="error-banner" role="alert" hidden></div>
         <p id="history-empty" class="empty-state">Your downloads will appear here. Open AnyDownload on a webpage and select the files you want to save.</p>
-        <div id="job-list" class="job-list" aria-live="polite"></div>
+        <div id="job-list" class="job-list"></div>
       </section>
     </main>
 

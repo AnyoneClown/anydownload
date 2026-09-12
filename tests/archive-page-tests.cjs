@@ -372,6 +372,10 @@ class FakeElement {
     this.children.push(...children);
   }
 
+  replaceChildren(...children) {
+    this.children = children;
+  }
+
   async dispatch(type) {
     const listener = this.listeners.get(type);
     if (listener) {
@@ -384,6 +388,13 @@ class FakeDocument {
   constructor(ids) {
     this.elements = new Map(ids.map((id) => [id, new FakeElement()]));
     this.title = "";
+    this.links = [new FakeElement(), new FakeElement()];
+    this.links.forEach((link) => { link.target = ""; link.title = ""; });
+  }
+
+  querySelectorAll(selector) {
+    assert.equal(selector, ".workspace-nav a");
+    return this.links;
   }
 
   createElement() {
@@ -410,8 +421,10 @@ const ARCHIVE_ELEMENT_IDS = [
   "fetched-count",
   "job-progress",
   "job-summary",
+  "keep-open-notice",
   "progress-description",
   "progress-panel",
+  "retry-failures-button",
   "show-downloads-button",
   "status-heading",
   "total-count"
@@ -553,6 +566,8 @@ async function runCancelledArchive({ items, maximumPartBytes }) {
   }
 
   assert.equal(documentObject.getElementById("status-heading").textContent, "Archive cancelled");
+  assert.equal(documentObject.getElementById("keep-open-notice").hidden, true);
+  assert.ok(documentObject.links.every((link) => link.target === ""));
   assert.equal(changeListeners.size, 0);
   return { documentObject, downloadCount };
 }
@@ -686,11 +701,77 @@ async function exerciseFiveHundredItemPage() {
   assert.equal(changeListeners.size, 0, "Completed downloads must release their listeners");
 }
 
+async function exerciseFailedImageRetry() {
+  for (const partial of [true, false]) {
+    const documentObject = new FakeDocument(ARCHIVE_ELEMENT_IDS);
+    const request = {
+      createdAt: Date.now(), folder: "recovery", incognito: true,
+      items: [
+        ...(partial ? [{ url: "data:image/png;base64,AA==", filename: "saved.png" }] : []),
+        { url: "https://images.example/retry.png", filename: "retry.png" }
+      ]
+    };
+    const downloads = [];
+    const browserObject = {
+      storage: { session: {
+        async get(key) { return { [key]: request }; },
+        async remove() {}
+      } },
+      downloads: {
+        async download(details) { downloads.push(details); return downloads.length; },
+        onChanged: { addListener() {}, removeListener() {} },
+        async search({ id }) { return [{ id, state: "complete" }]; }
+      }
+    };
+    const originalFetch = global.fetch;
+    let fetchCount = 0;
+    global.fetch = async (url) => {
+      fetchCount += 1;
+      assert.equal(url, "https://images.example/retry.png");
+      assert.equal(documentObject.getElementById("keep-open-notice").hidden, false);
+      assert.ok(documentObject.links.every((link) => link.target === "_blank" && link.rel === "noopener"),
+        "Workspace navigation must protect both the first archive and a retry");
+      if (fetchCount === 1) {
+        throw new Error("Temporary image failure");
+      }
+      return {
+        ok: true, headers: { get(name) { return name === "content-type" ? "image/png" : "1"; } },
+        async arrayBuffer() { return new Uint8Array([1]).buffer; }
+      };
+    };
+    try {
+      await ArchivePage.initializeArchivePage({
+        browser: browserObject, document: documentObject,
+        location: { search: "?job=retry-job-123" }, window: { addEventListener() {} }
+      });
+      const retryButton = documentObject.getElementById("retry-failures-button");
+      assert.equal(retryButton.hidden, false, "Partial and entirely failed archives both need recovery");
+      assert.equal(documentObject.getElementById("keep-open-notice").hidden, true);
+      assert.ok(documentObject.links.every((link) => link.target === ""));
+      await retryButton.dispatch("click");
+      assert.equal(documentObject.getElementById("total-count").textContent, "1", "A retry must contain only previously failed images");
+      assert.equal(documentObject.getElementById("status-heading").textContent, "Archive complete");
+      assert.equal(documentObject.getElementById("failure-count").textContent, "0");
+      assert.equal(documentObject.getElementById("failures-list").children.length, 0);
+      assert.equal(documentObject.getElementById("fatal-panel").hidden, true);
+      assert.equal(documentObject.getElementById("keep-open-notice").hidden, true);
+      assert.equal(retryButton.hidden, true);
+      assert.equal(downloads.length, partial ? 2 : 1);
+      assert.ok(downloads.every((details) => details.incognito && details.conflictAction === "uniquify"));
+      assert.equal(documentObject.getElementById("downloads-list").children.length, downloads.length,
+        "Previously saved archives must stay available during recovery");
+    } finally {
+      global.fetch = originalFetch;
+    }
+  }
+}
+
 Promise.resolve()
   .then(exerciseCancellationFallback)
   .then(exerciseRetentionTimeout)
   .then(exerciseCancellationCopyTracksSavedParts)
   .then(exerciseFiveHundredItemPage)
+  .then(exerciseFailedImageRetry)
   .then(() => {
     console.log("All Archive Progress page checks passed.");
   })

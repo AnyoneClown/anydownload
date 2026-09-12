@@ -262,7 +262,7 @@
       ),
       filters: Filters && typeof Filters.normalizeFilters === "function"
         ? Filters.normalizeFilters(safeProperty(value, "filters"))
-        : { mediaType: "any", photosOnly: false, format: "any" },
+        : { mediaType: "any", photosOnly: false, format: "any", minWidth: 0, minHeight: 0, orientation: "any" },
       query: matching.includeText,
       matching,
       pagination: normalizePagination(safeProperty(value, "pagination"), url),

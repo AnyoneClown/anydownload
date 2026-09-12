@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>AnyDownload — Page media</title>
+    <title>AnyDownload — Media collection</title>
     <link rel="stylesheet" href="../shared/theme.css">
     <link rel="stylesheet" href="popup.css">
   </head>
@@ -22,16 +22,10 @@
           <button id="tracking-dashboard-button" class="nav-link" type="button" title="Background trackers" aria-label="Open background trackers">
             <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r="2"/></svg><span>Trackers</span>
           </button>
-          <button id="sync-button" class="nav-link" type="button" title="Cloud sync" aria-label="Open cloud sync" disabled>
-            <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M5 15h10a3 3 0 0 0 .4-6A5.5 5.5 0 0 0 5 7a4 4 0 0 0 0 8"/></svg><span>Sync</span>
-          </button>
         </nav>
         <div class="header-actions">
           <button id="open-window-button" class="icon-button open-window-button" type="button" title="Open in a resizable window" aria-label="Open in a resizable window" disabled>
             <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M8 4H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-3M11 3h6v6M9 11l8-8"/></svg>
-          </button>
-          <button id="sidebar-button" class="icon-button sidebar-button" type="button" title="Open Firefox Sidebar" aria-label="Open Firefox Sidebar">
-            <svg aria-hidden="true" viewBox="0 0 20 20"><rect x="2.5" y="3" width="15" height="14" rx="2"/><path d="M7.5 3v14"/></svg>
           </button>
         </div>
       </header>
@@ -39,14 +33,18 @@
       <section class="controls" aria-label="Media controls">
         <div class="collection-heading">
           <div class="context-copy">
-            <p class="eyebrow">Page media</p>
+            <p class="eyebrow">Media collection</p>
             <h2 id="page-label">Scanning the current page…</h2>
             <p id="gallery-status" class="field-help" role="status" aria-live="polite">Your collection will appear here.</p>
+            <a id="editor-source-link" class="text-button" target="_blank" rel="noopener noreferrer" hidden>Open source page</a>
           </div>
           <div class="gallery-toolbar">
+            <label class="compact-field collection-scope-field">
+              <span class="visually-hidden">Collection scope</span>
+              <select id="collection-scope-select"><option value="site">Saved website</option><option value="page">This page</option></select>
+            </label>
             <button id="collect-gallery-button" class="secondary-button" type="button" disabled>Collect gallery</button>
             <button id="stop-gallery-button" class="secondary-button" type="button" hidden>Stop collecting</button>
-            <button id="clear-gallery-button" class="text-button danger-button" type="button" title="Clear all saved media for this website. Downloaded files and history are kept." disabled>Clear media</button>
             <button class="icon-button" type="button" popovertarget="page-tools-panel" aria-label="Collection settings and page tracking" title="Collection settings and page tracking">
               <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="4" cy="10" r="1"/><circle cx="10" cy="10" r="1"/><circle cx="16" cy="10" r="1"/></svg>
             </button>
@@ -101,6 +99,13 @@
               <option value="mkv">MKV</option>
             </select>
           </label>
+          <div class="dimension-filter-fields">
+            <label class="compact-field"><span>Minimum width</span><input id="min-width-input" type="number" min="0" max="1000000" step="1" value="0" inputmode="numeric"></label>
+            <label class="compact-field"><span>Minimum height</span><input id="min-height-input" type="number" min="0" max="1000000" step="1" value="0" inputmode="numeric"></label>
+            <label class="compact-field"><span>Orientation</span><select id="orientation-filter-select"><option value="any">Any orientation</option><option value="landscape">Landscape</option><option value="portrait">Portrait</option><option value="square">Square</option></select></label>
+            <label class="compact-field"><span>Sort by</span><select id="sort-select"><option value="page">Page order</option><option value="name">Filename</option><option value="resolution">Largest resolution</option></select></label>
+          </div>
+          <p class="field-help dimension-filter-help">Size and orientation filters show media with known dimensions. Clear these filters to inspect unknown sizes.</p>
           <div class="filter-view-options">
             <button id="ignored-button" class="text-button ignored-view-button" type="button" aria-pressed="false" disabled>Ignored (0)</button>
             <button id="clear-ignored-button" class="text-button danger-button" type="button" hidden>Restore all</button>
@@ -126,13 +131,21 @@
       </section>
 
       <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+      <div id="gallery-undo" class="gallery-undo" role="status" hidden><span>Website collection cleared.</span><button id="undo-clear-button" class="text-button" type="button">Undo</button></div>
       <main id="image-list" class="image-list" data-view="grid" role="list" aria-label="Media found on this page"></main>
+      <nav id="gallery-pagination" class="gallery-pagination" aria-label="Collection pages" hidden>
+        <button id="previous-page-button" class="text-button" type="button">Previous</button>
+        <span id="pagination-label" role="status"></span>
+        <button id="next-page-button" class="text-button" type="button">Next</button>
+      </nav>
 
       <footer class="action-bar">
         <div class="action-copy">
-          <strong id="selected-label">0 selected</strong>
+          <button id="selected-label" class="selection-review-button" type="button" aria-pressed="false" title="Review all selected files">0 selected</button>
+          <button id="back-to-collection-button" class="text-button" type="button" hidden>Back to collection</button>
           <button id="download-settings-button" class="destination-button" type="button" popovertarget="download-settings-panel" title="Download settings and destination folder" aria-label="Download settings and destination folder"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M2 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2Z"/></svg><span id="action-detail">Choose files to download</span></button>
         </div>
+        <p id="selection-warning" class="selection-warning" role="status" hidden></p>
         <div class="action-buttons">
           <button id="archive-footer-button" class="secondary-button" type="button" disabled>Download ZIP</button>
           <button id="download-button" class="primary-button" type="button" disabled>Download selected</button>
@@ -181,6 +194,9 @@
       </label>
       <div class="page-tool-actions">
         <button id="tracker-button" class="secondary-button tracker-button" type="button" aria-expanded="false" aria-controls="tracker-panel" disabled>Track page</button>
+        <button id="sidebar-button" class="secondary-button sidebar-button" type="button" title="Open Firefox Sidebar" aria-label="Open Firefox Sidebar">Open Firefox Sidebar</button>
+        <button id="sync-button" class="secondary-button" type="button" disabled>Cloud sync</button>
+        <button id="clear-gallery-button" class="text-button danger-button" type="button" title="Clear saved media and selections for this website. Downloaded files and history are kept. Undo is available until you leave this website or close the manager." disabled>Clear website collection</button>
       </div>
       <div id="tracker-panel" class="tracker-panel" hidden>
         <div class="tracker-heading">
@@ -285,6 +301,20 @@
         </div>
       </div>
     </section>
+
+    <dialog id="media-preview-dialog" class="media-preview-dialog" aria-labelledby="media-preview-title">
+      <header class="preview-heading"><h2 id="media-preview-title">Preview</h2><button id="close-preview-button" class="icon-button" type="button" aria-label="Close preview" autofocus>×</button></header>
+      <div id="media-preview-stage" class="media-preview-stage"></div>
+      <p id="media-preview-meta" class="field-help"></p>
+      <p id="media-preview-error" class="field-help error" role="status" hidden>Preview unavailable. Try opening the source page.</p>
+      <div class="preview-navigation"><button id="preview-previous-button" class="secondary-button" type="button">Previous</button><span id="media-preview-position" role="status"></span><button id="preview-next-button" class="secondary-button" type="button">Next</button></div>
+      <div class="preview-actions">
+        <label class="option-row"><input id="preview-selected-input" type="checkbox"><span id="preview-selected-text">Selected for download</span></label>
+        <button id="preview-download-button" class="primary-button" type="button">Download</button>
+        <button id="preview-tab-button" class="text-button" type="button">Open in new tab</button>
+        <a id="preview-source-link" class="text-button" target="_blank" rel="noopener noreferrer" hidden>Source page</a>
+      </div>
+    </dialog>
 
     <script src="../shared/core.js"></script>
     <script src="../shared/collector.js"></script>

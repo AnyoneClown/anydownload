@@ -33,6 +33,7 @@
       "refresh-button",
       "resume-all-button",
       "retry-failed-button",
+      "search-input",
       "status-filter",
       "success-detail",
       "success-stat"
@@ -131,6 +132,7 @@
       complete: "Complete",
       interrupted: "Failed",
       failed: "Failed",
+      partial: "Partially complete",
       cancelled: "Cancelled"
     };
     return labels[value] || "Unknown";
@@ -141,6 +143,7 @@
     button.type = "button";
     button.className = className || "task-button";
     button.textContent = label;
+    button.dataset.focusKey = `${targetType}:${id}:${action}`;
     button.addEventListener("click", () => performAction(action, targetType, id));
     return button;
   }
@@ -164,6 +167,7 @@
       show.type = "button";
       show.className = "task-button";
       show.textContent = "Show";
+      show.dataset.focusKey = `task:${task.id}:show`;
       const canShow = browser.downloads && typeof browser.downloads.show === "function";
       show.disabled = !canShow;
       if (!canShow) {
@@ -182,6 +186,8 @@
   function renderTask(task) {
     const item = document.createElement("li");
     item.className = "task-row";
+    item.dataset.focusScope = `task:${task.id}`;
+    item.tabIndex = -1;
     const copy = document.createElement("div");
     copy.className = "task-copy";
     const title = document.createElement("strong");
@@ -208,22 +214,24 @@
     return item;
   }
 
-  function jobMatchesFilter(job, filter) {
+  function statusMatchesFilter(status, filter) {
     if (filter === "all") {
       return true;
     }
     if (filter === "active") {
-      return ["queued", "starting", "in_progress", "active", "paused"].includes(job.status);
+      return ["queued", "starting", "in_progress", "active", "paused"].includes(status);
     }
     if (filter === "failed") {
-      return ["failed", "interrupted", "partial"].includes(job.status);
+      return ["failed", "interrupted", "partial"].includes(status);
     }
-    return job.status === filter;
+    return status === filter;
   }
 
-  function renderJob(job) {
+  function renderJob(job, tasks) {
     const card = document.createElement("article");
     card.className = "job-card";
+    card.dataset.focusScope = `job:${job.id}`;
+    card.tabIndex = -1;
     const header = document.createElement("div");
     header.className = "job-header";
     const copy = document.createElement("div");
@@ -239,6 +247,13 @@
     meta.textContent = `${formatDate(job.createdAt)} · ${Number(counts.complete || 0).toLocaleString()} of ${Number(counts.total || 0).toLocaleString()} complete${destination}`;
     meta.title = meta.textContent;
     copy.append(title, meta);
+    if (job.source) {
+      const source = document.createElement("span");
+      source.className = "job-meta job-source";
+      source.textContent = job.source;
+      source.title = job.source;
+      copy.append(source);
+    }
     const pill = document.createElement("span");
     pill.className = `status-pill ${job.status || "unknown"}`;
     pill.textContent = statusLabel(job.status);
@@ -263,9 +278,9 @@
     progress.className = "job-progress";
     progress.max = Math.max(1, Number(counts.total) || 1);
     progress.value = Math.min(progress.max, Number(counts.complete || 0) + Number(counts.failed || 0) + Number(counts.cancelled || 0));
+    progress.setAttribute("aria-label", `${title.textContent}: completed or finished files`);
     card.append(progress);
 
-    const tasks = Array.isArray(job.tasks) ? job.tasks : [];
     if (job.historyOnly) {
       const note = document.createElement("p");
       note.className = "history-note";
@@ -274,6 +289,12 @@
       return card;
     }
     const expanded = expandedJobs.has(job.id);
+    if (tasks.length !== (job.tasks || []).length) {
+      const note = document.createElement("p");
+      note.className = "history-note";
+      note.textContent = `${tasks.length.toLocaleString()} of ${job.tasks.length.toLocaleString()} files match your filters. Batch actions apply to the whole batch.`;
+      card.append(note);
+    }
     const visible = expanded ? tasks : tasks.slice(0, INITIAL_TASK_LIMIT);
     const list = document.createElement("ol");
     list.className = "task-list";
@@ -283,6 +304,7 @@
       const more = document.createElement("button");
       more.type = "button";
       more.className = "show-more-button";
+      more.dataset.focusKey = `job:${job.id}:expand`;
       more.textContent = expanded
         ? "Show fewer files"
         : `Show ${tasks.length - INITIAL_TASK_LIMIT} more files`;
@@ -300,6 +322,10 @@
   }
 
   function render() {
+    const focused = document.activeElement;
+    const focusedKey = focused && focused.dataset && focused.dataset.focusKey;
+    const focusedScope = focused && focused.closest("[data-focus-scope]");
+    const focusedJob = focused && focused.closest(".job-card");
     const data = snapshot || {};
     const summary = data.summary || {};
     const stats = data.stats || {};
@@ -339,11 +365,15 @@
     const terminal = Number(summary.complete || 0) + Number(summary.failed || 0) + Number(summary.cancelled || 0);
     elements["queue-progress"].max = Math.max(1, total);
     elements["queue-progress"].value = Math.min(elements["queue-progress"].max, terminal);
-    elements["queue-description"].textContent = queued + active + paused
+    const queueDescription = queued + active + paused
       ? `${active.toLocaleString()} downloading, ${queued.toLocaleString()} queued, ${paused.toLocaleString()} paused.`
       : total
         ? "All recorded downloads are finished."
         : "No downloads are queued.";
+    const announcement = `${queueDescription}${total ? ` ${Number(summary.complete || 0).toLocaleString()} completed, ${currentFailed.toLocaleString()} failed, ${Number(summary.cancelled || 0).toLocaleString()} cancelled.` : ""}`;
+    if (elements["queue-description"].textContent !== announcement) {
+      elements["queue-description"].textContent = announcement;
+    }
     elements["dashboard-subtitle"].textContent = privateContext
       ? "Private queue · kept in memory until Firefox closes"
       : `${Number(data.jobs && data.jobs.length || 0).toLocaleString()} recent batch${data.jobs && data.jobs.length === 1 ? "" : "es"}`;
@@ -357,11 +387,28 @@
       data.jobs.some((job) => !job.historyOnly && job.status === "complete"));
 
     const filter = elements["status-filter"].value;
-    const jobs = (Array.isArray(data.jobs) ? data.jobs : []).filter((job) => jobMatchesFilter(job, filter));
-    elements["job-list"].replaceChildren(...jobs.map(renderJob));
+    const query = elements["search-input"].value.trim().toLocaleLowerCase();
+    const jobs = (Array.isArray(data.jobs) ? data.jobs : []).map((job) => {
+      const matchesBatch = [job.label, job.folder, job.source].some((value) =>
+        String(value || "").toLocaleLowerCase().includes(query));
+      const tasks = (Array.isArray(job.tasks) ? job.tasks : []).filter((task) =>
+        statusMatchesFilter(task.status, filter) &&
+        (matchesBatch || String(task.filename || "").toLocaleLowerCase().includes(query)));
+      return { job, tasks, matchesBatch };
+    }).filter(({ job, tasks, matchesBatch }) => tasks.length ||
+      (!(job.tasks || []).length && matchesBatch && statusMatchesFilter(job.status, filter)));
+    elements["job-list"].replaceChildren(...jobs.map(({ job, tasks }) => renderJob(job, tasks)));
+    if (focusedScope) {
+      const controls = Array.from(elements["job-list"].querySelectorAll("[data-focus-key], [data-focus-scope]"));
+      const target = controls.find((element) => focusedKey && element.dataset.focusKey === focusedKey && !element.disabled) ||
+        controls.find((element) => element.dataset.focusScope === focusedScope.dataset.focusScope) ||
+        controls.find((element) => focusedJob && element.dataset.focusScope === focusedJob.dataset.focusScope) ||
+        elements["status-filter"];
+      target.focus({ preventScroll: true });
+    }
     elements["history-empty"].hidden = jobs.length > 0;
     elements["history-empty"].textContent = data.jobs && data.jobs.length
-      ? "No download batches match this status."
+      ? "No files match your search and status filter."
       : "No downloads have been recorded yet.";
   }
 
@@ -440,6 +487,7 @@
       "Firefox cannot open the Downloads folder."
     ));
     elements["status-filter"].addEventListener("change", render);
+    elements["search-input"].addEventListener("input", render);
     elements["pause-all-button"].addEventListener("click", () => performAction("pause", "all", ""));
     elements["resume-all-button"].addEventListener("click", () => performAction("resume", "all", ""));
     elements["cancel-pending-button"].addEventListener("click", () => performAction("cancel", "all", ""));

@@ -22,7 +22,7 @@
         <div class="header-copy">
           <p class="eyebrow">Background monitoring</p>
           <h1>Trackers</h1>
-          <p id="dashboard-subtitle" class="subtitle">Loading background trackers…</p>
+          <p id="dashboard-subtitle" class="subtitle" role="status">Loading background trackers…</p>
         </div>
         <div class="header-actions">
           <button id="refresh-button" class="icon-button" type="button" aria-label="Refresh trackers" title="Refresh trackers">
@@ -30,6 +30,8 @@
           </button>
         </div>
       </header>
+
+      <div id="error-banner" class="error-banner" role="alert" hidden></div>
 
       <section class="stats-grid" aria-label="Tracker statistics">
         <article class="stat-card">
@@ -58,13 +60,25 @@
         <div class="section-heading">
           <div>
             <p class="section-label">Approval inbox</p>
-            <h2 id="review-heading">Pending review</h2>
+            <h2 id="review-heading" tabindex="-1">Pending review</h2>
           </div>
           <span id="review-count" class="review-count">0 items</span>
         </div>
-        <p class="review-intro">Approve an item to add it to Downloads, or dismiss it without downloading. Items remain local to this Firefox profile.</p>
+        <p class="review-intro">Download items to their tracker's destination, or dismiss them without downloading. Items remain local to this Firefox profile.</p>
+        <div class="review-tools">
+          <label>
+            <span class="visually-hidden">Filter review items by tracker</span>
+            <select id="review-tracker-filter"><option value="all">All trackers</option></select>
+          </label>
+          <label class="review-select-all"><input id="review-select-all" type="checkbox"> Select visible</label>
+          <div class="bulk-actions">
+            <button id="download-selected-button" class="tracker-button approve-button" type="button" disabled>Download selected</button>
+            <button id="dismiss-selected-button" class="tracker-button" type="button" disabled>Dismiss selected</button>
+          </div>
+        </div>
+        <p id="review-status" class="review-intro" role="status"></p>
         <div id="review-empty" class="review-empty">No tracker matches are waiting for review.</div>
-        <div id="review-list" class="review-list" aria-live="polite"></div>
+        <div id="review-list" class="review-list"></div>
       </section>
 
       <section class="card tracker-card" aria-labelledby="trackers-heading">
@@ -96,12 +110,11 @@
           </label>
         </div>
 
-        <div id="error-banner" class="error-banner" role="alert" hidden></div>
         <div id="empty-state" class="empty-state" hidden>
           <strong id="empty-title">No tracked pages yet</strong>
           <p id="empty-detail">Open AnyDownload on a webpage, open <b>Collection settings</b>, then choose <b>Track page</b> to set a schedule.</p>
         </div>
-        <div id="tracker-list" class="tracker-list" aria-live="polite"></div>
+        <div id="tracker-list" class="tracker-list"></div>
       </section>
     </main>
 

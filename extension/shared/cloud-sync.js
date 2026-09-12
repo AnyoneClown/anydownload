@@ -120,7 +120,10 @@
           }
         }
       }
-      if (normalized === undefined || !equal(normalized, value[key])) {
+      const comparable = key === "smartFilters" && object(value[key])
+        ? { minWidth: 0, minHeight: 0, orientation: "any", ...value[key] }
+        : value[key];
+      if (normalized === undefined || !equal(normalized, comparable)) {
         throw new Error("Cloud sync data contains an invalid or excessive record.");
       }
       result[key] = normalized;

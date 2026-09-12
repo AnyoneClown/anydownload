@@ -102,13 +102,19 @@
     if (filters.format && filters.format !== "any") {
       parts.push(String(filters.format).toUpperCase());
     }
+    if (filters.minWidth || filters.minHeight) {
+      parts.push(`At least ${count(filters.minWidth)} × ${count(filters.minHeight)} px`);
+    }
+    if (filters.orientation && filters.orientation !== "any") {
+      parts.push(filters.orientation[0].toUpperCase() + filters.orientation.slice(1));
+    }
     if (tracker && tracker.query) {
       parts.push(`Search: “${tracker.query}”`);
     }
     return parts.join(" · ");
   }
 
-  function describeMatching(tracker) {
+    function describeMatching(tracker) {
     const matching = tracker && tracker.matching || {};
     const parts = [describeFilters(tracker)];
     if (matching.excludeText) {
@@ -200,6 +206,7 @@
     const elements = {};
     const busyIds = new Set();
     const reviewBusyIds = new Set();
+    const selectedReviewIds = new Set();
     let trackers = [];
     let reviews = [];
     let maxTrackers = 20;
@@ -207,6 +214,7 @@
     let refreshPending = false;
     let globalBusy = false;
     let privateContext = false;
+    let reviewResult = "";
     const expandedActivity = new Set();
 
     function cacheElements() {
@@ -214,6 +222,8 @@
         "active-detail",
         "active-stat",
         "dashboard-subtitle",
+        "dismiss-selected-button",
+        "download-selected-button",
         "empty-detail",
         "empty-state",
         "empty-title",
@@ -226,7 +236,11 @@
         "refresh-button",
         "review-count",
         "review-empty",
+        "review-heading",
         "review-list",
+        "review-select-all",
+        "review-status",
+        "review-tracker-filter",
         "resume-all-button",
         "search-input",
         "status-filter",
@@ -297,6 +311,18 @@
       }
     }
 
+    async function editTracker(tracker) {
+      if (privateContext) return;
+      try {
+        await browser.tabs.create({
+          active: true,
+          url: `${browser.runtime.getURL("popup/popup.html")}?editTrackerId=${encodeURIComponent(tracker.id)}`
+        });
+      } catch (error) {
+        setError(`Firefox could not open the tracker editor. (${error.message || error})`);
+      }
+    }
+
     function mergeTracker(updated) {
       if (!updated || !updated.id) {
         return;
@@ -344,6 +370,8 @@
       const status = trackerStatus(tracker);
       const busy = busyIds.has(tracker.id);
       card.className = `tracker-item${tracker.lastError ? " has-error" : ""}`;
+      card.id = `tracker-${tracker.id}`;
+      card.tabIndex = -1;
       card.setAttribute("aria-busy", String(busy));
 
       const header = document.createElement("div");
@@ -401,6 +429,7 @@
       const actions = document.createElement("div");
       actions.className = "tracker-actions";
       const openButton = createButton("Open page", "tracker-button", () => openTrackedPage(tracker));
+      const editButton = createButton("Edit tracker", "tracker-button", () => editTracker(tracker));
       const runButton = createButton(busy ? "Checking…" : "Run now", "tracker-button", () =>
         performTrackerAction("RUN_TRACKER", tracker)
       );
@@ -427,10 +456,13 @@
       );
       historyButton.setAttribute("aria-expanded", String(expandedActivity.has(tracker.id)));
       historyButton.disabled = activity.length === 0;
-      for (const button of [openButton, runButton, toggleButton, removeButton]) {
+      for (const [action, button] of Object.entries({ open: openButton, edit: editButton, run: runButton, toggle: toggleButton, remove: removeButton, activity: historyButton })) {
+        button.id = `${card.id}-${action}`;
+      }
+      for (const button of [openButton, editButton, runButton, toggleButton, removeButton]) {
         button.disabled = busy || globalBusy;
       }
-      actions.append(historyButton, openButton, runButton, toggleButton, removeButton);
+      actions.append(historyButton, openButton, editButton, runButton, toggleButton, removeButton);
       card.append(header, details, result, actions);
 
       if (expandedActivity.has(tracker.id) && activity.length) {
@@ -471,31 +503,50 @@
       return card;
     }
 
-    async function performReviewAction(review, action) {
-      if (!review || reviewBusyIds.has(review.id) || globalBusy) {
+    async function performReviewAction(items, action) {
+      if (!items.length || globalBusy || refreshing || privateContext) {
         return;
       }
-      reviewBusyIds.add(review.id);
+      globalBusy = true;
+      for (const review of items) reviewBusyIds.add(review.id);
+      reviewResult = "";
       setError("");
       render();
+      let completed = 0;
+      let queued = 0;
+      const failures = [];
       try {
-        const response = await browser.runtime.sendMessage({
-          type: "TRACKER_REVIEW_ACTION",
-          action,
-          id: review.id
-        });
-        if (!response || !response.ok || !Array.isArray(response.reviews)) {
-          throw new Error(response && response.error || "Firefox could not update the review inbox.");
+        for (const review of items) {
+          try {
+            const response = await browser.runtime.sendMessage({
+              type: "TRACKER_REVIEW_ACTION", action, id: review.id
+            });
+            if (!response || !response.ok || !Array.isArray(response.reviews)) {
+              throw new Error(response && response.error || "Firefox could not update the review inbox.");
+            }
+            reviews = response.reviews;
+            selectedReviewIds.delete(review.id);
+            completed += 1;
+            queued += count(response.queued);
+          } catch (error) {
+            failures.push(`${review.filename || "Item"}: ${error && error.message || error}`);
+          }
+          elements["review-status"].textContent = `${action === "dismiss" ? "Dismissing" : "Adding to Downloads"}: ${completed + failures.length} of ${items.length} reviewed…`;
         }
-        reviews = response.reviews;
         for (const tracker of trackers) {
           tracker.pendingReviewCount = reviews.filter((item) => item.trackerId === tracker.id).length;
         }
-      } catch (error) {
-        setError(error && error.message ? error.message : String(error));
+        reviewResult = action === "dismiss"
+          ? `${completed} item${completed === 1 ? "" : "s"} dismissed.`
+          : `${queued} added to Downloads.${completed > queued ? ` ${completed - queued} already downloaded.` : ""}`;
+        if (failures.length) {
+          setError(`${failures.length} item${failures.length === 1 ? "" : "s"} could not be ${action === "dismiss" ? "dismissed" : "downloaded"}. ${failures[0]} Remaining items stay in review.`);
+        }
       } finally {
-        reviewBusyIds.delete(review.id);
+        reviewBusyIds.clear();
+        globalBusy = false;
         render();
+        if (refreshPending) await refreshTrackers(true);
       }
     }
 
@@ -503,7 +554,24 @@
       const card = document.createElement("article");
       const busy = reviewBusyIds.has(review.id);
       card.className = "review-item";
+      card.id = `review-${review.id}`;
+      card.tabIndex = -1;
       card.setAttribute("aria-busy", String(busy));
+
+      const selectLabel = document.createElement("label");
+      selectLabel.className = "review-selection";
+      const checkbox = document.createElement("input");
+      checkbox.id = `${card.id}-select`;
+      checkbox.type = "checkbox";
+      checkbox.checked = selectedReviewIds.has(review.id);
+      checkbox.disabled = busy || globalBusy;
+      checkbox.setAttribute("aria-label", `Select ${review.filename || review.alt || "tracked media"}`);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) selectedReviewIds.add(review.id);
+        else selectedReviewIds.delete(review.id);
+        render();
+      });
+      selectLabel.append(checkbox);
 
       const preview = document.createElement("div");
       preview.className = `review-preview${review.mediaType === "video" ? " video" : ""}`;
@@ -531,7 +599,12 @@
       url.className = "review-url";
       url.textContent = review.url || "";
       url.title = review.url || "";
-      copy.append(title, source, url);
+      const destination = document.createElement("span");
+      destination.className = "review-destination";
+      destination.textContent = sourceTracker
+        ? `Destination: Downloads/${sourceTracker.folder || ""}`
+        : "Tracker removed — dismiss this item";
+      copy.append(title, source, url, destination);
 
       const actions = document.createElement("div");
       actions.className = "review-actions";
@@ -542,24 +615,63 @@
           setError(`Firefox could not open this media. (${error.message || error})`);
         }
       });
-      const approve = createButton(busy ? "Adding…" : "Approve", "tracker-button approve-button", () =>
-        performReviewAction(review, "approve")
+      const approve = createButton(busy ? "Working…" : "Download", "tracker-button approve-button", () =>
+        performReviewAction([review], "approve")
       );
       const dismiss = createButton("Dismiss", "tracker-button", () =>
-        performReviewAction(review, "dismiss")
+        performReviewAction([review], "dismiss")
       );
+      for (const [action, button] of Object.entries({ preview: open, download: approve, dismiss })) {
+        button.id = `${card.id}-${action}`;
+      }
       open.disabled = busy || globalBusy;
-      approve.disabled = busy || globalBusy;
-      dismiss.disabled = busy || globalBusy;
+      approve.disabled = busy || globalBusy || refreshing || !sourceTracker;
+      dismiss.disabled = busy || globalBusy || refreshing;
       actions.append(open, approve, dismiss);
-      card.append(preview, copy, actions);
+      card.append(selectLabel, preview, copy, actions);
       return card;
     }
 
     function renderReviews() {
-      elements["review-count"].textContent = `${reviews.length.toLocaleString()} item${reviews.length === 1 ? "" : "s"}`;
-      elements["review-empty"].hidden = reviews.length > 0;
-      elements["review-list"].replaceChildren(...reviews.map(renderReviewItem));
+      const ids = new Set(reviews.map((review) => review.id));
+      for (const id of selectedReviewIds) {
+        if (!ids.has(id)) selectedReviewIds.delete(id);
+      }
+      const filter = elements["review-tracker-filter"];
+      const current = filter.value;
+      const trackerIds = [...new Set(reviews.map((review) => review.trackerId))];
+      const all = document.createElement("option");
+      all.value = "all";
+      all.textContent = "All trackers";
+      filter.replaceChildren(all, ...trackerIds.map((id) => {
+        const option = document.createElement("option");
+        const tracker = trackers.find((item) => item.id === id);
+        option.value = id;
+        option.textContent = `${tracker && (tracker.pageTitle || tracker.url) || "Removed tracker"} (${reviews.filter((review) => review.trackerId === id).length})`;
+        return option;
+      }));
+      filter.value = trackerIds.includes(current) ? current : "all";
+      filter.disabled = privateContext || globalBusy || !reviews.length;
+      const visible = visibleReviews();
+      const selectedVisible = visible.filter((review) => selectedReviewIds.has(review.id)).length;
+      const selectedCount = selectedReviewIds.size;
+      const selectAll = elements["review-select-all"];
+      selectAll.checked = visible.length > 0 && selectedVisible === visible.length;
+      selectAll.indeterminate = selectedVisible > 0 && selectedVisible < visible.length;
+      selectAll.disabled = privateContext || globalBusy || !visible.length;
+      for (const id of ["download-selected-button", "dismiss-selected-button"]) {
+        elements[id].disabled = privateContext || globalBusy || refreshing || !selectedCount;
+      }
+      elements["review-count"].textContent = `${visible.length.toLocaleString()}${filter.value !== "all" ? ` of ${reviews.length.toLocaleString()}` : ""} item${visible.length === 1 ? "" : "s"}`;
+      const hidden = selectedCount - selectedVisible;
+      elements["review-status"].textContent = `${reviewResult ? `${reviewResult} ` : ""}${selectedCount} selected${hidden ? ` (${hidden} hidden by the tracker filter)` : ""}.`;
+      elements["review-empty"].hidden = visible.length > 0;
+      elements["review-list"].replaceChildren(...visible.map(renderReviewItem));
+    }
+
+    function visibleReviews() {
+      const filter = elements["review-tracker-filter"].value;
+      return reviews.filter((review) => filter === "all" || review.trackerId === filter);
     }
 
     function sortedVisibleTrackers() {
@@ -574,6 +686,9 @@
     }
 
     function render() {
+      const focused = document.activeElement;
+      const focusedId = focused && (focused.getAttribute("data-focus-control") || focused.id);
+      const focusedCard = focused && focused.closest(".tracker-item, .review-item");
       const summary = summarizeTrackers(trackers, reviews);
       elements["total-stat"].textContent = summary.total.toLocaleString();
       elements["total-detail"].textContent = `${Math.max(0, maxTrackers - summary.total).toLocaleString()} of ${maxTrackers.toLocaleString()} slots available`;
@@ -619,9 +734,18 @@
         : privateContext
           ? "Open this dashboard from a regular Firefox window to view and manage persistent trackers."
           : "Open AnyDownload on a webpage, choose Track page, and save its schedule.";
+      if (focusedCard) {
+        const replacement = document.getElementById(focusedId);
+        const fallback = document.getElementById(focusedCard.id) ||
+          elements[focusedCard.className === "review-item" ? "review-heading" : "search-input"];
+        if ((!replacement || replacement.disabled) && fallback.id === focusedCard.id) {
+          fallback.setAttribute("data-focus-control", focusedId);
+        }
+        (replacement && !replacement.disabled ? replacement : fallback).focus({ preventScroll: true });
+      }
     }
 
-    async function refreshTrackers() {
+    async function refreshTrackers(preserveError = false) {
       if (privateContext) {
         return;
       }
@@ -629,8 +753,9 @@
         refreshPending = true;
         return;
       }
+      refreshPending = false;
       refreshing = true;
-      setError("");
+      if (!preserveError) setError("");
       render();
       try {
         const response = await browser.runtime.sendMessage({ type: "GET_TRACKERS" });
@@ -641,13 +766,14 @@
         reviews = Array.isArray(response.reviews) ? response.reviews : [];
         maxTrackers = Math.max(1, count(response.maxTrackers) || 20);
       } catch (error) {
-        setError(error && error.message ? error.message : String(error));
+        if (!preserveError || !elements["error-banner"].textContent) {
+          setError(error && error.message ? error.message : String(error));
+        }
       } finally {
         refreshing = false;
         render();
         if (refreshPending && !globalBusy) {
-          refreshPending = false;
-          Promise.resolve().then(refreshTrackers);
+          Promise.resolve().then(() => refreshTrackers(true));
         }
       }
     }
@@ -673,25 +799,39 @@
       } finally {
         globalBusy = false;
         render();
+        if (refreshPending) await refreshTrackers(true);
       }
     }
 
     function wireEvents() {
-      elements["refresh-button"].addEventListener("click", refreshTrackers);
+      elements["refresh-button"].addEventListener("click", () => refreshTrackers());
       elements["pause-all-button"].addEventListener("click", () => setAllTrackersEnabled(false));
       elements["resume-all-button"].addEventListener("click", () => setAllTrackersEnabled(true));
       elements["search-input"].addEventListener("input", render);
       elements["status-filter"].addEventListener("change", render);
+      elements["review-tracker-filter"].addEventListener("change", render);
+      elements["review-select-all"].addEventListener("change", () => {
+        for (const review of visibleReviews()) {
+          if (elements["review-select-all"].checked) selectedReviewIds.add(review.id);
+          else selectedReviewIds.delete(review.id);
+        }
+        render();
+      });
+      elements["download-selected-button"].addEventListener("click", () =>
+        performReviewAction(reviews.filter((review) => selectedReviewIds.has(review.id)), "approve")
+      );
+      elements["dismiss-selected-button"].addEventListener("click", () =>
+        performReviewAction(reviews.filter((review) => selectedReviewIds.has(review.id)), "dismiss")
+      );
       if (browser.storage && browser.storage.onChanged) {
         browser.storage.onChanged.addListener((changes, areaName) => {
           if (
             areaName === "local" &&
             changes &&
             (changes["mediaTrackers:v1"] || changes["trackerReviewItems:v1"]) &&
-            !privateContext &&
-            !globalBusy
+            !privateContext
           ) {
-            refreshTrackers();
+            refreshTrackers(true);
           }
         });
       }

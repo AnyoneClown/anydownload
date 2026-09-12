@@ -11,7 +11,8 @@ body {
 }
 
 button,
-select {
+select,
+input {
   color: inherit;
 }
 
@@ -241,7 +242,8 @@ button:hover:not(:disabled),
 button:focus-visible,
 .dashboard-link:hover,
 .dashboard-link:focus-visible,
-select:focus-visible {
+select:focus-visible,
+input:focus-visible {
   border-color: var(--brand);
   color: var(--brand-ink);
   background: var(--brand-soft);
@@ -279,7 +281,8 @@ progress::-moz-progress-bar {
   border-bottom: 1px solid var(--line);
 }
 
-select {
+select,
+input {
   min-height: 36px;
   padding: 6px 30px 6px 10px;
   border: 1px solid var(--line);
@@ -288,10 +291,36 @@ select {
   background: var(--surface-raised);
 }
 
+.history-search {
+  flex: 1 1 210px;
+}
+
+.history-search input {
+  width: 100%;
+  min-width: 0;
+  padding-right: 10px;
+}
+
+.job-source {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .job-list {
   display: grid;
   gap: 11px;
   margin-top: 18px;
+}
+
+@media (pointer: coarse) {
+  button,
+  select,
+  input,
+  .dashboard-link {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }
 
 .job-card {

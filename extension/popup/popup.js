@@ -643,7 +643,8 @@
   const launchOptions = launchOptionsFromUrl(launchUrl);
   const managerWindowMode = Number.isInteger(launchSourceTabId);
   const sidebarMode = launchOptions.sidebar;
-  const responsiveSurface = managerWindowMode || sidebarMode;
+  const editTrackerId = new URL(launchUrl).searchParams.get("editTrackerId");
+  const responsiveSurface = managerWindowMode || sidebarMode || Boolean(editTrackerId);
 
   if (managerWindowMode) {
     document.documentElement.classList.add("manager-window");
@@ -688,6 +689,10 @@
 
   const state = {
     images: [],
+    collectionScope: "site",
+    showSelected: false,
+    galleryPage: 0,
+    sort: "page",
     selected: new TrackedSelectionSet(),
     scanWarnings: [],
     busy: false,
@@ -750,6 +755,12 @@
   let galleryWritePromise = Promise.resolve();
   let galleryCollection = null;
   let sourceRescanTimer = null;
+  let clearedGallery = null;
+  let previewItems = [];
+  let previewIndex = 0;
+  let previewOpener = null;
+  let pageMediaContext = "";
+  const pageMediaKeys = new Set();
 
   function markFilenamePreviewsDirty() {
     filenamePreviewsDirty = true;
@@ -780,6 +791,15 @@
 
   function cacheElements() {
     const ids = [
+      "collection-scope-select", "gallery-undo", "undo-clear-button",
+      "page-tools-panel", "editor-source-link",
+      "gallery-pagination", "previous-page-button", "next-page-button", "pagination-label",
+      "min-width-input", "min-height-input", "orientation-filter-select", "sort-select",
+      "selection-warning", "back-to-collection-button",
+      "media-preview-dialog", "media-preview-title", "media-preview-stage", "media-preview-meta",
+      "media-preview-error", "media-preview-position", "close-preview-button",
+      "preview-previous-button", "preview-next-button", "preview-selected-input", "preview-selected-text",
+      "preview-download-button", "preview-tab-button", "preview-source-link",
       "action-detail",
       "archive-footer-button",
       "ask-single-input",
@@ -1471,7 +1491,7 @@
             ? `Select ${filename} to download it again`
             : `Select ${filename}`
         );
-        record.previewButton.setAttribute("aria-label", `Preview ${filename} in a new tab`);
+        record.previewButton.setAttribute("aria-label", `Preview ${filename}`);
       }
       if (!records.size) {
         renderedNameNodes.delete(url);
@@ -1510,7 +1530,7 @@
   }
 
   function persistSettings(values) {
-    return state.incognito || browser.extension && browser.extension.inIncognitoContext
+    return Boolean(editTrackerId) || state.incognito || browser.extension && browser.extension.inIncognitoContext
       ? Promise.resolve() : writeNormalStorage("set", values);
   }
 
@@ -1543,7 +1563,7 @@
       changed = true;
     }
     const filters = changes.smartFilters;
-    if (filters && !["photos-only-input", "media-type-filter-select", "format-filter-select"].some(
+    if (filters && !["photos-only-input", "media-type-filter-select", "format-filter-select", "min-width-input", "min-height-input", "orientation-filter-select"].some(
       (id) => document.activeElement === elements[id]
     ) && JSON.stringify(state.smartFilters) === JSON.stringify(Filters.normalizeFilters(filters.oldValue))) {
       applySmartFiltersToControls(filters.newValue);
@@ -1718,6 +1738,7 @@
     saveCurrentGallery();
     stopGalleryCollection();
     galleryContext = null;
+    resetCollectionView();
     state.images = [];
     markFilenamePreviewsDirty();
     state.selected.clear();
@@ -2108,6 +2129,103 @@
     return `${Date.now().toString(36)}-${random[0].toString(36)}-${random[1].toString(36)}`;
   }
 
+  function openGalleryPreview(image) {
+    previewItems = filteredImages().map(mediaIdentityKey);
+    previewIndex = previewItems.indexOf(mediaIdentityKey(image));
+    if (previewIndex < 0) {
+      previewItems = [mediaIdentityKey(image)];
+      previewIndex = 0;
+    }
+    previewOpener = document.activeElement;
+    updateGalleryPreview();
+    elements["media-preview-dialog"].showModal();
+  }
+
+  function currentPreviewImage() {
+    return state.images.find((image) => mediaIdentityKey(image) === previewItems[previewIndex]);
+  }
+
+  function updatePreviewSelection(image) {
+    if (!image) return;
+    const status = downloadStatusFor(image);
+    elements["preview-selected-input"].checked = state.selected.has(image.url) && imageCanBeSelected(image);
+    elements["preview-selected-input"].disabled = state.busy || isImageIgnored(image) || status === "queued";
+    elements["preview-selected-text"].textContent = status === "downloaded" ? "Select to download again" : "Selected for download";
+    elements["preview-download-button"].textContent = status === "downloaded" ? "Download again" : status === "queued" ? "Queued" : "Download";
+    elements["preview-download-button"].disabled = state.busy || Boolean(galleryCollection) || isImageIgnored(image) || status === "queued";
+  }
+
+  function updateGalleryPreview() {
+    const image = currentPreviewImage();
+    const stage = elements["media-preview-stage"];
+    clearPreviewStage();
+    elements["media-preview-error"].hidden = true;
+    if (!image) {
+      if (elements["media-preview-dialog"].open) elements["media-preview-dialog"].close();
+      return;
+    }
+    const youtube = Boolean(Gallery.youtubeUrl(image));
+    const video = mediaTypeFor(image) === "video" && !youtube;
+    const result = Core.validateMediaUrl(youtube ? image.previewUrl : image.url);
+    if (result.ok) {
+      const media = document.createElement(video ? "video" : "img");
+      media.referrerPolicy = "no-referrer";
+      if (video) {
+        media.controls = true;
+        media.preload = "metadata";
+        media.playsInline = true;
+      } else {
+        media.alt = String(image.alt || "").slice(0, 500);
+      }
+      media.addEventListener("error", () => { if (media.isConnected) elements["media-preview-error"].hidden = false; });
+      media.src = result.value;
+      stage.appendChild(media);
+    } else {
+      elements["media-preview-error"].hidden = false;
+    }
+    elements["media-preview-title"].textContent = friendlyFilename(image);
+    elements["media-preview-meta"].textContent = `${imageMetaText(image)}${youtube ? " · Open in new tab to play on YouTube" : ""}`;
+    elements["media-preview-position"].textContent = `${previewIndex + 1} of ${previewItems.length}`;
+    elements["preview-previous-button"].disabled = previewIndex <= 0;
+    elements["preview-next-button"].disabled = previewIndex >= previewItems.length - 1;
+    const sourceUrl = Gallery.pageUrl(image.pageUrl || state.pageUrl);
+    elements["preview-source-link"].hidden = !sourceUrl;
+    if (sourceUrl) elements["preview-source-link"].href = sourceUrl;
+    updatePreviewSelection(image);
+  }
+
+  function moveGalleryPreview(offset) {
+    const next = previewIndex + offset;
+    if (next >= 0 && next < previewItems.length) {
+      previewIndex = next;
+      updateGalleryPreview();
+    }
+  }
+
+  function clearPreviewStage() {
+    const stage = elements["media-preview-stage"];
+    for (const video of stage.querySelectorAll("video")) {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    }
+    stage.replaceChildren();
+  }
+
+  function selectImage(image, selected) {
+    if (!image || (state.busy && !state.liveScanning) || downloadStatusFor(image) === "queued" || isImageIgnored(image)) return false;
+    if (selected) {
+      if (downloadStatusFor(image) === "downloaded" && image.downloadFingerprint) state.explicitRedownloads.add(image.downloadFingerprint);
+      state.selected.add(image.url);
+    } else {
+      state.selected.delete(image.url);
+      if (image.downloadFingerprint) state.explicitRedownloads.delete(image.downloadFingerprint);
+    }
+    refreshRenderedFilenamePreviews();
+    updateSummary();
+    return true;
+  }
+
   async function openImagePreview(image) {
     if (Gallery.youtubeUrl(image)) {
       const createProperties = { active: true, url: `https://www.youtube.com/watch?v=${image.videoId}` };
@@ -2137,6 +2255,8 @@
       alt: String(image.alt || "").slice(0, 500),
       duration: Math.max(0, Number(image.duration) || 0),
       mediaType: mediaTypeFor(image),
+      sourceUrl: Gallery.pageUrl(image.pageUrl || state.pageUrl),
+      sourceTabId: state.sourceTabId,
       createdAt: Date.now()
     };
     try {
@@ -2348,7 +2468,10 @@
     return Filters.normalizeFilters({
       photosOnly: elements["photos-only-input"].checked,
       mediaType: elements["media-type-filter-select"].value,
-      format: elements["format-filter-select"].value
+      format: elements["format-filter-select"].value,
+      minWidth: elements["min-width-input"].value,
+      minHeight: elements["min-height-input"].value,
+      orientation: elements["orientation-filter-select"].value
     });
   }
 
@@ -2358,13 +2481,17 @@
     elements["photos-only-input"].checked = normalized.photosOnly;
     elements["media-type-filter-select"].value = normalized.mediaType;
     elements["format-filter-select"].value = normalized.format;
+    elements["min-width-input"].value = String(normalized.minWidth || 0);
+    elements["min-height-input"].value = String(normalized.minHeight || 0);
+    elements["orientation-filter-select"].value = normalized.orientation || "any";
   }
 
   function smartFilterCount(filters) {
     const normalized = Filters.normalizeFilters(filters);
     return Number(normalized.photosOnly) +
       Number(normalized.mediaType !== "any") +
-      Number(normalized.format !== "any");
+      Number(normalized.format !== "any") + Number(normalized.minWidth > 0) +
+      Number(normalized.minHeight > 0) + Number(normalized.orientation && normalized.orientation !== "any");
   }
 
   function updateSmartFilterButton() {
@@ -2444,19 +2571,11 @@
   }
 
   function handleSmartFilterChange() {
+    state.showSelected = false;
     state.smartFilters = smartFiltersFromControls();
-    for (const image of state.images) {
-      if (
-        isImageIgnored(image) ||
-        !Filters.matchesSmartFilters(image, state.smartFilters) ||
-        !matchesInstagramCollectionFilter(image, state.instagramCollectionFilter)
-      ) {
-        state.selected.delete(image.url);
-      }
-    }
     updateSmartFilterButton();
     persistSmartFilters();
-    renderImages();
+    resetGalleryPage();
   }
 
   function scheduleSmartFilterRefresh() {
@@ -2465,14 +2584,6 @@
     }
     smartFilterRefreshTimer = setTimeout(() => {
       smartFilterRefreshTimer = null;
-      for (const image of state.images) {
-        if (
-          !Filters.matchesSmartFilters(image, state.smartFilters) ||
-          !matchesInstagramCollectionFilter(image, state.instagramCollectionFilter)
-        ) {
-          state.selected.delete(image.url);
-        }
-      }
       renderImages();
     }, 50);
   }
@@ -2579,29 +2690,84 @@
   }
 
   function filteredImages() {
+    updatePageMedia();
+    if (state.showSelected) return sortImages(selectedDownloadableImages());
     const query = elements["filter-input"].value.trim().toLocaleLowerCase();
     const inCurrentView = state.images.filter((image) =>
       isImageIgnored(image) === state.showIgnored &&
+      (state.collectionScope !== "page" || pageMediaKeys.has(mediaIdentityKey(image))) &&
       (!state.hideDownloaded || state.showIgnored || downloadStatusFor(image) !== "downloaded") &&
       imageMatchesSmartFilters(image) &&
       imageMatchesInstagramCollectionFilter(image)
     );
     if (!query) {
-      return inCurrentView;
+      return sortImages(inCurrentView);
     }
-    return inCurrentView.filter((image) => {
-      const haystack = `${image.url} ${image.alt || ""} ${(image.kinds || []).join(" ")}`.toLocaleLowerCase();
+    return sortImages(inCurrentView.filter((image) => {
+      const haystack = `${image.url} ${image.filename || ""} ${image.alt || ""} ${image.pageTitle || ""} ${(image.kinds || []).join(" ")}`.toLocaleLowerCase();
       return haystack.includes(query);
-    });
+    }));
+  }
+
+  function updatePageMedia(discovered = []) {
+    const pageUrl = Gallery.pageUrl(state.pageUrl);
+    const context = JSON.stringify([state.incognito, state.siteKey, state.sourceTabId, pageUrl]);
+    if (context !== pageMediaContext) {
+      pageMediaContext = context;
+      pageMediaKeys.clear();
+    }
+    const available = new Set(state.images.map(mediaIdentityKey));
+    for (const key of pageMediaKeys) {
+      if (!available.has(key)) pageMediaKeys.delete(key);
+    }
+    // Keep this tab's discoveries when another manager updates a shared record's
+    // source attribution. Restored records still fall back to their saved page.
+    for (const image of [...state.images.filter((item) =>
+      pageUrl && Gallery.pageUrl(item.pageUrl || state.pageUrl) === pageUrl), ...discovered]) {
+      const key = mediaIdentityKey(image);
+      if (available.has(key)) pageMediaKeys.add(key);
+    }
+  }
+
+  function sortImages(images) {
+    if (state.sort === "name") images.sort((a, b) => baseFilenameForMedia(a, 0).localeCompare(baseFilenameForMedia(b, 0), undefined, { numeric: true }));
+    if (state.sort === "resolution") images.sort((a, b) => (b.width || 0) * (b.height || 0) - (a.width || 0) * (a.height || 0));
+    return images;
+  }
+
+  function hasCollectionFilter() {
+    return Boolean(elements["filter-input"].value.trim()) || state.collectionScope === "page" || state.showSelected ||
+      (!state.showIgnored && (state.hideDownloaded || Filters.hasActiveSmartFilters(state.smartFilters) || state.instagramCollectionFilter !== "all"));
+  }
+
+  function resetGalleryPage() {
+    state.galleryPage = 0;
+    elements["image-list"].scrollTop = 0;
+    renderImages();
+  }
+
+  function resetCollectionView() {
+    state.showSelected = false;
+    state.galleryPage = 0;
+    clearedGallery = null;
+    pageMediaKeys.clear();
+    pageMediaContext = "";
+    elements["gallery-undo"].hidden = true;
+    if (elements["media-preview-dialog"].open) elements["media-preview-dialog"].close();
+  }
+
+  function reconcileGallerySelection(previousImages, preserve) {
+    const known = new Set(previousImages.map(mediaIdentityKey));
+    return new TrackedSelectionSet(reconcileScanSelection(state.images, previousImages, state.selected, preserve,
+      (image) => !isImageIgnored(image) && imageCanBeSelected(image) && (preserve && known.has(mediaIdentityKey(image)) ||
+        Filters.matchesSmartFilters(image, state.smartFilters) && matchesInstagramCollectionFilter(image, state.instagramCollectionFilter))));
   }
 
   function selectedDownloadableImages() {
     return state.images.filter((image) =>
       state.selected.has(image.url) &&
       imageCanBeSelected(image) &&
-      !isImageIgnored(image) &&
-      Filters.matchesSmartFilters(image, state.smartFilters) &&
-      imageMatchesInstagramCollectionFilter(image)
+      !isImageIgnored(image)
     );
   }
 
@@ -2609,9 +2775,7 @@
     return state.images.find((image) =>
       state.selected.has(image.url) &&
       imageCanBeSelected(image) &&
-      !isImageIgnored(image) &&
-      Filters.matchesSmartFilters(image, state.smartFilters) &&
-      imageMatchesInstagramCollectionFilter(image)
+      !isImageIgnored(image)
     );
   }
 
@@ -2823,16 +2987,11 @@
     const visible = Array.isArray(visibleImages) ? visibleImages : filteredImages();
     const visibleUrls = new Set(visible.map((image) => image.url));
     const hiddenSelected = selectedItems.filter((image) => !visibleUrls.has(image.url)).length;
-    const hasFilter = Boolean(elements["filter-input"].value.trim()) ||
-      (!state.showIgnored && (
-        state.hideDownloaded ||
-        Filters.hasActiveSmartFilters(state.smartFilters) ||
-        state.instagramCollectionFilter !== "all"
-      ));
+    const hasFilter = hasCollectionFilter();
     const folder = folderStatus();
     const template = filenameTemplateStatus();
     const viewTotal = state.showIgnored ? ignoredCount : availableCount;
-    elements["summary-label"].textContent = hasFilter
+    elements["summary-label"].textContent = state.showSelected ? `${visible.length.toLocaleString()} selected files` : hasFilter
       ? `${visible.length.toLocaleString()} of ${viewTotal.toLocaleString()} ${state.showIgnored ? "ignored" : "available"} shown`
       : state.showIgnored
         ? storedIgnoredCount === ignoredCount
@@ -2852,7 +3011,7 @@
       : `Hide downloaded (${downloadedCount.toLocaleString()})`;
     elements["downloaded-button"].classList.toggle("active", state.hideDownloaded);
     elements["downloaded-button"].setAttribute("aria-pressed", String(state.hideDownloaded));
-    elements["select-all-button"].hidden = state.showIgnored;
+    elements["select-all-button"].hidden = state.showIgnored || state.showSelected;
     elements["select-none-button"].hidden = state.showIgnored;
     elements["select-all-button"].disabled = selectionBusy || !visible.some((image) =>
       downloadStatusFor(image) !== "downloaded" && imageCanBeSelected(image)
@@ -2865,7 +3024,11 @@
     elements["selected-label"].textContent = state.showIgnored
       ? `${ignoredCount.toLocaleString()} ignored here`
       : `${selected.toLocaleString()} selected${hiddenSelected ? ` · ${hiddenSelected.toLocaleString()} hidden` : ""}`;
-    elements["action-detail"].textContent = state.showIgnored
+    elements["selected-label"].setAttribute("aria-pressed", String(state.showSelected));
+    elements["selected-label"].setAttribute("aria-label", state.showSelected ? "Back to collection" : `Review ${selected} selected files`);
+    elements["selected-label"].disabled = state.showIgnored || (!selected && !state.showSelected);
+    elements["back-to-collection-button"].hidden = !state.showSelected;
+    elements["action-detail"].textContent = editTrackerId ? `Downloads/${folder.value || ""}` : state.showIgnored
       ? storedIgnoredCount === ignoredCount
         ? "Restore media to make it downloadable again"
         : `${storedIgnoredCount.toLocaleString()} rules saved for this site`
@@ -2874,14 +3037,16 @@
           ? folder.error
           : !template.ok
             ? template.error
-            : hiddenSelected
-              ? "Download includes files hidden by your search"
-              : `Downloads/${folder.value}${selectedHasVideo ? " · ZIP is images only" : ""}`
+            : `Downloads/${folder.value}`
         : queuedCount
           ? `${queuedCount.toLocaleString()} item${queuedCount === 1 ? " is" : "s are"} already queued`
           : downloadedCount
             ? `${downloadedCount.toLocaleString()} previously downloaded · check one to download again`
             : "Choose files to download";
+    const warning = [hiddenSelected ? `Download includes ${hiddenSelected} files hidden by your filters. Review selected before downloading.` : "",
+      selectedHasVideo ? "ZIP supports images only. Choose Images, then Select matches only." : ""].filter(Boolean).join(" ");
+    elements["selection-warning"].textContent = warning;
+    elements["selection-warning"].hidden = state.showIgnored || !warning;
     elements["download-button"].textContent = selected === 1
       ? `Download ${mediaTypeFor(selectedItems[0])}`
       : selected ? `Download ${selected.toLocaleString()} files` : "Download selected";
@@ -2899,8 +3064,13 @@
     updateInstagramCollectionsButton();
     elements["image-list"].setAttribute(
       "aria-label",
-      state.showIgnored ? "Ignored media found on this page" : "Media found on this page"
+      state.showSelected ? "Selected media" : state.showIgnored ? "Ignored media" : state.collectionScope === "page" ? "Media from this page" : "Saved website media"
     );
+    if (elements["media-preview-dialog"].open) {
+      const image = currentPreviewImage();
+      if (image) updatePreviewSelection(image);
+      else elements["media-preview-dialog"].close();
+    }
   }
 
   function makeImageRow(image) {
@@ -2922,33 +3092,21 @@
         : `Select ${friendlyFilename(image)}`
     );
     checkbox.addEventListener("change", () => {
-      if ((state.busy && !state.liveScanning) || downloadStatusFor(image) === "queued" || isImageIgnored(image)) {
+      if (!selectImage(image, checkbox.checked)) {
         checkbox.checked = state.selected.has(image.url) && imageCanBeSelected(image);
-        return;
+      } else if (state.showSelected) {
+        renderImages();
       }
-      if (checkbox.checked) {
-        if (downloadStatusFor(image) === "downloaded" && image.downloadFingerprint) {
-          state.explicitRedownloads.add(image.downloadFingerprint);
-        }
-        state.selected.add(image.url);
-      } else {
-        state.selected.delete(image.url);
-        if (image.downloadFingerprint) {
-          state.explicitRedownloads.delete(image.downloadFingerprint);
-        }
-      }
-      refreshRenderedFilenamePreviews();
-      updateSummary();
     });
 
     const previewButton = document.createElement("button");
     previewButton.type = "button";
     previewButton.className = "row-action-button preview";
     previewButton.textContent = "Preview";
-    previewButton.title = `Open ${video ? "video" : "image"} preview in a new tab`;
-    previewButton.setAttribute("aria-label", `Preview ${friendlyFilename(image)} in a new tab`);
+    previewButton.title = `Preview ${video ? "video" : "image"}`;
+    previewButton.setAttribute("aria-label", `Preview ${friendlyFilename(image)}`);
     previewButton.disabled = state.busy;
-    previewButton.addEventListener("click", () => openImagePreview(image));
+    previewButton.addEventListener("click", () => openGalleryPreview(image));
 
     const thumbnailFrame = document.createElement("div");
     thumbnailFrame.className = `thumbnail-frame${video ? " video" : ""}`;
@@ -3086,6 +3244,8 @@
         }
       });
     }
+    checkbox.dataset.focusKey = `${mediaIdentityKey(image)}:select`;
+    for (const action of actions.children) action.dataset.focusKey = `${mediaIdentityKey(image)}:${action.className}`;
     return row;
   }
 
@@ -3095,7 +3255,8 @@
     }
     filterRenderTimer = setTimeout(() => {
       filterRenderTimer = null;
-      renderImages();
+      state.showSelected = false;
+      resetGalleryPage();
     }, FILTER_RENDER_DEBOUNCE_MS);
   }
 
@@ -3110,6 +3271,9 @@
     elements["filter-input"].value = "";
     state.hideDownloaded = false;
     state.instagramCollectionFilter = "all";
+    state.showSelected = false;
+    state.collectionScope = "site";
+    elements["collection-scope-select"].value = "site";
     elements["instagram-collection-filter-select"].value = "all";
     applySmartFiltersToControls(Filters.DEFAULT_FILTERS);
     handleSmartFilterChange();
@@ -3125,6 +3289,7 @@
   }
 
   function renderImages() {
+    const focusedKey = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.focusKey;
     if (filterRenderTimer !== null) {
       clearTimeout(filterRenderTimer);
       filterRenderTimer = null;
@@ -3219,14 +3384,22 @@
     }
     elements["image-list"].replaceChildren();
     const visible = filteredImages();
+    state.galleryPage = Math.max(0, Math.min(state.galleryPage, Math.ceil(visible.length / MAX_RENDERED_ROWS) - 1));
+    const first = state.galleryPage * MAX_RENDERED_ROWS;
+    elements["gallery-pagination"].hidden = visible.length <= MAX_RENDERED_ROWS;
+    elements["pagination-label"].textContent = `${first + 1}–${Math.min(first + MAX_RENDERED_ROWS, visible.length)} of ${visible.length.toLocaleString()}`;
+    elements["previous-page-button"].disabled = state.galleryPage === 0;
+    elements["next-page-button"].disabled = first + MAX_RENDERED_ROWS >= visible.length;
     if (!visible.length) {
       const empty = document.createElement("div");
       empty.className = "empty-state";
       const title = document.createElement("strong");
-      title.textContent = state.showIgnored ? "Nothing ignored here" : state.images.length ? "No matching media" : "No media found yet";
+      title.textContent = state.showSelected ? "No files selected" : state.showIgnored ? "Nothing ignored here" : state.images.length ? "No matching media" : "No media found yet";
       const detail = document.createElement("p");
       const ignoredCount = state.images.filter(isImageIgnored).length;
-      if (state.showIgnored) {
+      if (state.showSelected) {
+        detail.textContent = "Go back to your collection to select files.";
+      } else if (state.showIgnored) {
         detail.textContent = ignoredCount
           ? "No ignored media match this filter."
           : state.ignoredKeys.size
@@ -3240,8 +3413,7 @@
           : "Scroll the source page to load more images and videos, or use Collect gallery to find them automatically.";
       }
       empty.append(title, detail);
-      if (elements["filter-input"].value.trim() || Filters.hasActiveSmartFilters(state.smartFilters) ||
-        state.hideDownloaded || state.instagramCollectionFilter !== "all") {
+      if (hasCollectionFilter() && !state.showSelected) {
         const reset = document.createElement("button");
         reset.type = "button";
         reset.className = "secondary-button";
@@ -3251,33 +3423,37 @@
       }
       elements["image-list"].appendChild(empty);
       updateSummary(visible);
+      if (focusedKey) elements["selected-label"].focus({ preventScroll: true });
       return;
     }
 
     const fragment = document.createDocumentFragment();
-    for (const image of visible.slice(0, MAX_RENDERED_ROWS)) {
+    for (const image of visible.slice(first, first + MAX_RENDERED_ROWS)) {
       fragment.appendChild(makeImageRow(image));
     }
     elements["image-list"].appendChild(fragment);
 
-    if (visible.length > MAX_RENDERED_ROWS) {
-      const note = document.createElement("div");
-      note.className = "empty-state";
-      note.textContent = state.showIgnored
-        ? `Showing the first ${MAX_RENDERED_ROWS.toLocaleString()} of ${visible.length.toLocaleString()} ignored matches.`
-        : `Showing the first ${MAX_RENDERED_ROWS.toLocaleString()} matches. All ${visible.length.toLocaleString()} remain available for bulk selection.`;
-      elements["image-list"].appendChild(note);
-    }
     updateSummary(visible);
+    if (focusedKey) {
+      const target = Array.from(elements["image-list"].querySelectorAll("[data-focus-key]"))
+        .find((node) => node.dataset.focusKey === focusedKey && !node.disabled);
+      (target || elements["selected-label"]).focus({ preventScroll: true });
+    }
   }
 
   function updateGalleryControls() {
+    if (editTrackerId) {
+      elements["gallery-status"].textContent = state.pageUrl;
+      return;
+    }
     const collecting = Boolean(galleryCollection);
     elements["collect-gallery-button"].hidden = collecting;
     elements["collect-gallery-button"].disabled = state.busy || !state.siteKey || !Number.isInteger(state.sourceTabId);
     elements["stop-gallery-button"].hidden = !collecting;
     elements["gallery-pages-select"].disabled = collecting;
     elements["clear-gallery-button"].disabled = collecting || state.busy || !state.images.length;
+    elements["gallery-undo"].hidden = !clearedGallery || clearedGallery.context !== galleryContext || clearedGallery.epoch !== galleryContext.epoch;
+    elements["undo-clear-button"].disabled = collecting || state.busy;
     if (!collecting) {
       elements["gallery-status"].textContent = state.siteKey
         ? `${hostFromUrl(state.siteKey)} · ${state.images.length.toLocaleString()} collected · ${state.incognito ? "private session only" : "saved on this device"}`
@@ -3369,6 +3545,7 @@
       stopLiveCapture();
       sourcePageGeneration += 1;
       state.images = [];
+      pageMediaKeys.clear();
       state.selected.clear();
       context.sent.clear();
       context.epoch = gallery.epoch;
@@ -3409,6 +3586,7 @@
     if (sameContext && settings.live) {
       return;
     }
+    if (!sameContext) resetCollectionView();
     await saveCurrentGallery();
     const result = await browser.runtime.sendMessage({
       type: "SITE_GALLERY", action: "get", siteKey, incognito: Boolean(tab.incognito)
@@ -3446,6 +3624,12 @@
       return;
     }
     stopLiveCapture();
+    const records = state.images.map(savedRecord).filter(Boolean);
+    const explicitRedownloads = new Set(state.explicitRedownloads);
+    updatePageMedia();
+    const pageMembership = { context: pageMediaContext, keys: new Set(pageMediaKeys) };
+    state.busy = true;
+    updateSummary();
     await saveCurrentGallery();
     try {
       const result = await browser.runtime.sendMessage({
@@ -3456,11 +3640,48 @@
       }
       if (galleryContext === context) {
         applySavedGallery(result.gallery);
-        setNotice(`Saved media for ${hostFromUrl(context.siteKey)} cleared. Use Collect gallery to start again. Downloaded files and history are kept.`);
-        elements["collect-gallery-button"].focus({ preventScroll: true });
+        clearedGallery = { context, epoch: result.gallery.epoch, records, explicitRedownloads, pageMembership };
+        if (elements["page-tools-panel"].matches(":popover-open")) elements["page-tools-panel"].hidePopover();
+        setNotice(`Saved media for ${hostFromUrl(context.siteKey)} cleared. Downloaded files and history are kept.`);
       }
     } catch (error) {
       setNotice(error.message || String(error), "error");
+    } finally {
+      state.busy = false;
+      renderImages();
+      if (clearedGallery && clearedGallery.context === galleryContext) elements["undo-clear-button"].focus({ preventScroll: true });
+    }
+  }
+
+  async function undoClearSiteGallery() {
+    const undo = clearedGallery;
+    if (!undo || state.busy || galleryCollection || undo.context !== galleryContext || undo.epoch !== galleryContext.epoch) return;
+    state.busy = true;
+    updateSummary();
+    try {
+      const result = await browser.runtime.sendMessage({ type: "SITE_GALLERY", action: "save",
+        siteKey: undo.context.siteKey, incognito: undo.context.incognito, epoch: undo.epoch, records: undo.records });
+      if (!result || !result.ok) throw new Error(result && result.error || "Firefox could not restore this collection.");
+      if (galleryContext !== undo.context) return;
+      if (result.stale) {
+        clearedGallery = null;
+        applySavedGallery(result.gallery);
+        throw new Error("This collection was cleared again in another window. The older collection was not restored.");
+      }
+      state.explicitRedownloads = new Set(undo.explicitRedownloads);
+      updatePageMedia();
+      if (pageMediaContext === undo.pageMembership.context) {
+        for (const key of undo.pageMembership.keys) pageMediaKeys.add(key);
+      }
+      applySavedGallery(result.gallery);
+      clearedGallery = null;
+      setNotice("Website collection and selections restored.", "success");
+    } catch (error) {
+      setNotice(error.message || String(error), "error");
+    } finally {
+      state.busy = false;
+      renderImages();
+      elements["selected-label"].focus({ preventScroll: true });
     }
   }
 
@@ -3593,11 +3814,7 @@
         const previous = state.images;
         const accumulated = accumulateLiveImages(previous, merged.images);
         state.images = accumulated.images;
-        state.selected = new TrackedSelectionSet(reconcileScanSelection(
-          state.images, previous, state.selected, true, (image) => imageCanBeSelected(image) &&
-            !isImageIgnored(image) && Filters.matchesSmartFilters(image, state.smartFilters) &&
-            matchesInstagramCollectionFilter(image, state.instagramCollectionFilter)
-        ));
+        state.selected = reconcileGallerySelection(previous, true);
         run.pages += 1;
         markFilenamePreviewsDirty();
         renderImages();
@@ -3979,6 +4196,7 @@
         }
       }
 
+      const discoveredImages = preservedInstagramFallback ? [] : merged.images;
       if (settings.instagramCollections && preserveThisPage) {
         const accumulated = accumulateLiveImages(previousImages, merged.images, {
           maxImages: MAX_DISCOVERED_IMAGES,
@@ -4001,18 +4219,11 @@
 
       state.images = merged.images;
       markFilenamePreviewsDirty();
-      state.selected = new TrackedSelectionSet(reconcileScanSelection(
-        merged.images,
-        previousImages,
-        state.selected,
-        preserveThisPage,
-        (image) => !isImageIgnored(image) &&
-          Filters.matchesSmartFilters(image, state.smartFilters) &&
-          matchesInstagramCollectionFilter(image, state.instagramCollectionFilter)
-      ));
+      state.selected = reconcileGallerySelection(previousImages, preserveThisPage);
       state.scanWarnings = merged.warnings;
       state.pageTitle = merged.page.pageTitle || "";
       state.pageUrl = merged.page.pageUrl || "";
+      updatePageMedia(discoveredImages);
       state.instagramCollectionMode = Boolean(
         instagramCollectionSucceeded ||
         (preserveThisPage && previousInstagramCollectionMode) ||
@@ -4132,9 +4343,7 @@
         Boolean(image.downloadFingerprint) && state.explicitRedownloads.has(image.downloadFingerprint);
       return status !== "queued" &&
         (status !== "downloaded" || redownloadAllowed) &&
-        !isImageIgnored(image) &&
-        Filters.matchesSmartFilters(image, state.smartFilters) &&
-        matchesInstagramCollectionFilter(image, state.instagramCollectionFilter);
+        !isImageIgnored(image);
     });
     if (state.busy || !images.length) {
       if (!state.busy) {
@@ -4205,9 +4414,7 @@
           Boolean(image.downloadFingerprint) && state.explicitRedownloads.has(image.downloadFingerprint);
         return status !== "queued" &&
           (status !== "downloaded" || redownloadAllowed) &&
-          !isImageIgnored(image) &&
-          Filters.matchesSmartFilters(image, state.smartFilters) &&
-          imageMatchesInstagramCollectionFilter(image);
+          !isImageIgnored(image);
       });
       if (!images.length) {
         setNotice("No downloadable media files are selected.", "error");
@@ -4295,9 +4502,7 @@
       }
       images = images.filter((image) =>
         mediaTypeFor(image) === "image" &&
-        !isImageIgnored(image) &&
-        Filters.matchesSmartFilters(image, state.smartFilters) &&
-        imageMatchesInstagramCollectionFilter(image)
+        !isImageIgnored(image)
       );
       if (!images.length) {
         throw new Error("No non-ignored images are selected.");
@@ -4975,6 +5180,67 @@
   }
 
   function wireEvents() {
+    elements["collection-scope-select"].addEventListener("change", () => {
+      state.collectionScope = elements["collection-scope-select"].value === "page" ? "page" : "site";
+      state.showSelected = false;
+      resetGalleryPage();
+    });
+    elements["sort-select"].addEventListener("change", () => {
+      state.sort = ["name", "resolution"].includes(elements["sort-select"].value) ? elements["sort-select"].value : "page";
+      resetGalleryPage();
+    });
+    elements["selected-label"].addEventListener("click", () => {
+      state.showSelected = !state.showSelected;
+      state.showIgnored = false;
+      resetGalleryPage();
+    });
+    elements["back-to-collection-button"].addEventListener("click", () => {
+      state.showSelected = false;
+      resetGalleryPage();
+      elements["selected-label"].focus();
+    });
+    for (const [id, offset] of [["previous-page-button", -1], ["next-page-button", 1]]) {
+      elements[id].addEventListener("click", () => {
+        state.galleryPage += offset;
+        elements["image-list"].scrollTop = 0;
+        renderImages();
+        if (elements[id].disabled) elements[offset > 0 ? "previous-page-button" : "next-page-button"].focus();
+      });
+    }
+    elements["undo-clear-button"].addEventListener("click", undoClearSiteGallery);
+    elements["close-preview-button"].addEventListener("click", () => elements["media-preview-dialog"].close());
+    elements["preview-previous-button"].addEventListener("click", () => moveGalleryPreview(-1));
+    elements["preview-next-button"].addEventListener("click", () => moveGalleryPreview(1));
+    elements["preview-selected-input"].addEventListener("change", () => {
+      selectImage(currentPreviewImage(), elements["preview-selected-input"].checked);
+      renderImages();
+    });
+    elements["preview-download-button"].addEventListener("click", () => {
+      const image = currentPreviewImage();
+      if (image) {
+        elements["media-preview-dialog"].close();
+        requestDownloads([image], { allowRedownload: downloadStatusFor(image) === "downloaded" });
+      }
+    });
+    elements["preview-tab-button"].addEventListener("click", () => {
+      const image = currentPreviewImage();
+      if (image) return openImagePreview(image);
+    });
+    elements["media-preview-dialog"].addEventListener("keydown", (event) => {
+      if (event.target.closest("input, textarea, select, video")) return;
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        event.preventDefault();
+        moveGalleryPreview(event.key === "ArrowLeft" ? -1 : 1);
+      }
+    });
+    elements["media-preview-dialog"].addEventListener("close", () => {
+      clearPreviewStage();
+      previewItems = [];
+      const opener = previewOpener;
+      previewOpener = null;
+      if (opener && opener.isConnected && !opener.disabled) opener.focus({ preventScroll: true });
+      else elements["filter-input"].focus({ preventScroll: true });
+    });
     for (const view of ["grid", "list"]) {
       elements[`${view}-view-button`].addEventListener("click", () => {
         applyMediaView(view);
@@ -5055,7 +5321,7 @@
     elements["photos-only-input"].addEventListener("change", handleSmartFilterChange);
     for (const id of [
       "media-type-filter-select",
-      "format-filter-select"
+      "format-filter-select", "min-width-input", "min-height-input", "orientation-filter-select"
     ]) {
       elements[id].addEventListener("change", handleSmartFilterChange);
     }
@@ -5066,33 +5332,21 @@
     });
     elements["instagram-collection-filter-select"].addEventListener("change", () => {
       state.instagramCollectionFilter = elements["instagram-collection-filter-select"].value;
-      for (const image of state.images) {
-        if (!matchesInstagramCollectionFilter(image, state.instagramCollectionFilter)) {
-          state.selected.delete(image.url);
-        }
-      }
+      state.showSelected = false;
       updateSmartFilterButton();
-      renderImages();
+      resetGalleryPage();
     });
     elements["reset-filters-button"].addEventListener("click", resetMediaFilters);
     elements["ignored-button"].addEventListener("click", () => {
       state.showIgnored = !state.showIgnored;
-      renderImages();
+      state.showSelected = false;
+      resetGalleryPage();
       closeMediaFilters();
     });
     elements["downloaded-button"].addEventListener("click", () => {
       state.hideDownloaded = !state.hideDownloaded;
-      if (state.hideDownloaded) {
-        for (const image of state.images) {
-          if (downloadStatusFor(image) === "downloaded") {
-            state.selected.delete(image.url);
-            if (image.downloadFingerprint) {
-              state.explicitRedownloads.delete(image.downloadFingerprint);
-            }
-          }
-        }
-      }
-      renderImages();
+      state.showSelected = false;
+      resetGalleryPage();
       closeMediaFilters();
     });
     elements["clear-ignored-button"].addEventListener("click", restoreAllIgnoredImages);
@@ -5104,11 +5358,7 @@
       renderImages();
     });
     elements["select-none-button"].addEventListener("click", () => {
-      if (
-        elements["filter-input"].value.trim() ||
-        Filters.hasActiveSmartFilters(state.smartFilters) ||
-        state.instagramCollectionFilter !== "all"
-      ) {
+      if (hasCollectionFilter()) {
         for (const image of filteredImages()) {
           state.selected.delete(image.url);
           if (image.downloadFingerprint) {
@@ -5157,6 +5407,38 @@
     updateSidebarFollowButton();
   }
 
+  async function initializeTrackerEditor() {
+    if (browser.extension && browser.extension.inIncognitoContext) throw new Error("Trackers cannot be edited in private windows.");
+    if (editTrackerId.length > 200) throw new Error("This tracker link is invalid.");
+    const response = await browser.runtime.sendMessage({ type: "GET_TRACKERS" });
+    const tracker = response && response.ok && Array.isArray(response.trackers) && response.trackers.find((item) => item.id === editTrackerId);
+    if (!tracker || !Gallery.pageUrl(tracker.url)) throw new Error("This tracker no longer exists. Open Trackers to choose another one.");
+    document.documentElement.classList.add("tracker-editor");
+    state.incognito = false;
+    state.tracker = tracker;
+    state.pageUrl = tracker.url;
+    state.siteKey = Core.siteKeyForUrl(tracker.url);
+    state.pageTitle = tracker.pageTitle || hostFromUrl(tracker.url);
+    state.trackerPageUrl = tracker.url;
+    state.hasStoredFolder = true;
+    elements["page-label"].textContent = `Edit tracker · ${state.pageTitle}`;
+    elements["gallery-status"].textContent = tracker.url;
+    elements["editor-source-link"].href = Gallery.pageUrl(tracker.url);
+    elements["editor-source-link"].hidden = false;
+    elements["folder-input"].value = tracker.folder;
+    elements["filename-template-input"].value = tracker.filenameTemplate;
+    applySmartFiltersToControls(tracker.filters);
+    populateTrackerControls(tracker);
+    updateTrackerUi();
+    updateSmartFilterButton();
+    elements["page-tools-panel"].removeAttribute("popover");
+    elements["tracker-panel"].hidden = false;
+    elements["tracker-button"].setAttribute("aria-expanded", "true");
+    elements["action-detail"].textContent = `Downloads/${tracker.folder}`;
+    updateFilenameTemplateUi();
+    elements["tracker-interval-select"].focus();
+  }
+
   async function initialize() {
     cacheElements();
     applySmartFiltersToControls(Filters.DEFAULT_FILTERS);
@@ -5170,6 +5452,11 @@
     updateSmartFilterButton();
     updateInstagramCollectionFilterUi();
     updateTrackerUi();
+    if (editTrackerId) {
+      wireEvents();
+      await initializeTrackerEditor();
+      return;
+    }
     await initializeSidebarContext();
     wireEvents();
     wireSourceTabLifecycle();

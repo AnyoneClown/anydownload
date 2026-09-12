@@ -686,6 +686,8 @@
         alt: image.alt,
         mediaType: image.mediaType,
         duration: image.duration,
+        sourceUrl: /^https?:/i.test(tab && tab.url || "") ? normalizedMediaUrl(tab.url) : "",
+        sourceTabId: tab && Number.isSafeInteger(tab.id) && tab.id >= 0 ? tab.id : null,
         createdAt: Date.now()
       }
     });

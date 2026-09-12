@@ -599,8 +599,10 @@
       "fetched-count",
       "job-progress",
       "job-summary",
+      "keep-open-notice",
       "progress-description",
       "progress-panel",
+      "retry-failures-button",
       "show-downloads-button",
       "status-heading",
       "total-count"
@@ -665,7 +667,13 @@
     if (!Number.isSafeInteger(maximumPartBytes) || maximumPartBytes < ZIP_END_RECORD_BYTES) {
       throw new Error("The archive part limit must be a positive safe integer.");
     }
-    const controller = new AbortController();
+    let controller = new AbortController();
+    let retryRequest = null;
+    const workspaceLinks = Array.from(documentObject.querySelectorAll(".workspace-nav a"), (link) => ({
+      link,
+      target: link.target,
+      title: link.title
+    }));
     const state = {
       activeObjectUrls: new Set(),
       currentDownloadId: null,
@@ -679,9 +687,22 @@
       lastBytePaint: 0
     };
 
+    function setActive(active) {
+      elements["keep-open-notice"].hidden = !active;
+      for (const { link, target, title } of workspaceLinks) {
+        link.target = active ? "_blank" : target;
+        link.title = active ? "Opens in a new tab while the archive is running" : title;
+        if (active) {
+          link.rel = "noopener";
+        }
+      }
+    }
+
     function setStatus(title, description) {
       elements["status-heading"].textContent = title;
-      elements["progress-description"].textContent = description || "";
+      if (elements["progress-description"].textContent !== (description || "")) {
+        elements["progress-description"].textContent = description || "";
+      }
     }
 
     function updateProgress(currentLoaded) {
@@ -904,6 +925,56 @@
       }
     }
 
+    async function runRequest(payload) {
+      controller = new AbortController();
+      retryRequest = null;
+      elements["retry-failures-button"].hidden = true;
+      setActive(true);
+      try {
+        request = validateArchiveRequest(payload);
+        Object.assign(state, {
+          failures: [], fetched: 0, imageBytes: 0, interruptedDownloads: 0,
+          processed: 0, savedParts: 0, total: request.items.length, lastBytePaint: 0
+        });
+        elements["failures-list"].replaceChildren();
+        elements["failures-empty"].hidden = false;
+        elements["fatal-panel"].hidden = true;
+        elements["total-count"].textContent = state.total.toLocaleString();
+        elements["destination-label"].textContent = `Downloads/${request.folder}`;
+        elements["destination-label"].title = `Downloads/${request.folder}`;
+        elements["job-summary"].textContent = `${state.total.toLocaleString()} selected image${state.total === 1 ? "" : "s"} → Downloads/${request.folder}`;
+        documentObject.title = `${state.total} images — AnyDownload Archive Progress`;
+        elements["cancel-button"].hidden = false;
+        elements["cancel-button"].disabled = false;
+        updateProgress(0);
+        await processRequest();
+      } catch (error) {
+        if (error instanceof ArchiveCancelledError || controller.signal.aborted) {
+          elements["cancel-button"].hidden = true;
+          elements["current-item"].textContent = "Cancelled";
+          setStatus(
+            "Archive cancelled",
+            state.savedParts
+              ? "Previously completed archive parts remain in Downloads; the unfinished part was discarded."
+              : "No unfinished archive was saved."
+          );
+        } else {
+          showFatal(error && error.message ? error.message : String(error));
+        }
+      } finally {
+        if (request && !controller.signal.aborted && state.failures.length) {
+          retryRequest = {
+            folder: request.folder,
+            incognito: request.incognito,
+            items: state.failures.map(({ url, filename }) => ({ url, filename }))
+          };
+        }
+        request = null;
+        elements["retry-failures-button"].hidden = !retryRequest;
+        setActive(false);
+      }
+    }
+
     let request;
     let storageKey = "";
     elements["cancel-button"].addEventListener("click", () => {
@@ -922,6 +993,11 @@
         browserObject.downloads.showDefaultFolder();
       }
     });
+    elements["retry-failures-button"].addEventListener("click", async () => {
+      if (retryRequest) {
+        await runRequest({ ...retryRequest, createdAt: Date.now() });
+      }
+    });
 
     const unload = () => {
       controller.abort();
@@ -938,6 +1014,7 @@
       windowObject.addEventListener("beforeunload", unload, { once: true });
     }
 
+    setActive(true);
     try {
       const params = new URLSearchParams(locationObject.search);
       const jobId = validateJobId(params.get("job") || "");
@@ -947,34 +1024,14 @@
       storageKey = `archiveJobRequest:${jobId}`;
       const stored = await browserObject.storage.session.get(storageKey);
       await browserObject.storage.session.remove(storageKey);
-      request = validateArchiveRequest(stored && stored[storageKey]);
-      state.total = request.items.length;
-      elements["total-count"].textContent = state.total.toLocaleString();
-      elements["destination-label"].textContent = `Downloads/${request.folder}`;
-      elements["destination-label"].title = `Downloads/${request.folder}`;
-      elements["job-summary"].textContent = `${state.total.toLocaleString()} selected image${state.total === 1 ? "" : "s"} → Downloads/${request.folder}`;
-      documentObject.title = `${state.total} images — AnyDownload Archive Progress`;
-      elements["cancel-button"].disabled = false;
-      updateProgress(0);
-      await processRequest();
+      await runRequest(stored && stored[storageKey]);
     } catch (error) {
-      if (error instanceof ArchiveCancelledError || controller.signal.aborted) {
-        elements["cancel-button"].hidden = true;
-        elements["current-item"].textContent = "Cancelled";
-        setStatus(
-          "Archive cancelled",
-          state.savedParts
-            ? "Previously completed archive parts remain in Downloads; the unfinished part was discarded."
-            : "No unfinished archive was saved."
-        );
-      } else {
-        showFatal(error && error.message ? error.message : String(error));
-      }
+      showFatal(error && error.message ? error.message : String(error));
     } finally {
+      setActive(false);
       if (storageKey) {
         await browserObject.storage.session.remove(storageKey).catch(() => undefined);
       }
-      request = null;
     }
   }
 

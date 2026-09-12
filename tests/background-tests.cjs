@@ -493,6 +493,8 @@ function storageArea(initial = {}) {
   const previewKeys = Object.keys(session.data).filter((key) => key.startsWith("imagePreview:"));
   assert.equal(previewKeys.length, 1);
   assert.equal(session.data[previewKeys[0]].url, "https://cdn.example.test/full/photo.jpg");
+  assert.equal(session.data[previewKeys[0]].sourceUrl, tab.url);
+  assert.equal(session.data[previewKeys[0]].sourceTabId, tab.id);
 
   const videoContextInfo = {
     ...contextInfo,

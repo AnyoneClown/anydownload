@@ -28,6 +28,7 @@
   ]);
   const VIDEO_FORMATS = new Set(["m4v", "mkv", "mov", "mp4", "ogv", "webm"]);
   const VALID_MEDIA_TYPES = new Set(["any", "image", "video"]);
+  const VALID_ORIENTATIONS = new Set(["any", "landscape", "portrait", "square"]);
   const FORMAT_ALIASES = Object.freeze({
     "application/mp4": "mp4",
     "application/ogg": "ogv",
@@ -77,7 +78,10 @@
   const DEFAULT_FILTERS = Object.freeze({
     mediaType: "any",
     photosOnly: false,
-    format: "any"
+    format: "any",
+    minWidth: 0,
+    minHeight: 0,
+    orientation: "any"
   });
 
   function readProperty(object, key) {
@@ -150,28 +154,41 @@
     const rawMediaType = readProperty(filters, "mediaType");
     const rawPhotosOnly = readProperty(filters, "photosOnly");
     const rawFormat = readProperty(filters, "format");
+    const rawMinWidth = readProperty(filters, "minWidth");
+    const rawMinHeight = readProperty(filters, "minHeight");
+    const rawOrientation = readProperty(filters, "orientation");
     const cacheable = Boolean(filters) && typeof filters === "object" &&
-      [rawMediaType, rawPhotosOnly, rawFormat].every(cacheSafeValue);
+      [rawMediaType, rawPhotosOnly, rawFormat, rawMinWidth, rawMinHeight, rawOrientation].every(cacheSafeValue);
     const cached = cacheable ? normalizedFiltersCache.get(filters) : null;
     if (
       cached &&
       cached.rawMediaType === rawMediaType &&
       cached.rawPhotosOnly === rawPhotosOnly &&
-      cached.rawFormat === rawFormat
+      cached.rawFormat === rawFormat &&
+      cached.rawMinWidth === rawMinWidth &&
+      cached.rawMinHeight === rawMinHeight &&
+      cached.rawOrientation === rawOrientation
     ) {
       return cached.normalized;
     }
 
+    const orientation = typeof rawOrientation === "string" ? rawOrientation.trim().toLowerCase() : "";
     const normalized = {
       mediaType: normalizeMediaType(rawMediaType, DEFAULT_FILTERS.mediaType),
       photosOnly: normalizeBoolean(rawPhotosOnly, DEFAULT_FILTERS.photosOnly),
-      format: normalizeFormat(rawFormat, DEFAULT_FILTERS.format)
+      format: normalizeFormat(rawFormat, DEFAULT_FILTERS.format),
+      minWidth: normalizeDimension(rawMinWidth),
+      minHeight: normalizeDimension(rawMinHeight),
+      orientation: VALID_ORIENTATIONS.has(orientation) ? orientation : DEFAULT_FILTERS.orientation
     };
     if (cacheable) {
       normalizedFiltersCache.set(filters, {
         rawMediaType,
         rawPhotosOnly,
         rawFormat,
+        rawMinWidth,
+        rawMinHeight,
+        rawOrientation,
         normalized
       });
     }
@@ -179,6 +196,9 @@
       rawMediaType: normalized.mediaType,
       rawPhotosOnly: normalized.photosOnly,
       rawFormat: normalized.format,
+      rawMinWidth: normalized.minWidth,
+      rawMinHeight: normalized.minHeight,
+      rawOrientation: normalized.orientation,
       normalized
     });
     return normalized;
@@ -359,6 +379,19 @@
     if (normalized.format !== "any" && imageFileType(image) !== normalized.format) {
       return false;
     }
+    const { width, height } = imageDimensions(image);
+    if (width < normalized.minWidth || height < normalized.minHeight) {
+      return false;
+    }
+    if (normalized.orientation !== "any") {
+      if (!width || !height) {
+        return false;
+      }
+      const orientation = width === height ? "square" : width > height ? "landscape" : "portrait";
+      if (orientation !== normalized.orientation) {
+        return false;
+      }
+    }
     return true;
   }
 
@@ -366,7 +399,9 @@
     const normalized = normalizeFilters(filters);
     return normalized.mediaType !== DEFAULT_FILTERS.mediaType ||
       normalized.photosOnly !== DEFAULT_FILTERS.photosOnly ||
-      normalized.format !== DEFAULT_FILTERS.format;
+      normalized.format !== DEFAULT_FILTERS.format ||
+      normalized.minWidth > 0 || normalized.minHeight > 0 ||
+      normalized.orientation !== DEFAULT_FILTERS.orientation;
   }
 
   return Object.freeze({
