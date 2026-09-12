@@ -1511,7 +1511,7 @@
       createProperties.windowId = state.sourceWindowId;
     }
     await browser.tabs.create(createProperties).catch(() => {
-      setNotice("Firefox could not open cloud sync. Please try again.", "error");
+      setNotice("Firefox could not open Account. Please try again.", "error");
     });
   }
 
@@ -5309,16 +5309,24 @@
     elements["tracking-dashboard-button"].addEventListener("click", openTrackingDashboard);
     elements["sync-button"].addEventListener("click", openCloudSync);
     elements["integrations-button"].addEventListener("click", openIntegrations);
-    elements["tracker-button"].addEventListener("click", () => {
-      const panel = elements["tracker-panel"];
-      panel.hidden = !panel.hidden;
-      elements["tracker-button"].setAttribute("aria-expanded", String(!panel.hidden));
-      if (!panel.hidden) {
-        refreshTrackerStatus(true).catch((error) => {
-          elements["tracker-status"].textContent = error && error.message ? error.message : String(error);
-          elements["tracker-status"].classList.add("error");
-        });
+    elements["tracker-button"].addEventListener("click", (event) => {
+      event.preventDefault();
+      if (elements["page-tools-panel"].matches(":popover-open") && !elements["tracker-panel"].hidden) {
+        elements["page-tools-panel"].hidePopover();
+        return;
       }
+      elements["tracker-panel"].hidden = false;
+      elements["page-tools-panel"].showPopover();
+      elements["tracker-button"].setAttribute("aria-expanded", "true");
+      elements["tracker-interval-select"].focus();
+      refreshTrackerStatus(true).catch((error) => {
+        elements["tracker-status"].textContent = error && error.message ? error.message : String(error);
+        elements["tracker-status"].classList.add("error");
+      });
+    });
+    elements["page-tools-panel"].addEventListener("toggle", () => {
+      const open = elements["page-tools-panel"].matches(":popover-open");
+      elements["tracker-button"].setAttribute("aria-expanded", String(open && !elements["tracker-panel"].hidden));
     });
     elements["tracker-save-button"].addEventListener("click", saveTracker);
     elements["tracker-action-select"].addEventListener("change", updateTrackerActionFields);

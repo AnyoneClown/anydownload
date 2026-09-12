@@ -24,6 +24,7 @@ class Element {
   append(...items) { this.children.push(...items); if (!this.value && this.children.length) this.value = this.children[0].value; }
   replaceChildren(...items) { this.children = []; this.value = ""; this.append(...items); }
   remove(index) { this.children.splice(index, 1); }
+  scrollIntoView() { this.scrollCount = (this.scrollCount || 0) + 1; }
   get options() { return this.children; }
 }
 
@@ -105,16 +106,45 @@ function harness({ privateWindow = false, href = "moz-extension://test/upload/up
   assert.equal(h.calls.length, 0, "Private windows do not read normal upload storage or request credentials");
 
   h = harness();
+  h.client.list = async () => [];
+  await h.start();
+  assert.equal(h.elements["connection-select"].children[0].textContent, "No connected servers");
+  assert.equal(h.elements["connection-select"].disabled, true);
+  assert.equal(h.elements["album-select"].disabled, true);
+  assert.equal(h.elements["start-button"].disabled, true);
+
+  h = harness();
   let page = await h.start();
   assert.equal(h.calls.some(call => call[0] === "fetch"), false, "Opening the tab never starts a transfer");
+  assert.equal(h.elements["selection-count"].textContent, "1 image");
+  assert.equal(h.elements["progress-empty"].hidden, false);
+  assert.equal(h.elements["history-empty"].hidden, false);
+  const uploadAsset = h.provider.uploadAsset;
+  h.provider.uploadAsset = async (...args) => {
+    assert.equal(h.elements["retry-button"].textContent, "Uploading…");
+    assert.equal(h.elements["retry-button"].disabled, true);
+    assert.equal(h.elements["selection-note"].textContent, "Uploading 1 image. Keep this tab open.");
+    return uploadAsset(...args);
+  };
   await page.begin(false);
   assert.equal(page.job.status, "complete");
+  assert.equal(h.elements["progress-panel"].scrollCount, 1, "Starting shows progress once, not on every checkpoint");
+  assert.equal(h.elements["retry-button"].textContent, "Retry unfinished images");
+  assert.equal(h.elements["progress-empty"].hidden, true);
+  assert.equal(h.elements["history-empty"].hidden, true);
+  assert.equal(h.elements["results-list"].children[0].children[1].textContent, "Uploaded to Immich");
+  assert.equal(h.elements["history-list"].children[0].children[1].textContent, "Complete");
   assert.deepEqual(h.calls.find(call => call[0] === "permission")[1].origins, ["http://192.168.0.103/*", "https://images.example/*"]);
   assert.equal(h.calls.filter(call => call[0] === "upload").length, 1);
   assert.equal(h.calls.filter(call => call[0] === "album").length, 0);
   assert.deepEqual(h.local["downloadLedger:v1"], { unchanged: true });
   assert.ok(!JSON.stringify(h.local).includes(SECRET));
   assert.deepEqual(Sync.snapshot({ [Page.STORE_KEY]: h.local[Page.STORE_KEY] }), {}, "Upload results never enter general sync");
+  for (const [status, label] of [["running", "Uploading"], ["queued", "Ready"], ["partial", "Needs attention"]]) {
+    h.local[Page.STORE_KEY][0].status = status;
+    await page.refresh();
+    assert.equal(h.elements["history-list"].children[0].children[1].textContent, label);
+  }
 
   h = harness({ failAlbum: true });
   page = await h.start();
@@ -123,12 +153,15 @@ function harness({ privateWindow = false, href = "moz-extension://test/upload/up
   assert.equal(page.job.status, "partial");
   assert.equal(page.job.items[0].assetId, ASSET);
   assert.equal(page.job.items[0].albumStatus, "failed");
+  assert.match(h.elements["results-list"].children[0].children[1].textContent, /Uploaded to Immich · Album step failed/);
+  assert.equal(h.elements["results-list"].children[0].dataset.error, "true");
   h.setAlbumFailure(false);
   await page.begin(true);
   assert.equal(page.job.status, "complete");
   assert.equal(h.calls.filter(call => call[0] === "fetch").length, 1, "Album retry does not fetch source bytes");
   assert.equal(h.calls.filter(call => call[0] === "upload").length, 1, "Album retry does not upload the asset again");
   assert.equal(h.calls.filter(call => call[0] === "album").length, 2);
+  assert.equal(h.elements["progress-panel"].scrollCount, 2, "Retry returns to progress once more");
 
   h = harness();
   page = await h.start();
@@ -176,9 +209,11 @@ function harness({ privateWindow = false, href = "moz-extension://test/upload/up
   h = harness();
   h.setAccount({ signedIn: false, ownerId: "", email: "" });
   page = await h.start();
+  assert.equal(h.elements["signin-card"].hidden, false);
   assert.ok(h.session["uploadJobRequest:request-123"], "Selected images wait for account sign-in");
   h.setAccount({ signedIn: true, ownerId: OWNER, email: "owner@example.com" });
   await page.refresh();
+  assert.equal(h.elements["signin-card"].hidden, true);
   assert.equal(h.session["uploadJobRequest:request-123"], undefined);
   await page.begin(false);
   assert.equal(page.job.status, "complete", "The pending selection loads when the user returns after sign-in");
@@ -223,6 +258,8 @@ function harness({ privateWindow = false, href = "moz-extension://test/upload/up
   await page.refresh();
   assert.equal(page.job, null);
   assert.equal(h.elements["results-list"].children.length, 0);
+  assert.equal(h.elements["progress-empty"].hidden, false);
+  assert.equal(h.elements["history-empty"].hidden, false);
   assert.equal(h.elements["progress-summary"].textContent, "No upload started.");
   assert.equal((await page.store.list("55555555-5555-4555-8555-555555555555")).length, 0);
   assert.deepEqual((await page.store.list(OWNER))[0], oldJob);

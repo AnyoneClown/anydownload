@@ -65,7 +65,7 @@
     }
 
     async function request(state, path, { method = "GET", body, token, headers = {} } = {}) {
-      if (!await permitted(state)) throw new Error("Grant cloud sync permissions on the Sync page to continue.");
+      if (!await permitted(state)) throw new Error("Grant cloud sync permissions on the Account page to continue.");
       const epoch = generation;
       const controller = new AbortController();
       requests.add(controller);

@@ -86,21 +86,30 @@
     function render() {
       elements["account-status"].textContent = account.signedIn ? `Signed in as ${account.email || "your AnyDownload account"}` : "Sign in on the Account page to connect a destination and upload.";
       elements["upload-content"].hidden = !account.signedIn;
-      elements["connection-select"].disabled = busy || Boolean(job);
-      elements["album-select"].disabled = busy || Boolean(job);
+      elements["signin-card"].hidden = account.signedIn;
+      elements["connection-select"].disabled = busy || Boolean(job) || !connections.length;
+      elements["album-select"].disabled = busy || Boolean(job) || !selectedConnection();
       elements["albums-button"].disabled = busy || Boolean(job) || !selectedConnection();
       elements["local-files"].disabled = busy;
       elements["start-button"].hidden = Boolean(job);
       elements["start-button"].disabled = busy || !selectedConnection() || !items.length;
       elements["retry-button"].hidden = !job || job.status === "complete";
+      elements["retry-button"].textContent = busy ? "Uploading…" : "Retry unfinished images";
       elements["retry-button"].disabled = busy || !selectedConnection() || Boolean(job &&
         (job.connectionId !== selectedConnection()?.id || job.serverUrl !== selectedConnection()?.serverUrl));
       elements["cancel-button"].disabled = !busy;
+      const imageCount = job ? job.items.length : items.length;
+      elements["selection-count"].textContent = `${imageCount} image${imageCount === 1 ? "" : "s"}`;
       elements["selection-note"].textContent = job
-        ? `${job.items.length} images in this upload. To retry local files after reopening, choose the original files again.`
-        : `${items.length} images selected (maximum 500). Choosing local files replaces the current selection.`;
+        ? job.status === "complete" ? "All images uploaded. Choose New upload to send more." : "To retry local images after reopening, choose the original files again."
+        : items.length ? "Ready to upload. Choosing local files replaces this selection." : "Select up to 500 images for one upload.";
+      if (busy && job && job.status !== "complete") {
+        elements["selection-note"].textContent = `Uploading ${imageCount} image${imageCount === 1 ? "" : "s"}. Keep this tab open.`;
+      }
+      elements["progress-empty"].hidden = Boolean(job);
+      elements["progress-panel"].dataset.state = job?.status || "ready";
       if (!job) {
-        elements["progress-heading"].textContent = "Ready";
+        elements["progress-heading"].textContent = "Ready when you are";
         elements["progress-summary"].textContent = "No upload started.";
         elements["upload-progress"].max = 1;
         elements["upload-progress"].value = 0;
@@ -108,18 +117,25 @@
         return;
       }
       const complete = job.items.filter((item) => item.assetId && (item.albumStatus === "none" || item.albumStatus === "complete")).length;
-      elements["progress-heading"].textContent = busy ? "Uploading…" : job.status === "complete" ? "Upload complete" : "Upload has unfinished steps";
+      elements["progress-heading"].textContent = job.status === "complete" ? "Upload complete" : busy ? "Uploading…" : "Ready to retry";
       elements["upload-progress"].max = job.items.length;
       elements["upload-progress"].value = complete;
-      elements["progress-summary"].textContent = `${complete} of ${job.items.length} images complete. ${job.items.length - complete} unfinished.`;
+      elements["progress-summary"].textContent = `${complete} of ${job.items.length} images complete${complete < job.items.length ? ` · ${job.items.length - complete} unfinished` : ""}.`;
       const rows = job.items.map((item) => {
         const row = document.createElement("li");
         const title = document.createElement("strong");
         title.textContent = item.filename;
         const detail = document.createElement("span");
-        const asset = item.assetId ? `${item.duplicate ? "Already in Immich" : "Uploaded to Immich"} · asset ${item.assetId}` : `Image: ${item.uploadStatus}`;
-        detail.textContent = `${asset}${job.albumId ? ` · Album: ${item.albumStatus}` : " · Library, no album"}${item.errorCode ? ` — ${Uploads.errorMessage(item.errorCode)}` : ""}`;
+        const asset = item.assetId ? item.duplicate ? "Already in Immich" : "Uploaded to Immich" : {
+          pending: "Waiting to upload", fetching: "Reading image…", uploading: "Uploading…",
+          failed: "Upload failed", uncertain: "Upload needs confirmation", cancelled: "Cancelled"
+        }[item.uploadStatus];
+        const album = item.assetId && job.albumId ? {
+          pending: "Album step pending", attaching: "Adding to album…", complete: "Added to album", failed: "Album step failed"
+        }[item.albumStatus] : "";
+        detail.textContent = `${asset}${album ? ` · ${album}` : ""}${item.errorCode ? ` — ${Uploads.errorMessage(item.errorCode)}` : ""}`;
         row.dataset.complete = String(Boolean(item.assetId && ["none", "complete"].includes(item.albumStatus)));
+        row.dataset.error = String(Boolean(item.errorCode));
         row.append(title, detail);
         return row;
       });
@@ -136,7 +152,15 @@
         const link = document.createElement("a");
         link.href = `upload.html?job=${encodeURIComponent(saved.id)}`;
         link.addEventListener("click", (event) => preserveTransfer(event, link));
-        link.textContent = `${new Date(saved.createdAt).toLocaleString()} · ${saved.items.length} images · ${saved.status === "complete" ? "Complete" : "Open to check unfinished steps"}`;
+        const title = document.createElement("strong");
+        title.textContent = `${saved.items.length} image${saved.items.length === 1 ? "" : "s"} to Immich`;
+        const date = document.createElement("span");
+        date.textContent = new Date(saved.createdAt).toLocaleString();
+        link.append(title, date);
+        const status = document.createElement("span");
+        status.className = "status-badge";
+        status.dataset.tone = { complete: "success", running: "busy", queued: "" }[saved.status] ?? "warning";
+        status.textContent = { complete: "Complete", running: "Uploading", queued: "Ready" }[saved.status] || "Needs attention";
         const remove = document.createElement("button");
         remove.type = "button";
         remove.textContent = "Remove record";
@@ -149,10 +173,11 @@
           });
           await history();
         }));
-        row.append(link, remove);
+        row.append(link, status, remove);
         return row;
       });
       elements["history-list"].replaceChildren(...rows);
+      elements["history-empty"].hidden = rows.length > 0;
     }
 
     function setAlbums() {
@@ -167,7 +192,7 @@
       if (defaultId) {
         const saved = document.createElement("option");
         saved.value = defaultId;
-        saved.textContent = `Saved album (${defaultId}) — load albums to check access`;
+        saved.textContent = "Saved album — load albums to check access";
         elements["album-select"].append(saved);
         elements["album-select"].value = defaultId;
       }
@@ -205,6 +230,12 @@
           option.textContent = `Immich · ${connection.serverUrl}`;
           return option;
         }));
+        if (!connections.length) {
+          const option = document.createElement("option");
+          option.value = "";
+          option.textContent = "No connected servers";
+          elements["connection-select"].append(option);
+        }
         if (connections.some((connection) => connection.id === previous)) elements["connection-select"].value = previous;
         await restoreInput();
         if (generation !== refreshGeneration) return;
@@ -304,7 +335,7 @@
         const status = await client.status();
         actionSignal.throwIfAborted();
         if (!status.signedIn || status.ownerId !== requestedOwner || account.ownerId !== requestedOwner || epoch !== currentEpoch) {
-          throw new Error("The account changed. Reopen Upload Progress.");
+          throw new Error("The account changed. Reopen Uploads.");
         }
         if (!retry) {
           const created = Uploads.createJob(requestedItems, { ownerId: requestedOwner, connectionId: connection.id,
@@ -342,9 +373,11 @@
           if (!retry) await client.defaultAlbum(connection.id, job.albumId);
           const runningJob = job;
           await client.withCredential(connection, async (credential, { signal }) => {
-            if (epoch !== currentEpoch) throw new Error("The account changed. Reopen Upload Progress.");
+            if (epoch !== currentEpoch) throw new Error("The account changed. Reopen Uploads.");
             const combined = AbortSignal.any([signal, actionSignal]);
             combined.throwIfAborted();
+            render();
+            elements["progress-panel"].scrollIntoView({ block: "start" });
             await Uploads.run(runningJob, { credential, signal: combined, provider, fetchImage,
               onChange: async (changed) => {
                 await store.save(changed);
@@ -417,7 +450,7 @@
   if (root.document && root.browser) root.document.addEventListener("DOMContentLoaded", () => {
     initialize().catch((failure) => {
       const banner = root.document.getElementById("error-banner");
-      banner.hidden = false; banner.textContent = failure.message || "Upload Progress could not open.";
+      banner.hidden = false; banner.textContent = failure.message || "Uploads could not open.";
     });
   }, { once: true });
 })(globalThis);

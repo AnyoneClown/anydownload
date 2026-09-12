@@ -60,8 +60,8 @@
       catch (_error) { throw new Error(FAILED); }
       if (!response?.ok) {
         const messages = {
-          signin: "Sign in to your AnyDownload account on the Sync page first.",
-          permission: "Restore cloud permissions on the Sync page to use integrations.",
+          signin: "Sign in to your AnyDownload account on the Account page first.",
+          permission: "Restore cloud permissions on the Account page to use integrations.",
           missing: "This connection is no longer available. Refresh your connections.",
           invalid: "The connection details are invalid. Check the server URL and API key.",
           limit: "The account connection limit was reached. Disconnect an unused server first.",
@@ -80,7 +80,7 @@
       try {
         const before = await call("status");
         check();
-        if (!before.signedIn || !UUID.test(before.ownerId)) throw new Error("Sign in on the Sync page first.");
+        if (!before.signedIn || !UUID.test(before.ownerId)) throw new Error("Sign in on the Account page first.");
         const response = await call("credential", { connectionId: saved.id });
         const current = connection(response.connection);
         operation.credential = { serverUrl: current.serverUrl, apiKey: response.apiKey };

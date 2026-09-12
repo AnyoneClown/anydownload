@@ -15,43 +15,82 @@
         <a class="nav-link" data-source-link href="../popup/popup.html" hidden>Media</a>
         <a class="nav-link" data-source-link href="../history/history.html">Downloads</a>
         <a class="nav-link" data-source-link href="../tracking/tracking.html">Trackers</a>
-        <a class="nav-link" data-source-link href="../sync/sync.html">Sync</a>
+        <a class="nav-link" data-source-link href="../sync/sync.html">Account</a>
         <a class="nav-link current" href="integrations.html" aria-current="page">Integrations</a>
       </nav>
     </div>
     <main class="page-shell">
-      <header class="page-header"><div><p class="eyebrow">External destinations</p><h1>Integrations</h1><p class="subtitle">Upload selected images to your Immich library from Firefox.</p></div></header>
+      <header class="page-header">
+        <div><p class="eyebrow">Your media, connected</p><h1>Integrations</h1><p class="subtitle">Connect your photo library. Send your images straight from Firefox.</p></div>
+        <a class="button-link primary-button" data-source-link href="../upload/upload.html"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 13V3m-4 4 4-4 4 4M3 13v4h14v-4"/></svg>Upload images</a>
+      </header>
+      <nav class="integration-tabs" aria-label="Integrations">
+        <a class="current" data-source-link href="integrations.html" aria-current="page">Connections</a>
+        <a data-source-link href="../upload/upload.html">Uploads</a>
+      </nav>
       <p id="private-notice" class="card" hidden>Integrations are unavailable in private windows. Open this page in a normal Firefox window.</p>
       <div id="status" role="status" aria-live="polite"></div>
       <div id="error" role="alert" hidden></div>
       <section id="content" hidden>
-        <p id="account"></p>
-        <p id="signin-note">Use your existing AnyDownload account. <a href="../sync/sync.html">Sign in or restore cloud permissions on the Sync page.</a></p>
-        <section class="card">
-          <h2>Saved connections</h2>
-          <label for="connections">Connection</label>
-          <select id="connections" disabled><option value="">New Immich connection</option></select>
-          <p class="hint">Choose a connection to replace its key or disconnect it. Use a new connection to configure another server.</p>
-        </section>
-        <form id="connection-form" class="card">
-          <h2 id="form-title">Connect a server</h2>
-          <label for="provider">Provider</label>
-          <select id="provider" disabled><option value="immich">Immich</option></select>
-          <label for="server-url">Server URL</label>
-          <input id="server-url" type="url" required maxlength="2048" placeholder="http://192.168.0.103:2283" autocomplete="off" spellcheck="false" disabled>
-          <p class="hint">HTTP, HTTPS, LAN addresses and Tailscale hostnames are supported. An Immich /albums address is normalized to its server.</p>
-          <label for="api-key">Immich API key</label>
-          <input id="api-key" type="password" required maxlength="4096" autocomplete="off" spellcheck="false" aria-describedby="key-note" disabled>
-          <p id="key-note" class="hint">Create a key in Immich with asset.upload. To choose albums, also grant album.read, albumAsset.create and user.read. Keys are encrypted in your AnyDownload account and are never shown again.</p>
-          <div class="actions">
-            <button id="save" class="primary-button" type="submit" disabled>Test &amp; save connection</button>
-            <button id="disconnect" type="button" hidden disabled>Disconnect &amp; delete key</button>
-            <button id="cancel" type="button" hidden>Cancel test</button>
-          </div>
-          <p class="hint">Disconnecting deletes the saved key and connection; uploaded images stay in Immich.</p>
-        </form>
-        <p class="hint">Tests, album requests and uploads run on this device. For a private server, connect to its LAN or your existing Tailscale network. Supabase stores the encrypted key and connection settings; it does not carry your media.</p>
-        <p><a href="../upload/upload.html">Open upload progress, retry unfinished uploads, or select images saved on this device</a></p>
+        <div class="account-strip">
+          <div><p id="account">Checking your account…</p><p id="signin-note" class="hint">Use your AnyDownload account to save connections across devices.</p></div>
+          <a id="account-link" class="button-link" data-source-link href="../sync/sync.html">Account</a>
+        </div>
+        <div class="connections-layout">
+          <form id="connection-form" class="card connection-card">
+            <div class="provider-heading">
+              <span class="provider-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m3 16 5-5 5 5 3-3 5 5"/></svg></span>
+              <div><h2>Immich</h2><p class="hint">Your personal photo library</p></div>
+              <span id="connection-count" class="status-badge">No connections</span>
+            </div>
+            <div class="saved-connections">
+              <label for="connections">Connection</label>
+              <select id="connections" aria-describedby="connections-note" disabled><option value="">New Immich connection</option></select>
+              <p id="connections-note" class="hint">Add a server, or choose a saved connection to update its key.</p>
+            </div>
+            <h3 id="form-title">Connect a server</h3>
+            <label for="server-url">Server URL</label>
+            <input id="server-url" type="url" required maxlength="2048" placeholder="http://192.168.0.103:2283" autocomplete="off" spellcheck="false" aria-describedby="server-note" disabled>
+            <p id="server-note" class="hint">Use your Immich address. Local networks and Tailscale work too.</p>
+            <label for="api-key">API key</label>
+            <input id="api-key" type="password" required maxlength="4096" placeholder="Paste your Immich API key" autocomplete="off" spellcheck="false" aria-describedby="key-note" disabled>
+            <p id="key-note" class="hint">Encrypted in your account. Your saved key is never shown again.</p>
+            <details class="key-help">
+              <summary>Which API key permissions do I need?</summary>
+              <p class="hint">Create a key in Immich with <code>asset.upload</code>. For albums, also enable <code>album.read</code>, <code>albumAsset.create</code> and <code>user.read</code>.</p>
+            </details>
+            <div class="actions">
+              <button id="save" class="primary-button" type="submit" disabled>Test &amp; save connection</button>
+              <button id="cancel" type="button" hidden>Cancel test</button>
+            </div>
+            <div id="disconnect-section" class="disconnect-section" hidden>
+              <button id="disconnect" class="danger-button" type="button" hidden disabled>Disconnect &amp; delete key</button>
+              <p class="hint">Uploaded images stay in Immich.</p>
+            </div>
+          </form>
+          <aside class="connection-sidebar" aria-label="Uploading to Immich">
+            <section class="card upload-card">
+              <span class="upload-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 15V3M7 8l5-5 5 5M4 15v6h16v-6"/></svg></span>
+              <p class="eyebrow">From page to library</p>
+              <h2>A home for your finds</h2>
+              <p class="hint">Send images from a webpage or your device to Immich, with an album of your choice.</p>
+              <a class="button-link" data-source-link href="../upload/upload.html">Open uploads <span aria-hidden="true">→</span></a>
+            </section>
+            <section class="card steps-card">
+              <h2>Your next upload</h2>
+              <ol class="device-steps">
+                <li><span class="step-number" aria-hidden="true">1</span><strong>Connect your library</strong><span>Save your server address and API key.</span></li>
+                <li><span class="step-number" aria-hidden="true">2</span><strong>Choose your images</strong><span>Use Upload selected in the media manager, or choose files from your device.</span></li>
+                <li><span class="step-number" aria-hidden="true">3</span><strong>Upload and follow along</strong><span>Keep the upload tab open. Check progress and retry unfinished images there.</span></li>
+              </ol>
+            </section>
+          </aside>
+        </div>
+        <details class="privacy-details">
+          <summary>How your connection and images are handled</summary>
+          <p>Tests, album requests and uploads run on this device. Connect to your server’s local network or Tailscale network before uploading. HTTP and HTTPS are supported; an Immich /albums address is normalized to its server.</p>
+          <p>Your account stores the encrypted key and connection settings. Images travel directly from Firefox to Immich.</p>
+        </details>
       </section>
     </main>
     <script src="../shared/navigation.js"></script>

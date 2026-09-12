@@ -28,6 +28,10 @@
             <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M8 4H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-3M11 3h6v6M9 11l8-8"/></svg>
           </button>
         </div>
+        <div class="workspace-actions" role="group" aria-label="Account and integrations">
+          <button id="sync-button" class="secondary-button" type="button" disabled><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="6" r="3"/><path d="M4 17v-2a6 6 0 0 1 12 0v2"/></svg>Account</button>
+          <button id="integrations-button" class="secondary-button" type="button" disabled><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M7 2v4m6-4v4M5 6h10v3a5 5 0 0 1-10 0V6Zm5 8v4"/></svg>Integrations</button>
+        </div>
       </header>
 
       <section class="controls" aria-label="Media controls">
@@ -45,7 +49,8 @@
             </label>
             <button id="collect-gallery-button" class="secondary-button" type="button" disabled>Collect gallery</button>
             <button id="stop-gallery-button" class="secondary-button" type="button" hidden>Stop collecting</button>
-            <button class="icon-button" type="button" popovertarget="page-tools-panel" aria-label="Collection settings and page tracking" title="Collection settings and page tracking">
+            <button id="tracker-button" class="secondary-button tracker-button" type="button" popovertarget="page-tools-panel" aria-expanded="false" aria-controls="tracker-panel" disabled>Track page</button>
+            <button class="icon-button" type="button" popovertarget="page-tools-panel" aria-label="Collection settings" title="Collection settings">
               <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="4" cy="10" r="1"/><circle cx="10" cy="10" r="1"/><circle cx="16" cy="10" r="1"/></svg>
             </button>
           </div>
@@ -194,10 +199,7 @@
         <input id="backgrounds-input" type="checkbox" checked><span>Include background images on the next scan</span>
       </label>
       <div class="page-tool-actions">
-        <button id="tracker-button" class="secondary-button tracker-button" type="button" aria-expanded="false" aria-controls="tracker-panel" disabled>Track page</button>
         <button id="sidebar-button" class="secondary-button sidebar-button" type="button" title="Open Firefox Sidebar" aria-label="Open Firefox Sidebar">Open Firefox Sidebar</button>
-        <button id="sync-button" class="secondary-button" type="button" disabled>Cloud sync</button>
-        <button id="integrations-button" class="secondary-button" type="button" disabled>Integrations &amp; uploads</button>
         <button id="clear-gallery-button" class="text-button danger-button" type="button" title="Clear saved media and selections for this website. Downloaded files and history are kept. Undo is available until you leave this website or close the manager." disabled>Clear website collection</button>
       </div>
       <div id="tracker-panel" class="tracker-panel" hidden>

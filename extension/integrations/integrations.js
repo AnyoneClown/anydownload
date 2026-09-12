@@ -20,13 +20,17 @@
   function render() {
     const saved = selected();
     const disabled = busy || !account.signedIn;
-    for (const id of ["connections", "provider", "api-key", "save", "disconnect"]) elements[id].disabled = disabled;
+    for (const id of ["connections", "api-key", "save", "disconnect"]) elements[id].disabled = disabled;
     elements["server-url"].disabled = disabled || Boolean(saved);
     elements.disconnect.hidden = !saved;
+    elements["disconnect-section"].hidden = !saved;
     elements.cancel.hidden = !active;
     elements["form-title"].textContent = saved ? "Replace this server’s API key" : "Connect a server";
     elements.save.textContent = saved ? "Test & replace key" : "Test & save connection";
     elements.account.textContent = account.signedIn ? `Signed in as ${account.email || "your AnyDownload account"}.` : "Sign in to save and use external connections.";
+    elements["signin-note"].hidden = Boolean(account.signedIn);
+    elements["account-link"].textContent = account.signedIn ? "Manage account" : "Sign in";
+    elements["connection-count"].textContent = connections.length ? `${connections.length} saved` : "No connections";
   }
   function choose() {
     elements["api-key"].value = "";
@@ -60,7 +64,7 @@
       elements.connections.value = connections.some(value => value.id === selectedId) ? selectedId : "";
       render();
     } catch (_error) {
-      error("Could not load connections. Sign in or restore permissions on the Sync page, then reopen Integrations.");
+      error("Could not load connections. Sign in or restore permissions on the Account page, then reopen Integrations.");
     } finally {
       refreshing = false;
       render();

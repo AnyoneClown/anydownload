@@ -63,6 +63,7 @@ html.responsive-surface .app-shell {
 .app-header {
   grid-area: header;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 16px;
   padding: 12px 20px;
@@ -94,6 +95,7 @@ h2 {
 }
 
 .header-actions,
+.workspace-actions,
 .gallery-toolbar,
 .action-buttons,
 .page-tool-actions {
@@ -103,6 +105,8 @@ h2 {
 }
 
 .page-tool-actions { flex-wrap: wrap; }
+.gallery-toolbar { flex-wrap: wrap; }
+.workspace-actions { flex: none; margin-left: auto; }
 .collection-scope-field { min-width: 135px; }
 .dimension-filter-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; grid-column: 1 / -1; }
 .dimension-filter-help { grid-column: 1 / -1; }
@@ -931,6 +935,11 @@ svg {
     gap: 2px;
   }
 
+  .workspace-actions {
+    flex-basis: 100%;
+    justify-content: flex-end;
+  }
+
   .nav-link {
     gap: 5px;
     padding: 6px;
@@ -997,6 +1006,7 @@ svg {
 
   .gallery-toolbar {
     flex: none;
+    width: 100%;
     gap: 2px;
   }
 
@@ -1058,10 +1068,6 @@ svg {
 }
 
 @media (max-width: 520px) {
-  .app-header {
-    flex-wrap: nowrap;
-  }
-
   .app-header .workspace-nav {
     margin-left: auto;
   }
@@ -1077,6 +1083,7 @@ svg {
 
 @media (max-width: 390px) {
   .app-brand h1 { display: none; }
+  .collection-scope-field { width: 110px; }
   .media-type-field {
     flex-basis: 95px;
   }

@@ -177,6 +177,10 @@ async function settingsChecks() {
   }
   const page = await openPage();
   const { nodes } = page;
+  assert.equal(nodes["signin-note"].hidden, true);
+  assert.equal(nodes["account-link"].textContent, "Manage account");
+  assert.equal(nodes["connection-count"].textContent, "1 saved");
+  assert.equal(nodes["disconnect-section"].hidden, true);
   nodes["server-url"].value = `${saved.serverUrl}/albums`;
   nodes["api-key"].value = KEY;
   const save = nodes["connection-form"].listeners.submit({ preventDefault() {} });
@@ -208,6 +212,7 @@ async function settingsChecks() {
   replacing.nodes.connections.value = saved.id;
   replacing.nodes.connections.listeners.change();
   assert.equal(replacing.nodes["server-url"].disabled, true);
+  assert.equal(replacing.nodes["disconnect-section"].hidden, false);
   assert.equal(replacing.nodes["api-key"].value, "");
   replacing.nodes["api-key"].value = KEY;
   const replacement = replacing.nodes["connection-form"].listeners.submit({ preventDefault() {} });
@@ -217,6 +222,13 @@ async function settingsChecks() {
   assert.equal(replacementMessage.connectionId, saved.id);
   assert.equal(replacementMessage.defaultAlbumId, OTHER, "Replacing a key preserves the remembered default album");
   replacing.lifecycle.pagehide();
+
+  const signedOut = await openPage({ signedIn: false });
+  assert.equal(signedOut.nodes["account-link"].textContent, "Sign in");
+  assert.equal(signedOut.nodes["signin-note"].hidden, false);
+  assert.equal(signedOut.nodes["connection-count"].textContent, "No connections");
+  assert.equal(signedOut.nodes.save.disabled, true);
+  signedOut.lifecycle.pagehide();
 
   for (const denied of [true, false]) {
     const failed = await openPage({ failedTest: !denied });

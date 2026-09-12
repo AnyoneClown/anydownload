@@ -4,6 +4,13 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.17.0] - 2026-09-12
+
+### Changed
+
+- Surfaced **Track page**, **Account**, and **Integrations** as direct manager buttons. Renamed the Cloud sync navigation entry to **Account**.
+- Redesigned Connections and Uploads with consistent navigation, clearer setup, a dedicated image picker, readable transfer results and history, and responsive light/dark layouts.
+
 ### Fixed
 
 - Deployed the missing Immich connection backend to the shared service on 2026-09-12, resolving the missing endpoint behind **Could not load connections**. Narrowed Vault permission revocation to its public API so the migration works with hosted Supabase permissions. Available to existing 1.16.0 installations without an extension update.

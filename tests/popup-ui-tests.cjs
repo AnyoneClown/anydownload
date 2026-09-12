@@ -152,6 +152,23 @@ ui.applySmartFiltersToControls(Filters.DEFAULT_FILTERS);
 ui.wireEvents();
 const get = id => nodes.get(id);
 
+get("tracker-button").listeners.click({ preventDefault() {} });
+assert.equal(get("page-tools-panel").open, true, "Track page opens its settings directly");
+assert.equal(get("tracker-panel").hidden, false);
+assert.equal(get("tracker-interval-select").focused, true);
+assert.equal(get("tracker-button").attributes["aria-expanded"], "true");
+get("tracker-button").listeners.click({ preventDefault() {} });
+assert.equal(get("page-tools-panel").open, false, "Track page toggles its open settings closed");
+get("page-tools-panel").listeners.toggle();
+assert.equal(get("tracker-button").attributes["aria-expanded"], "false", "Closing settings resets the tracker button");
+get("tracker-panel").hidden = true;
+get("page-tools-panel").showPopover();
+get("tracker-button").listeners.click({ preventDefault() {} });
+assert.equal(get("page-tools-panel").open, true, "Track page expands tracking when collection settings are already open");
+assert.equal(get("tracker-panel").hidden, false);
+get("page-tools-panel").hidePopover();
+get("page-tools-panel").listeners.toggle();
+
 get("list-view-button").listeners.click();
 assert.equal(get("image-list").dataset.view, "list");
 assert.equal(get("list-view-button").attributes["aria-pressed"], "true");

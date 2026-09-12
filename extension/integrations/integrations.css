@@ -1,13 +1,72 @@
-.page-shell { max-width: 760px; }
-.card { margin: 18px 0; padding: 22px; }
-h2 { margin: 0 0 16px; font-size: 18px; }
-label { display: block; margin: 16px 0 6px; font-weight: 600; }
-input, select { width: 100%; min-height: 44px; padding: 10px; color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); }
+.page-shell { max-width: 1040px; }
+.dashboard h1 { font-size: clamp(30px, 4vw, 40px); }
+.page-header .subtitle { max-width: 580px; margin-top: 12px; }
+.page-header > .button-link { flex: none; }
+.button-link { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 44px; padding: 10px 16px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); color: var(--ink); background: var(--surface); font-size: 13px; font-weight: 600; text-decoration: none; }
+.button-link:hover { border-color: var(--brand); background: var(--brand-soft); }
+.button-link svg { width: 18px; height: 18px; }
+.button-link.primary-button:hover { background: var(--brand-hover); }
+svg { fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; }
+.integration-tabs { display: flex; gap: 4px; width: fit-content; padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-subtle); }
+.integration-tabs a { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 8px 18px; border-radius: 6px; color: var(--ink-muted); font-size: 13px; font-weight: 600; text-decoration: none; }
+.integration-tabs a:hover { color: var(--ink); }
+.integration-tabs .current { color: var(--ink); background: var(--surface); box-shadow: var(--shadow-sm); }
+.account-strip { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 24px 0; }
+.account-strip p { margin: 0; color: var(--ink-muted); font-size: 13px; }
+.account-strip .hint { margin-top: 4px; }
+.account-strip .button-link { flex: none; }
+.connections-layout { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+.dashboard .connection-card { padding: 28px; border-top: 3px solid var(--brand); }
+.provider-heading { display: flex; align-items: center; gap: 12px; }
+.provider-heading .hint { margin: 3px 0 0; }
+.provider-heading .status-badge { margin-left: auto; white-space: nowrap; }
+.provider-icon, .upload-icon { display: grid; place-items: center; flex: none; width: 44px; height: 44px; border: 1px solid var(--line); border-radius: 12px; color: var(--brand-ink); background: var(--brand-soft); }
+.provider-icon svg, .upload-icon svg { width: 25px; height: 25px; }
+.saved-connections { margin: 24px 0; padding: 20px 0; border-block: 1px solid var(--line); }
+.saved-connections label { margin-top: 0; }
+.saved-connections .hint { margin-bottom: 0; }
+label { display: block; margin: 18px 0 7px; font-size: 13px; font-weight: 600; }
+input, select { width: 100%; min-width: 0; min-height: 44px; padding: 11px 12px; color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); }
+.dashboard select { min-height: 44px; font-size: 13px; }
+input::placeholder { color: var(--ink-muted); }
+input:disabled, select:disabled { opacity: .6; cursor: default; }
 .hint { color: var(--ink-muted); font-size: 13px; line-height: 1.6; }
-.actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0; }
-button { min-height: 44px; padding: 10px 16px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong); color: var(--ink); background: var(--surface-raised); cursor: pointer; }
-.primary-button { background: var(--brand); color: var(--on-brand); border-color: var(--brand); }
-button:disabled, input:disabled, select:disabled { opacity: .6; cursor: default; }
-#status, #error { overflow-wrap: anywhere; }
-#error { padding: 12px; color: var(--danger); background: var(--danger-soft); border-radius: var(--radius-sm); }
-@media (max-width: 480px) { .card { padding: 16px; } .actions button { width: 100%; } }
+input + .hint { margin: 8px 0 0; }
+.key-help { margin-top: 16px; font-size: 12px; }
+.key-help summary { color: var(--ink-muted); cursor: pointer; }
+.key-help code { padding: 1px 4px; border-radius: 4px; color: var(--ink); background: var(--surface-subtle); overflow-wrap: anywhere; }
+.connection-card .actions { margin-top: 24px; }
+.connection-card .primary-button { flex: 1; font-weight: 600; }
+.disconnect-section { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--line); }
+.disconnect-section .hint { margin: 0; font-size: 12px; }
+.dashboard .danger-button { border-color: var(--line); color: var(--danger); }
+.connection-sidebar { display: grid; gap: 20px; }
+.dashboard .upload-card { padding: 28px; background: var(--brand-soft); border-color: var(--brand-soft); }
+.upload-icon { width: 48px; height: 48px; margin-bottom: 24px; border-color: var(--surface); background: var(--surface); }
+.upload-card .eyebrow { color: var(--brand-ink); margin-bottom: 8px; }
+.upload-card h2 { font-size: 22px; }
+.upload-card .hint { margin: 12px 0 22px; }
+.upload-card .button-link { width: 100%; }
+.steps-card h2 { margin-bottom: 22px; }
+.steps-card .device-steps { margin: 0; }
+#status:not(:empty), #error { margin-top: 20px; padding: 13px 16px; border-radius: var(--radius-sm); overflow-wrap: anywhere; font-size: 13px; }
+#status:not(:empty) { color: var(--brand-ink); background: var(--brand-soft); }
+#error { color: var(--danger); background: var(--danger-soft); border-left: 3px solid var(--danger); }
+@media (max-width: 740px) {
+  .connections-layout { grid-template-columns: 1fr; }
+  .page-header { align-items: flex-start; }
+  .page-header > .button-link { margin-top: 18px; }
+}
+@media (max-width: 480px) {
+  .integration-tabs { width: 100%; }
+  .integration-tabs a { flex: 1; }
+  .page-header { flex-direction: column; gap: 0; }
+  .page-header > .button-link { width: 100%; }
+  .account-strip { align-items: flex-start; }
+  .account-strip .button-link { min-height: 40px; padding: 8px 12px; }
+  .dashboard .connection-card, .dashboard .upload-card { padding: 20px; }
+  .provider-heading { flex-wrap: wrap; }
+  .provider-heading .status-badge { margin-left: 0; }
+  .disconnect-section button { width: 100%; }
+  .workspace-nav { flex-wrap: wrap; }
+}
