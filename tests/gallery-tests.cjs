@@ -89,6 +89,8 @@ function popupHarness(stored = { local: [], session: [] }) {
   let statusWait = null;
   let statusStarted = null;
   let updatedListener = null;
+  let clearError = false;
+  let scanError = false;
   const tab = { id: 1, url: `${siteKey}/one`, title: "one", incognito: false, windowId: 1, active: true };
   const context = {
     URL, TextEncoder, TextDecoder, console, Date,
@@ -140,6 +142,7 @@ function popupHarness(stored = { local: [], session: [] }) {
         getURL: file => `moz-extension://test/${file}`,
         async sendMessage(message) {
           if (message.type === "SITE_GALLERY") {
+            if (message.action === "clear" && clearError) return { ok: false, error: "Clear failed" };
             const area = message.incognito ? "session" : "local";
             if (message.action === "get") {
               return { ok: true, gallery: Gallery.getSite(stored[area], message.siteKey) };
@@ -181,6 +184,7 @@ function popupHarness(stored = { local: [], session: [] }) {
             scanStarted = null;
             await wait;
           }
+          if (scanError) throw new Error("Scan failed");
           return [{ frameId: 0, result: { images: sourceImages, pageUrl: tab.url, pageTitle: tab.title, warnings: [] } }];
         }
       }
@@ -213,6 +217,8 @@ function popupHarness(stored = { local: [], session: [] }) {
     popup, tab, stored, elements, fetchedPages,
     enableNextPages() { continuePagination = true; },
     setImages(images) { sourceImages = images; },
+    failClear() { clearError = true; },
+    failScan() { scanError = true; },
     delayScan(promise) {
       scanWait = promise;
       return new Promise(resolve => { scanStarted = resolve; });
@@ -310,6 +316,67 @@ async function checkPopup() {
   await fresh.popup.scanPage();
   assert.deepEqual(Array.from(fresh.popup.state.images, item => item.url), ["https://cdn.test/current-page.jpg"],
     "Reopening after Clear media must scan the current page without restoring the old gallery");
+}
+
+async function checkRefreshMedia() {
+  for (const incognito of [false, true]) {
+    const harness = popupHarness();
+    const { popup, elements, stored } = harness;
+    harness.tab.incognito = incognito;
+    const area = incognito ? "session" : "local";
+    const otherArea = incognito ? "local" : "session";
+    stored[otherArea] = Gallery.updateSites([], { siteKey, epoch: 0, records: [photo("unrelated-context")] }).sites;
+    stored[area] = Gallery.updateSites([], {
+      siteKey: "https://other.test", epoch: 0,
+      records: [{ ...photo("other-site"), pageUrl: "https://other.test/page" }]
+    }).sites;
+    const otherContext = JSON.stringify(stored[otherArea]);
+    const otherSite = JSON.stringify(Gallery.getSite(stored[area], "https://other.test"));
+    harness.setImages([photo("old"), photo("one")]);
+    await popup.scanPage();
+    popup.wireEvents();
+    popup.state.showSelected = true;
+    popup.state.explicitRedownloads.add("old-fingerprint");
+    const epoch = Gallery.getSite(stored[area], siteKey).epoch;
+    harness.setImages([photo("current")]);
+    await elements.get("refresh-media-button").listeners.get("click")();
+    assert.deepEqual(Array.from(popup.state.images, item => item.url), [photo("current").url]);
+    assert.deepEqual(Array.from(popup.state.selected), [photo("current").url]);
+    assert.equal(popup.state.explicitRedownloads.size, 0);
+    assert.equal(popup.state.showSelected, false);
+    assert.equal(popup.state.liveCapture, true, "Live updates resume after the fresh scan");
+    assert.match(elements.get("notice").textContent, /Media refreshed/);
+    assert.equal(harness.scrolls, 0, "Refresh must not auto-scroll");
+    assert.equal(harness.fetchedPages.length, 0, "Refresh must not crawl linked pages");
+    assert.deepEqual(Gallery.getSite(stored[area], siteKey).records.map(item => item.url), [photo("current").url]);
+    assert.ok(Gallery.getSite(stored[area], siteKey).epoch > epoch);
+    assert.equal(JSON.stringify(stored[otherArea]), otherContext);
+    assert.equal(JSON.stringify(Gallery.getSite(stored[area], "https://other.test")), otherSite);
+
+    const reopened = popupHarness(stored);
+    reopened.tab.incognito = incognito;
+    reopened.setImages([photo("current")]);
+    await reopened.popup.scanPage();
+    assert.deepEqual(Array.from(reopened.popup.state.images, item => item.url), [photo("current").url],
+      "Reopening must not restore the discarded collection");
+
+    harness.setImages([]);
+    await elements.get("refresh-media-button").listeners.get("click")();
+    assert.equal(popup.state.images.length, 0);
+    assert.equal(elements.get("refresh-media-button").disabled, false, "An empty page can be refreshed again");
+  }
+
+  for (const failure of ["failClear", "failScan"]) {
+    const harness = popupHarness();
+    await harness.popup.scanPage();
+    harness.popup.wireEvents();
+    harness[failure]();
+    await harness.elements.get("refresh-media-button").listeners.get("click")();
+    assert.equal(harness.popup.state.images.length, failure === "failClear" ? 1 : 0,
+      "A failed clear preserves media; a failed scan must not resurrect cleared media");
+    assert.match(harness.elements.get("notice").textContent, /failed/);
+    assert.equal(harness.popup.state.busy, false);
+  }
 }
 
 async function checkSelectionDuringScan() {
@@ -618,6 +685,7 @@ function checkScrolling() {
 
 (async () => {
   await checkPopup();
+  await checkRefreshMedia();
   await checkSelectionDuringScan();
   await checkSavedCollectionView();
   await checkFixedPageLimit();

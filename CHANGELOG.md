@@ -4,6 +4,12 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.19.0] - 2026-09-16
+
+### Added
+
+- Added **Refresh media** beside **Find more media** to clear the current website's remembered collection and scan the current page again, keeping downloaded files and history.
+
 ## [1.18.0] - 2026-09-12
 
 ### Changed

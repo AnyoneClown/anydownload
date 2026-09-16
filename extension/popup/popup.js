@@ -807,6 +807,7 @@
       "clear-ignored-button",
       "clear-gallery-button",
       "collect-gallery-button",
+      "refresh-media-button",
       "stop-gallery-button",
       "gallery-status",
       "download-button",
@@ -3368,6 +3369,7 @@
     const collecting = Boolean(galleryCollection);
     elements["collect-gallery-button"].hidden = collecting;
     elements["collect-gallery-button"].disabled = state.busy || !state.siteKey || !Number.isInteger(state.sourceTabId);
+    elements["refresh-media-button"].disabled = collecting || state.busy || !galleryContext || !Number.isInteger(state.sourceTabId);
     elements["stop-gallery-button"].hidden = !collecting;
     elements["clear-gallery-button"].disabled = collecting || state.busy || !state.images.length;
     elements["gallery-undo"].hidden = !clearedGallery || clearedGallery.context !== galleryContext || clearedGallery.epoch !== galleryContext.epoch;
@@ -3535,7 +3537,7 @@
     renderImages();
   }
 
-  async function clearSiteGallery() {
+  async function clearSiteGallery(options) {
     const context = galleryContext;
     if (!context || state.busy || galleryCollection) {
       return;
@@ -3558,13 +3560,36 @@
         clearedGallery = { context, epoch: result.gallery.epoch, records, explicitRedownloads };
         closeMediaFilters();
         setNotice(`Saved media for ${hostFromUrl(context.siteKey)} cleared. Downloaded files and history are kept.`);
+        return true;
       }
     } catch (error) {
       setNotice(error.message || String(error), "error");
     } finally {
       state.busy = false;
       renderImages();
-      if (clearedGallery && clearedGallery.context === galleryContext) elements["undo-clear-button"].focus({ preventScroll: true });
+      if (!(options && options.refresh) && clearedGallery && clearedGallery.context === galleryContext) {
+        elements["undo-clear-button"].focus({ preventScroll: true });
+      }
+    }
+  }
+
+  async function refreshMedia() {
+    if (state.busy || galleryCollection || !galleryContext || !Number.isInteger(state.sourceTabId)) return;
+    const context = galleryContext;
+    const sourceTabId = state.sourceTabId;
+    const pageUrl = state.pageUrl;
+    const cleared = await clearSiteGallery({ refresh: true });
+    if (!cleared || galleryContext !== context || state.sourceTabId !== sourceTabId || state.pageUrl !== pageUrl) return;
+
+    state.explicitRedownloads.clear();
+    resetCollectionView();
+    const generation = sourcePageGeneration;
+    const scanned = await scanPage({ pinnedSource: true });
+    if (scanned && generation === sourcePageGeneration) {
+      if (!state.scanWarnings.length) {
+        setNotice(`Media refreshed. Found ${state.images.length.toLocaleString()} item${state.images.length === 1 ? "" : "s"} on the current page.`, "success");
+      }
+      await startLiveCapture({ skipInitialScan: true, quiet: true });
     }
   }
 
@@ -5185,6 +5210,9 @@
       collectGallery().catch((error) => setNotice(error.message || String(error), "error"));
     });
     elements["stop-gallery-button"].addEventListener("click", stopGalleryCollection);
+    elements["refresh-media-button"].addEventListener("click", () => {
+      return refreshMedia().catch((error) => setNotice(error.message || String(error), "error"));
+    });
     elements["clear-gallery-button"].addEventListener("click", clearSiteGallery);
     globalThis.addEventListener("pagehide", () => {
       stopGalleryCollection();
