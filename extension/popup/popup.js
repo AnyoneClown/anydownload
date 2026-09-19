@@ -806,7 +806,6 @@
       "backgrounds-input",
       "clear-ignored-button",
       "clear-gallery-button",
-      "collect-gallery-button",
       "refresh-media-button",
       "stop-gallery-button",
       "gallery-status",
@@ -2949,9 +2948,9 @@
     elements["select-all-button"].disabled = selectionBusy || !visible.some((image) =>
       downloadStatusFor(image) !== "downloaded" && imageCanBeSelected(image)
     );
-    elements["select-none-button"].disabled = selectionBusy || !visible.some((image) => state.selected.has(image.url));
+    elements["select-none-button"].disabled = selectionBusy || selected === 0;
     elements["select-all-button"].textContent = hasFilter ? "Select matches only" : "Select all";
-    elements["select-none-button"].textContent = hasFilter ? "Deselect matches" : "Deselect";
+    elements["select-none-button"].textContent = "Deselect";
     elements["download-button"].hidden = state.showIgnored;
     elements["archive-footer-button"].hidden = state.showIgnored;
     elements["upload-button"].hidden = state.showIgnored || state.incognito;
@@ -3345,7 +3344,7 @@
       } else {
         detail.textContent = state.images.length
           ? "Try a different search or clear your filters to see more of your collection."
-          : "Scroll the source page to load more images and videos, or use Find more media to scan automatically.";
+          : "Scroll or expand the source page to load more images and videos; this collection updates automatically.";
       }
       empty.append(title, detail);
       if (hasCollectionFilter() && !state.showSelected) {
@@ -3382,9 +3381,8 @@
       return;
     }
     const collecting = Boolean(galleryCollection);
-    elements["collect-gallery-button"].hidden = collecting;
-    elements["collect-gallery-button"].disabled = state.busy || !state.siteKey || !Number.isInteger(state.sourceTabId);
-    elements["refresh-media-button"].disabled = collecting || state.busy || !galleryContext || !Number.isInteger(state.sourceTabId);
+    elements["refresh-media-button"].hidden = collecting;
+    elements["refresh-media-button"].disabled = state.busy || !galleryContext || !Number.isInteger(state.sourceTabId);
     elements["stop-gallery-button"].hidden = !collecting;
     elements["clear-gallery-button"].disabled = collecting || state.busy || !state.images.length;
     elements["gallery-undo"].hidden = !clearedGallery || clearedGallery.context !== galleryContext || clearedGallery.epoch !== galleryContext.epoch;
@@ -5217,9 +5215,6 @@
         persistSettings({ mediaLayout: view }).catch((error) => setNotice(error.message, "error"));
       });
     }
-    elements["collect-gallery-button"].addEventListener("click", () => {
-      collectGallery().catch((error) => setNotice(error.message || String(error), "error"));
-    });
     elements["stop-gallery-button"].addEventListener("click", stopGalleryCollection);
     elements["refresh-media-button"].addEventListener("click", () => {
       return refreshMedia().catch((error) => setNotice(error.message || String(error), "error"));
@@ -5330,17 +5325,8 @@
       renderImages();
     });
     elements["select-none-button"].addEventListener("click", () => {
-      if (hasCollectionFilter()) {
-        for (const image of filteredImages()) {
-          state.selected.delete(image.url);
-          if (image.downloadFingerprint) {
-            state.explicitRedownloads.delete(image.downloadFingerprint);
-          }
-        }
-      } else {
-        state.selected.clear();
-        state.explicitRedownloads.clear();
-      }
+      state.selected.clear();
+      state.explicitRedownloads.clear();
       renderImages();
     });
     elements["archive-footer-button"].addEventListener("click", downloadSelectedArchive);
