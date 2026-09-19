@@ -4,6 +4,12 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.19.1] - 2026-09-19
+
+### Changed
+
+- Open **Upload selected** and upload history inside the current popup, manager, or Firefox Sidebar workspace instead of creating a separate browser tab.
+
 ## [1.19.0] - 2026-09-16
 
 ### Added

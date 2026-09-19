@@ -44,6 +44,7 @@
     const browser = options.browser || root.browser;
     const document = options.document || root.document;
     const location = options.location || root.location;
+    const workspace = options.workspace || root.parent?.AnyDownloadWorkspace;
     const locks = options.locks || root.navigator.locks;
     const elements = {};
     for (const element of document.querySelectorAll("[id]")) elements[element.id] = element;
@@ -78,9 +79,18 @@
       elements["error-banner"].hidden = !message;
     }
     function preserveTransfer(event, link) {
-      if (!busy) return;
-      event.preventDefault();
-      browser.tabs.create({ url: link.href, active: true }).catch(() => error("Firefox could not open that page."));
+      if (busy) {
+        event.preventDefault();
+        browser.tabs.create({ url: link.href, active: true }).catch(() => error("Firefox could not open that page."));
+        return;
+      }
+      const page = new URL(location.href);
+      const target = new URL(link.href, page);
+      if (page.searchParams.get("embedded") === "1" && workspace &&
+          target.protocol === page.protocol && target.host === page.host && target.pathname === "/upload/upload.html") {
+        event.preventDefault();
+        workspace.open("upload", target.search);
+      }
     }
     const selectedConnection = () => connections.find((entry) => entry.id === elements["connection-select"].value);
     function render() {
@@ -104,7 +114,7 @@
         ? job.status === "complete" ? "All images uploaded. Choose New upload to send more." : "To retry local images after reopening, choose the original files again."
         : items.length ? "Ready to upload. Choosing local files replaces this selection." : "Select up to 500 images for one upload.";
       if (busy && job && job.status !== "complete") {
-        elements["selection-note"].textContent = `Uploading ${imageCount} image${imageCount === 1 ? "" : "s"}. Keep this tab open.`;
+        elements["selection-note"].textContent = `Uploading ${imageCount} image${imageCount === 1 ? "" : "s"}. Keep this view open.`;
       }
       elements["progress-empty"].hidden = Boolean(job);
       elements["progress-panel"].dataset.state = job?.status || "ready";
@@ -437,7 +447,7 @@
     browser.runtime.onMessage.addListener((message, sender) => {
       if (message?.type === "INTEGRATIONS_CHANGED" && sender?.id === browser.runtime.id) refresh().catch(() => { client.cancel(); error("The saved connection changed. Reopen this page."); });
     });
-    for (const link of document.querySelectorAll("a")) link.addEventListener("click", (event) => preserveTransfer(event, link));
+    for (const link of document.querySelectorAll("a")) link.addEventListener("click", (event) => preserveTransfer(event, link), true);
 
     await refresh();
     render();

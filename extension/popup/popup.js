@@ -1502,15 +1502,28 @@
     history: ["history-button", "Downloads"],
     tracking: ["tracking-dashboard-button", "Trackers"],
     sync: ["sync-button", "Account"],
-    integrations: ["integrations-button", "Integrations"]
+    integrations: ["integrations-button", "Integrations"],
+    upload: ["integrations-button", "Uploads"]
   };
+  const navigationWorkspaces = ["media", "history", "tracking", "sync", "integrations"];
+  const UPLOAD_ROUTE_ID = /^[a-z0-9_-]{1,128}$/i;
 
-  function showWorkspace(view, trackerId) {
+  function showWorkspace(view, route = "") {
     if (!Object.hasOwn(workspaces, view) ||
-      state.incognito && ["tracking", "sync", "integrations"].includes(view)) return;
-    if (trackerId !== undefined && (view !== "tracking" || typeof trackerId !== "string" || !trackerId || trackerId.length > 200)) return;
+      state.incognito && ["tracking", "sync", "integrations", "upload"].includes(view)) return;
+    const trackerId = view === "tracking" ? route : "";
+    if (trackerId && (typeof trackerId !== "string" || trackerId.length > 200)) return;
     const frame = elements["workspace-frame"];
     const url = new URL(browser.runtime.getURL(trackerId ? "popup/popup.html" : `${view}/${view}.html`));
+    if (view === "upload" && route) {
+      if (typeof route !== "string") return;
+      const requested = new URLSearchParams(route.startsWith("?") ? route.slice(1) : route);
+      const requestId = requested.get("request");
+      const jobId = requested.get("job");
+      if (requestId && jobId || requestId && !UPLOAD_ROUTE_ID.test(requestId) || jobId && !UPLOAD_ROUTE_ID.test(jobId)) return;
+      if (requestId) url.searchParams.set("request", requestId);
+      if (jobId) url.searchParams.set("job", jobId);
+    }
     url.searchParams.set("embedded", "1");
     if (Number.isInteger(state.sourceTabId)) url.searchParams.set("sourceTabId", state.sourceTabId);
     if (trackerId) url.searchParams.set("editTrackerId", trackerId);
@@ -1521,9 +1534,11 @@
     else if (frame.src !== url.href) frame.src = url.href;
     frame.title = trackerId ? "Edit tracker" : workspaces[view][1];
     document.title = `AnyDownload — ${workspaces[view][1]}`;
-    for (const [key, [id]] of Object.entries(workspaces)) {
-      elements[id].classList.toggle("current", key === view);
-      if (key === view) elements[id].setAttribute("aria-current", "page");
+    const navigationView = view === "upload" ? "integrations" : view;
+    for (const key of navigationWorkspaces) {
+      const id = workspaces[key][0];
+      elements[id].classList.toggle("current", key === navigationView);
+      if (key === navigationView) elements[id].setAttribute("aria-current", "page");
       else elements[id].removeAttribute("aria-current");
     }
     for (const id of ["smart-filter-panel", "download-settings-panel", "tracker-panel"]) {
@@ -4425,14 +4440,10 @@
         createdAt: Date.now(), incognito: false,
         items: renderedDownloadItems(images, template.value).map(({ url, filename }) => ({ url, filename }))
       } });
-      await browser.tabs.create({ active: true,
-        url: browser.runtime.getURL(`upload/upload.html?request=${encodeURIComponent(id)}`),
-        ...(Number.isInteger(state.sourceWindowId) ? { windowId: state.sourceWindowId } : {})
-      });
-      setNotice("Choose your destination in Upload Progress. Keep that tab open during uploads.", "success");
+      showWorkspace("upload", `request=${encodeURIComponent(id)}`);
     } catch (_error) {
       await browser.storage.session.remove(key).catch(() => undefined);
-      setNotice("Firefox could not open Upload Progress. Please try again.", "error");
+      setNotice("Firefox could not open Uploads. Please try again.", "error");
     } finally {
       state.busy = false;
       updateSummary();
@@ -5218,7 +5229,8 @@
       stopGalleryCollection();
       saveCurrentGallery();
     });
-    for (const [view, [id]] of Object.entries(workspaces)) {
+    for (const view of navigationWorkspaces) {
+      const id = workspaces[view][0];
       elements[id].addEventListener("click", () => showWorkspace(view));
     }
     elements["tracker-panel"].addEventListener("toggle", () => {

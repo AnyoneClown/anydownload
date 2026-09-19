@@ -357,7 +357,7 @@ for (const embedded of [false, true]) {
   const links = [
     ["moz-extension://test/popup/popup.html", "media"],
     ...["history", "tracking", "sync", "integrations"].map(view => [`moz-extension://test/${view}/${view}.html`, view]),
-    ["moz-extension://test/upload/upload.html", null],
+    ["moz-extension://test/upload/upload.html?job=job-12345", "upload"],
     ["moz-extension://test/tracking/history.html", null],
     ["moz-extension://another-extension/sync/sync.html", null],
     ["https://test/sync/sync.html", null]
@@ -366,7 +366,7 @@ for (const embedded of [false, true]) {
   const opened = [];
   vm.runInNewContext(navigation, {
     URL, location: { href: `moz-extension://test/tracking/tracking.html?embedded=${Number(embedded)}` },
-    parent: { AnyDownloadWorkspace: { open: view => opened.push(view) } },
+    parent: { AnyDownloadWorkspace: { open: (view, route) => opened.push([view, route]) } },
     document: { querySelectorAll: () => links, documentElement: { classList: { add: name => classes.push(name) } } }
   });
   assert.deepEqual(classes, embedded ? ["embedded-workspace"] : []);
@@ -376,7 +376,10 @@ for (const embedded of [false, true]) {
     assert.equal(prevented, embedded && Boolean(link.view),
       "Only known same-extension destinations may route through an embedded workspace");
   }
-  assert.deepEqual(opened, embedded ? ["media", "history", "tracking", "sync", "integrations"] : [],
+  assert.deepEqual(opened, embedded ? [
+    ["media", ""], ["history", ""], ["tracking", ""], ["sync", ""], ["integrations", ""],
+    ["upload", "?job=job-12345"]
+  ] : [],
     "Embedded navigation works without a source tab and updates the persistent sidebar");
 }
 
@@ -605,17 +608,23 @@ for (const embedded of [false, true]) {
   ui.updateSummary();
   assert.equal(get("upload-button").disabled, false, "Previously downloaded images remain eligible for explicit upload");
   const downloadsBeforeUpload = downloadMessages.length;
+  const tabsBeforeUpload = openedTabs.length;
   await get("upload-button").listeners.click();
-  const uploadId = new URL(openedTabs.at(-1).url).searchParams.get("request");
+  assert.equal(ui.state.workspace, "upload", "Upload selected opens inside the current popup or sidebar");
+  const uploadUrl = new URL(workspaceFrame.src);
+  assert.equal(uploadUrl.pathname, "/upload/upload.html");
+  assert.equal(uploadUrl.searchParams.get("embedded"), "1");
+  const uploadId = uploadUrl.searchParams.get("request");
   assert.equal(previewSession[`uploadJobRequest:${uploadId}`].items[0].url, first.url);
+  assert.equal(openedTabs.length, tabsBeforeUpload, "Upload selected does not open a browser tab");
   assert.equal(downloadMessages.length, downloadsBeforeUpload, "Upload does not enqueue a local download");
   assert.equal(first.downloadStatus, "downloaded", "Upload does not overwrite local completion state");
-  const tabsBeforePrivateUpload = openedTabs.length;
+  const uploadSrcBeforePrivateUpload = workspaceFrame.src;
   ui.state.incognito = true;
   ui.updateSummary();
   assert.equal(get("upload-button").hidden, true);
   await get("upload-button").listeners.click();
-  assert.equal(openedTabs.length, tabsBeforePrivateUpload);
+  assert.equal(workspaceFrame.src, uploadSrcBeforePrivateUpload);
   ui.state.incognito = false;
 
   const tracker = context.AnyDownloadTracker.normalizeTracker({

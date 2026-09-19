@@ -17,11 +17,12 @@
       link.hidden = false;
     }
     const view = url.pathname === "/popup/popup.html" ? "media"
-      : /^\/(history|tracking|sync|integrations)\/\1\.html$/.exec(url.pathname)?.[1];
+      : /^\/(history|tracking|sync|integrations|upload)\/\1\.html$/.exec(url.pathname)?.[1];
     if (embedded && view) {
       link.addEventListener("click", (event) => {
+        if (event.defaultPrevented) return;
         event.preventDefault();
-        workspace.open(view);
+        workspace.open(view, view === "upload" ? url.search : "");
       });
     }
   }

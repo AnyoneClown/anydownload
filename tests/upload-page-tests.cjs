@@ -35,6 +35,7 @@ function harness({ privateWindow = false, href = "moz-extension://test/upload/up
   const local = clone(stored || { "downloadLedger:v1": { unchanged: true } });
   const session = { "uploadJobRequest:request-123": { createdAt: Date.now(), incognito: false, items: sourceItems } };
   const calls = [];
+  const workspaceCalls = [];
   const held = new Set();
   const chains = new Map();
   const locks = { async request(name, options, fn) {
@@ -94,9 +95,10 @@ function harness({ privateWindow = false, href = "moz-extension://test/upload/up
     assert.equal(signal.aborted, false);
     calls.push(["fetch", url]); return { bytes: png, contentType: "image/png" };
   } };
-  return { browser, document, elements, local, session, calls, held, locks, client, provider,
+  const workspace = { open: (view, route) => workspaceCalls.push([view, route]) };
+  return { browser, document, elements, local, session, calls, workspaceCalls, held, locks, client, provider,
     setAccount: value => { account = value; }, setAlbumFailure: value => { failAlbum = value; },
-    start: () => Page.initialize({ browser, document, location: { href }, locks, client, provider, imageFetch }) };
+    start: () => Page.initialize({ browser, document, location: { href }, locks, client, provider, imageFetch, workspace }) };
 }
 
 (async () => {
@@ -123,7 +125,7 @@ function harness({ privateWindow = false, href = "moz-extension://test/upload/up
   h.provider.uploadAsset = async (...args) => {
     assert.equal(h.elements["retry-button"].textContent, "Uploading…");
     assert.equal(h.elements["retry-button"].disabled, true);
-    assert.equal(h.elements["selection-note"].textContent, "Uploading 1 image. Keep this tab open.");
+    assert.equal(h.elements["selection-note"].textContent, "Uploading 1 image. Keep this view open.");
     return uploadAsset(...args);
   };
   await page.begin(false);
@@ -223,6 +225,13 @@ function harness({ privateWindow = false, href = "moz-extension://test/upload/up
   page = await h.start();
   assert.equal(h.elements["album-select"].value, "", "Library-only history stays library-only when the connection default changes");
   connection.defaultAlbumId = null;
+
+  h = harness({ href: "moz-extension://test/upload/upload.html?embedded=1", stored: { [Page.STORE_KEY]: [libraryJob] } });
+  await h.start();
+  let prevented = false;
+  h.elements["history-list"].children[0].children[0].listeners.click({ preventDefault() { prevented = true; } });
+  assert.equal(prevented, true, "Saved uploads keep navigation inside an embedded workspace");
+  assert.deepEqual(h.workspaceCalls, [["upload", `?job=${libraryJob.id}`]]);
 
   const interrupted = Uploads.createJob(sourceItems, { ownerId: OWNER, connectionId: CONNECTION, serverUrl: connection.serverUrl });
   interrupted.status = "running"; interrupted.items[0].uploadStatus = "uploading";
