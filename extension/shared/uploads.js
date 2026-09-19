@@ -14,19 +14,20 @@
     invalid_job: "The upload request is invalid. Create a new upload from the media manager.",
     wrong_connection: "This upload belongs to a different account or server. Reconnect the original destination to retry.",
     checkpoint_failed: "Upload progress could not be saved. Work stopped; any unconfirmed request requires an explicit retry.",
-    interrupted: "This upload was interrupted. Retry unfinished images explicitly; transfers do not resume their bytes.",
-    uncertain: "Immich may have received this image, but its result was not confirmed. Retry explicitly; Immich detects duplicate bytes.",
+    interrupted: "This upload was interrupted. Retry unfinished media explicitly; transfers do not resume their bytes.",
+    uncertain: "Immich may have received this media file, but its result was not confirmed. Retry explicitly; Immich detects duplicate bytes.",
     failed: "The operation failed. Check the source, connection, and permissions, then retry."
   });
   const PROVIDER_CODES = new Set(["invalid_server", "invalid_key", "missing_upload_permission", "missing_album_permission", "forbidden",
     "unreachable", "timeout", "cancelled", "unsupported_api", "invalid_response", "server_error", "rejected", "album_failed", "invalid_asset"]);
-  const IMAGE_CODES = new Set(["source_permission", "source_failed", "source_timeout", "image_too_large", "invalid_image", "embedded_image", "file_required"]);
+  const MEDIA_CODES = new Set(["source_permission", "source_failed", "source_timeout", "image_too_large", "video_too_large",
+    "invalid_image", "invalid_video", "embedded_image", "embedded_video", "file_required"]);
   function errorMessage(code) {
-    return LOCAL_MESSAGES[code] || (IMAGE_CODES.has(code) ? ImageFetch.errorMessage(code) :
+    return LOCAL_MESSAGES[code] || (MEDIA_CODES.has(code) ? ImageFetch.errorMessage(code) :
       PROVIDER_CODES.has(code) ? Immich.errorMessage(code) : LOCAL_MESSAGES.failed);
   }
   function safeCode(value) {
-    return Object.hasOwn(LOCAL_MESSAGES, value) || PROVIDER_CODES.has(value) || IMAGE_CODES.has(value) ? value : "failed";
+    return Object.hasOwn(LOCAL_MESSAGES, value) || PROVIDER_CODES.has(value) || MEDIA_CODES.has(value) ? value : "failed";
   }
   function failure(code) { return Object.assign(new Error(errorMessage(code)), { code: safeCode(code) }); }
   function timestamp(value) {
@@ -48,7 +49,15 @@
     const albumId = options.albumId || null;
     let totalUrlLength = 0;
     const normalized = items.map((item, index) => {
-      if (!item || typeof item !== "object" || Array.isArray(item) || item.mediaType === "video") throw failure("invalid_image");
+      if (!item || typeof item !== "object" || Array.isArray(item)) throw failure("invalid_job");
+      const indicatedType = String(item.mimeType || item.type || item.file && item.file.type || "");
+      const indicatedName = String(item.filename || item.file && item.file.name || item.url || "");
+      const inferredVideo = /^video\//i.test(indicatedType) || /\.(?:m4v|mkv|mov|mp4|ogg|ogv|webm)(?:$|[?#])/i.test(indicatedName);
+      const mediaType = item.mediaType === undefined ? inferredVideo ? "video" : "image" : item.mediaType;
+      if (!["image", "video"].includes(mediaType)) throw failure("invalid_job");
+      const invalidCode = mediaType === "video" ? "invalid_video" : "invalid_image";
+      const tooLargeCode = mediaType === "video" ? "video_too_large" : "image_too_large";
+      const embeddedCode = mediaType === "video" ? "embedded_video" : "embedded_image";
       const source = item.source === "file" || item.file instanceof Blob ? "file" : "url";
       let url = null;
       let size = null;
@@ -56,26 +65,28 @@
       if (source === "url") {
         const checked = Core.validateDownloadUrl(item.url);
         if (!checked.ok) throw failure("invalid_job");
-        if (checked.value.startsWith("data:")) throw failure("embedded_image");
+        if (checked.value.startsWith("data:")) throw failure(embeddedCode);
         const parsed = new URL(checked.value);
         if (parsed.username || parsed.password) throw failure("invalid_job");
-        if (/\.(?:m4v|mkv|mov|mp4|ogg|ogv|webm)$/i.test(parsed.pathname) ||
-            /^video\//i.test(item.mimeType || item.type || "")) throw failure("invalid_image");
+        if (mediaType === "image" && (/\.(?:m4v|mkv|mov|mp4|ogg|ogv|webm)$/i.test(parsed.pathname) ||
+            /^video\//i.test(indicatedType))) throw failure("invalid_image");
         url = checked.value;
         totalUrlLength += url.length;
         if (totalUrlLength > Core.MAX_BATCH_TOTAL_URL_LENGTH) throw failure("invalid_job");
       } else {
         size = item.file ? item.file.size : item.size;
         lastModified = item.file ? item.file.lastModified : item.lastModified;
-        if (!Number.isSafeInteger(size) || size <= 0) throw failure("invalid_image");
-        if (size > ImageFetch.MAX_IMAGE_BYTES) throw failure("image_too_large");
+        if (!Number.isSafeInteger(size) || size <= 0) throw failure(invalidCode);
+        if (size > ImageFetch.MAX_MEDIA_BYTES) throw failure(tooLargeCode);
         if (!Number.isSafeInteger(lastModified) || lastModified < 0) throw failure("invalid_job");
       }
-      const fallback = url ? Core.filenameForImage(url, index) : `image-${index + 1}`;
+      const fallback = url
+        ? (Core.filenameForMedia || Core.filenameForImage)(url, index, mediaType)
+        : `${mediaType}-${index + 1}`;
       if (item.filename !== undefined && typeof item.filename !== "string") throw failure("invalid_job");
       const filename = Core.sanitizeFilename(item.filename || item.file && item.file.name || fallback, fallback);
-      if (/\.(?:m4v|mkv|mov|mp4|ogg|ogv|webm)$/i.test(filename)) throw failure("invalid_image");
-      return { id: `${id}-${index}`, source, url, filename, size, lastModified,
+      if (mediaType === "image" && /\.(?:m4v|mkv|mov|mp4|ogg|ogv|webm)$/i.test(filename)) throw failure("invalid_image");
+      return { id: `${id}-${index}`, source, url, filename, mediaType, size, lastModified,
         deviceAssetId: `${id}-${index}`, createdAt: source === "file" ? timestamp(lastModified) : createdAt,
         uploadStatus: "pending", albumStatus: albumId ? "pending" : "none", assetId: null, duplicate: false, errorCode: "" };
     });
@@ -149,11 +160,12 @@
           try {
             const fetched = await fetchImage(item, signal);
             if (item.source === "file" && (!(fetched instanceof Blob) || fetched.size !== item.size ||
-                fetched.lastModified !== item.lastModified || Core.sanitizeFilename(fetched.name, "image") !== item.filename)) {
+                fetched.lastModified !== item.lastModified || Core.sanitizeFilename(fetched.name, "media") !== item.filename)) {
               throw failure("file_required");
             }
-            blob = await ImageFetch.imageBlob(fetched instanceof Blob ? fetched :
-              fetched && fetched.bytes instanceof Uint8Array ? new Blob([fetched.bytes], { type: fetched.contentType || "" }) : null);
+            blob = await ImageFetch.mediaBlob(fetched instanceof Blob ? fetched :
+              fetched && fetched.bytes instanceof Uint8Array ? new Blob([fetched.bytes], { type: fetched.contentType || "" }) : null,
+            item.mediaType, item.filename);
             if (signal.aborted) throw failure("cancelled");
           } catch (error) {
             item.uploadStatus = signal.aborted ? "cancelled" : "failed";

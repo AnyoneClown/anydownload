@@ -6,6 +6,7 @@
   const MAX_JOBS = 20;
   const MAX_BYTES = 4 * 1024 * 1024;
   const ID = /^[a-z0-9-]{8,80}$/i;
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
   function createStore(browser, locks) {
     const read = async () => {
@@ -35,9 +36,21 @@
     if (!value || value.incognito !== false || !Number.isFinite(value.createdAt) ||
         Date.now() - value.createdAt > 600000 || value.createdAt > Date.now() + 60000 ||
         !Array.isArray(value.items) || !value.items.length || value.items.length > 500) {
-      throw new Error("The selected-image request expired or is invalid. Select the images again.");
+      throw new Error("The selected-media request expired or is invalid. Select the media again.");
     }
-    return value.items;
+    if (value.connectionId !== undefined && !UUID.test(value.connectionId) ||
+        value.albumId != null && !UUID.test(value.albumId) ||
+        value.albumName !== undefined && (typeof value.albumName !== "string" || value.albumName.length > 200) ||
+        value.autoStart !== undefined && typeof value.autoStart !== "boolean") {
+      throw new Error("The selected-media destination is invalid. Choose it again.");
+    }
+    return {
+      items: value.items,
+      connectionId: value.connectionId || "",
+      albumId: value.albumId || null,
+      albumName: value.albumName || "",
+      autoStart: value.autoStart === true
+    };
   }
 
   async function initialize(options = {}) {
@@ -72,6 +85,10 @@
     let destinationJobId = null;
     let inputRestored = false;
     let restoring = null;
+    let requestedConnectionId = "";
+    let requestedAlbumId = null;
+    let requestedAlbumName = "";
+    let autoStart = false;
     const params = new URL(location.href).searchParams;
 
     function error(message = "") {
@@ -93,6 +110,13 @@
       }
     }
     const selectedConnection = () => connections.find((entry) => entry.id === elements["connection-select"].value);
+    function mediaLabel(values) {
+      const records = Array.isArray(values) ? values : [];
+      const videos = records.filter((item) => item.mediaType === "video").length;
+      if (videos === records.length && records.length) return `${records.length} video${records.length === 1 ? "" : "s"}`;
+      if (!videos) return `${records.length} image${records.length === 1 ? "" : "s"}`;
+      return `${records.length} media files`;
+    }
     function render() {
       elements["account-status"].textContent = account.signedIn ? `Signed in as ${account.email || "your AnyDownload account"}` : "Sign in on the Account page to connect a destination and upload.";
       elements["upload-content"].hidden = !account.signedIn;
@@ -104,17 +128,21 @@
       elements["start-button"].hidden = Boolean(job);
       elements["start-button"].disabled = busy || !selectedConnection() || !items.length;
       elements["retry-button"].hidden = !job || job.status === "complete";
-      elements["retry-button"].textContent = busy ? "Uploading…" : "Retry unfinished images";
+      const selectedMedia = job ? job.items : items;
+      const mediaKind = selectedMedia.some((item) => item.mediaType === "video")
+        ? selectedMedia.some((item) => item.mediaType !== "video") ? "media" : "videos"
+        : "images";
+      elements["retry-button"].textContent = busy ? "Uploading…" : `Retry unfinished ${mediaKind}`;
       elements["retry-button"].disabled = busy || !selectedConnection() || Boolean(job &&
         (job.connectionId !== selectedConnection()?.id || job.serverUrl !== selectedConnection()?.serverUrl));
       elements["cancel-button"].disabled = !busy;
-      const imageCount = job ? job.items.length : items.length;
-      elements["selection-count"].textContent = `${imageCount} image${imageCount === 1 ? "" : "s"}`;
+      const imageCount = selectedMedia.length;
+      elements["selection-count"].textContent = mediaLabel(selectedMedia);
       elements["selection-note"].textContent = job
-        ? job.status === "complete" ? "All images uploaded. Choose New upload to send more." : "To retry local images after reopening, choose the original files again."
-        : items.length ? "Ready to upload. Choosing local files replaces this selection." : "Select up to 500 images for one upload.";
+        ? job.status === "complete" ? "All media uploaded. Choose New upload to send more." : "To retry local media after reopening, choose the original files again."
+        : items.length ? "Ready to upload. Choosing local files replaces this selection." : "Select up to 500 images and videos for one upload.";
       if (busy && job && job.status !== "complete") {
-        elements["selection-note"].textContent = `Uploading ${imageCount} image${imageCount === 1 ? "" : "s"}. Keep this view open.`;
+        elements["selection-note"].textContent = `Uploading ${mediaLabel(job.items)}. Keep this view open.`;
       }
       elements["progress-empty"].hidden = Boolean(job);
       elements["progress-panel"].dataset.state = job?.status || "ready";
@@ -130,14 +158,14 @@
       elements["progress-heading"].textContent = job.status === "complete" ? "Upload complete" : busy ? "Uploading…" : "Ready to retry";
       elements["upload-progress"].max = job.items.length;
       elements["upload-progress"].value = complete;
-      elements["progress-summary"].textContent = `${complete} of ${job.items.length} images complete${complete < job.items.length ? ` · ${job.items.length - complete} unfinished` : ""}.`;
+      elements["progress-summary"].textContent = `${complete} of ${mediaLabel(job.items)} complete${complete < job.items.length ? ` · ${job.items.length - complete} unfinished` : ""}.`;
       const rows = job.items.map((item) => {
         const row = document.createElement("li");
         const title = document.createElement("strong");
         title.textContent = item.filename;
         const detail = document.createElement("span");
         const asset = item.assetId ? item.duplicate ? "Already in Immich" : "Uploaded to Immich" : {
-          pending: "Waiting to upload", fetching: "Reading image…", uploading: "Uploading…",
+          pending: "Waiting to upload", fetching: `Reading ${item.mediaType === "video" ? "video" : "image"}…`, uploading: "Uploading…",
           failed: "Upload failed", uncertain: "Upload needs confirmation", cancelled: "Cancelled"
         }[item.uploadStatus];
         const album = item.assetId && job.albumId ? {
@@ -163,7 +191,7 @@
         link.href = `upload.html?job=${encodeURIComponent(saved.id)}`;
         link.addEventListener("click", (event) => preserveTransfer(event, link));
         const title = document.createElement("strong");
-        title.textContent = `${saved.items.length} image${saved.items.length === 1 ? "" : "s"} to Immich`;
+        title.textContent = `${mediaLabel(saved.items)} to Immich`;
         const date = document.createElement("span");
         date.textContent = new Date(saved.createdAt).toLocaleString();
         link.append(title, date);
@@ -198,11 +226,14 @@
       library.value = "";
       library.textContent = "Library — no album";
       elements["album-select"].replaceChildren(library);
-      const defaultId = job ? job.albumId : connection?.defaultAlbumId;
+      const requestedId = !job && connection?.id === requestedConnectionId ? requestedAlbumId : null;
+      const defaultId = job ? job.albumId : requestedId || connection?.defaultAlbumId;
       if (defaultId) {
         const saved = document.createElement("option");
         saved.value = defaultId;
-        saved.textContent = "Saved album — load albums to check access";
+        saved.textContent = requestedId && requestedAlbumName
+          ? requestedAlbumName
+          : "Saved album — load albums to check access";
         elements["album-select"].append(saved);
         elements["album-select"].value = defaultId;
       }
@@ -280,11 +311,18 @@
         const requestId = params.get("request");
         const jobId = params.get("job");
         if (requestId) {
-          if (!ID.test(requestId)) throw new Error("Invalid selected-image request.");
+          if (!ID.test(requestId)) throw new Error("Invalid selected-media request.");
           const key = `uploadJobRequest:${requestId}`;
           const selected = validateRequest((await browser.storage.session.get(key))[key]);
           if (!current()) return;
-          items = selected;
+          items = selected.items;
+          requestedConnectionId = selected.connectionId;
+          requestedAlbumId = selected.albumId;
+          requestedAlbumName = selected.albumName;
+          autoStart = selected.autoStart;
+          if (requestedConnectionId && connections.some((connection) => connection.id === requestedConnectionId)) {
+            elements["connection-select"].value = requestedConnectionId;
+          }
           await browser.storage.session.remove(key);
         } else if (jobId) {
           if (!ID.test(jobId)) throw new Error("Invalid saved upload.");
@@ -306,12 +344,13 @@
       try { await restoring; } finally { restoring = null; }
     }
 
-    function permissions(connection, requestedItems) {
+    function permissions(connection, requestedItems, existingOnly = false) {
       const origins = new Set([provider.permissionPattern(connection.serverUrl)]);
       for (const item of requestedItems) if (item.url) {
         const url = new URL(item.url);
         if (["http:", "https:"].includes(url.protocol)) origins.add(`${url.protocol}//${url.hostname}/*`);
       }
+      if (existingOnly) return browser.permissions.contains({ origins: [...origins] });
       // Invoked directly by the click handler, before awaiting anything.
       return browser.permissions.request({ origins: [...origins] });
     }
@@ -320,15 +359,15 @@
       if (item.source === "file") {
         const file = files.find((candidate) => Core.sanitizeFilename(candidate.name) === item.filename &&
           candidate.size === item.size && candidate.lastModified === item.lastModified);
-        if (!file) { const missing = new Error("Reselect the original local image."); missing.code = "file_required"; throw missing; }
+        if (!file) { const missing = new Error("Reselect the original local media file."); missing.code = "file_required"; throw missing; }
         return file;
       }
-      return imageFetch.fetchImageBytes(item.url, signal, {
+      return imageFetch.fetchMediaBytes(item.url, item.mediaType, signal, {
         permissionContains: (pattern) => browser.permissions.contains({ origins: [pattern] })
       });
     }
 
-    function begin(retry) {
+    function begin(retry, existingPermissionOnly = false) {
       if (busy || !account.signedIn) return;
       const connection = selectedConnection();
       if (!connection) return;
@@ -337,10 +376,12 @@
       const requestedAlbum = retry ? job.albumId : elements["album-select"].value || null;
       const requestedItems = retry ? job.items : structuredClone(items);
       let permission;
-      try { permission = permissions(connection, requestedItems); }
-      catch (_failure) { error("Firefox could not request access to the server and image hosts."); return; }
+      try { permission = permissions(connection, requestedItems, existingPermissionOnly); }
+      catch (_failure) { error("Firefox could not request access to the server and media hosts."); return; }
       return act(async (actionSignal) => {
-        if (!await permission) throw new Error("Server and source-image access is required. Click Upload or Retry to grant it.");
+        if (!await permission) throw new Error(existingPermissionOnly
+          ? "Media access changed before the upload started. Return to Media and choose Upload selected again."
+          : "Server and source-media access is required. Click Upload or Retry to grant it.");
         actionSignal.throwIfAborted();
         const status = await client.status();
         actionSignal.throwIfAborted();
@@ -368,7 +409,7 @@
           if (["id", "ownerId", "connectionId", "serverUrl", "albumId"].every((key) => retained[key] === job[key])) {
             for (const [index, item] of job.items.entries()) {
               const known = retained.items[index];
-              if (!known || !known.assetId || !["id", "url", "source", "filename", "size", "lastModified"].every((key) => known[key] === item[key])) continue;
+              if (!known || !known.assetId || !["id", "url", "source", "filename", "mediaType", "size", "lastModified"].every((key) => known[key] === item[key])) continue;
               if (!item.assetId) Object.assign(item, { assetId: known.assetId, duplicate: known.duplicate,
                 uploadStatus: "complete", albumStatus: known.albumStatus, errorCode: known.errorCode });
               else if (item.assetId === known.assetId && known.albumStatus === "complete") {
@@ -431,9 +472,10 @@
     elements["local-files"].addEventListener("change", () => {
       if (busy) return;
       files = [...elements["local-files"].files];
-      if (files.length > 500) { files = []; error("Choose at most 500 images."); }
+      if (files.length > 500) { files = []; error("Choose at most 500 images and videos."); }
       if (!job) items = files.map((file) => ({ source: "file", filename: file.name, size: file.size,
-        lastModified: file.lastModified, mediaType: "image" }));
+        lastModified: file.lastModified,
+        mediaType: /^video\//i.test(file.type) || /\.(?:m4v|mkv|mov|mp4|ogg|ogv|webm)$/i.test(file.name) ? "video" : "image" }));
       render();
     });
     elements["start-button"].addEventListener("click", () => begin(false));
@@ -451,6 +493,10 @@
 
     await refresh();
     render();
+    if (autoStart && items.length && selectedConnection()) {
+      autoStart = false;
+      await begin(false, true);
+    }
     return { store, begin, refresh, get job() { return job; } };
   }
 

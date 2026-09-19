@@ -624,6 +624,8 @@
   const Templates = globalThis.ImageDownloaderTemplates;
   const Gallery = globalThis.AnyDownloadGallery;
   const Tracker = globalThis.AnyDownloadTracker;
+  const Immich = globalThis.ImageDownloaderImmich;
+  const Integrations = globalThis.AnyDownloadIntegrations;
   const MAX_DISCOVERED_IMAGES = Core.MAX_BATCH_SIZE;
   const MAX_SCANNED_ELEMENTS = 10000;
   const MAX_RENDERED_ROWS = 350;
@@ -660,6 +662,10 @@
   let filenamePreviewDateKey = "";
   let filenamePreviewTemplateValue = "";
   let filterRenderTimer = null;
+  let uploadClient = null;
+  let uploadConnections = [];
+  let uploadPickerItems = [];
+  let uploadPickerBusy = false;
 
   class TrackedSelectionSet extends Set {
     add(value) {
@@ -799,6 +805,10 @@
       "media-preview-error", "media-preview-position", "close-preview-button",
       "preview-previous-button", "preview-next-button", "preview-selected-input", "preview-selected-text",
       "preview-download-button", "preview-tab-button", "preview-source-link",
+      "upload-destination-dialog", "upload-destination-title", "upload-destination-summary",
+      "upload-destination-error", "upload-connection-select", "upload-album-select",
+      "confirm-upload-destination-button", "cancel-upload-destination-button",
+      "close-upload-destination-button", "manage-upload-connections-button",
       "action-detail",
       "archive-footer-button",
       "upload-button", "integrations-button",
@@ -1533,7 +1543,9 @@
     else if (frame.src !== url.href) frame.src = url.href;
     frame.title = trackerId ? "Edit tracker" : workspaces[view][1];
     document.title = `AnyDownload — ${workspaces[view][1]}`;
-    const navigationView = view === "upload" ? "integrations" : view;
+    const navigationView = view === "upload"
+      ? url.searchParams.has("request") ? "media" : "integrations"
+      : view;
     for (const key of navigationWorkspaces) {
       const id = workspaces[key][0];
       elements[id].classList.toggle("current", key === navigationView);
@@ -2995,8 +3007,8 @@
       ? "ZIP archives currently support image-only selections"
       : "Download selected images as ZIP archives";
     elements["upload-button"].disabled = state.incognito || state.busy || Boolean(galleryCollection) ||
-      selected === 0 || selected > 500 || selectedHasVideo || !template.ok;
-    elements["upload-button"].title = "Upload up to 500 selected images, including previously downloaded images";
+      selected === 0 || selected > 500 || !template.ok;
+    elements["upload-button"].title = "Upload up to 500 selected images and videos to Immich";
     updateInstagramCollectionsButton();
     elements["image-list"].setAttribute(
       "aria-label",
@@ -4420,31 +4432,177 @@
     return requestDownloads(selectedDownloadableImages());
   }
 
-  async function uploadSelectedImages() {
+  function uploadPickerError(message = "") {
+    elements["upload-destination-error"].textContent = message;
+    elements["upload-destination-error"].hidden = !message;
+  }
+
+  function selectedUploadConnection() {
+    return uploadConnections.find((connection) => connection.id === elements["upload-connection-select"].value);
+  }
+
+  function seedUploadAlbums(preferredId = "", preferredName = "") {
+    const select = elements["upload-album-select"];
+    const library = document.createElement("option");
+    library.value = "";
+    library.textContent = "Library — no album";
+    select.replaceChildren(library);
+    const savedId = preferredId || selectedUploadConnection()?.defaultAlbumId || "";
+    if (savedId) {
+      const saved = document.createElement("option");
+      saved.value = savedId;
+      saved.textContent = preferredName || "Saved default album — refreshing…";
+      select.append(saved);
+      select.value = savedId;
+    } else {
+      select.value = "";
+    }
+  }
+
+  function renderUploadPicker() {
+    const connection = selectedUploadConnection();
+    elements["upload-connection-select"].disabled = uploadPickerBusy || !uploadConnections.length;
+    elements["upload-album-select"].disabled = uploadPickerBusy || !connection;
+    elements["confirm-upload-destination-button"].disabled = uploadPickerBusy || !connection || !uploadPickerItems.length;
+    elements["confirm-upload-destination-button"].textContent = uploadPickerBusy ? "Preparing…" : "Upload selected";
+  }
+
+  async function refreshUploadAlbumOptions(connection, preferredId = "") {
+    const albums = await uploadClient.withCredential(connection, (credential, { signal }) =>
+      Immich.listAlbums(credential, { signal }));
+    const desired = preferredId || connection.defaultAlbumId || "";
+    seedUploadAlbums();
+    for (const album of albums) {
+      const existing = [...elements["upload-album-select"].children].find((option) => option.value === album.id);
+      if (existing) {
+        existing.textContent = album.name;
+        continue;
+      }
+      const option = document.createElement("option");
+      option.value = album.id;
+      option.textContent = album.name;
+      elements["upload-album-select"].append(option);
+    }
+    elements["upload-album-select"].value = albums.some((album) => album.id === desired) ? desired : "";
+  }
+
+  async function openUploadDestination() {
     if (state.incognito || state.busy || galleryCollection) return;
     const images = selectedDownloadableImages();
-    if (!images.length || images.length > 500 || images.some((item) => mediaTypeFor(item) !== "image")) {
-      setNotice("Choose between 1 and 500 images to upload.", "error");
+    if (!images.length || images.length > 500) {
+      setNotice("Choose between 1 and 500 images or videos to upload.", "error");
+      return;
+    }
+    if (images.some((item) => item && item.sourceProvider === "youtube")) {
+      setNotice("Download YouTube videos first, then choose the saved file from Uploads. Expiring YouTube provider links cannot be sent directly to Immich.", "error");
       return;
     }
     const template = requireValidFilenameTemplate();
     if (!template) return;
+    uploadPickerItems = renderedDownloadItems(images, template.value).map(({ url, filename, mediaType }) =>
+      ({ url, filename, mediaType }));
+    const counts = uploadPickerItems.reduce((result, item) => {
+      result[item.mediaType] += 1;
+      return result;
+    }, { image: 0, video: 0 });
+    elements["upload-destination-summary"].textContent = [
+      counts.image ? `${counts.image.toLocaleString()} image${counts.image === 1 ? "" : "s"}` : "",
+      counts.video ? `${counts.video.toLocaleString()} video${counts.video === 1 ? "" : "s"}` : ""
+    ].filter(Boolean).join(" and ") + " ready to upload.";
+    elements["upload-destination-dialog"].showModal();
+    elements["upload-destination-dialog"].focus({ preventScroll: true });
+    uploadPickerError();
+    uploadPickerBusy = true;
+    renderUploadPicker();
+    try {
+      if (!Integrations || !Immich) throw new Error("Immich uploads are unavailable. Reopen AnyDownload and try again.");
+      uploadClient ||= Integrations.create(browser);
+      const account = await uploadClient.status();
+      if (!account.signedIn) throw new Error("Sign in on the Account page before uploading to Immich.");
+      uploadConnections = await uploadClient.list();
+      const select = elements["upload-connection-select"];
+      select.replaceChildren(...uploadConnections.map((connection) => {
+        const option = document.createElement("option");
+        option.value = connection.id;
+        option.textContent = `Immich · ${connection.serverUrl}`;
+        return option;
+      }));
+      if (!uploadConnections.length) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "No connected Immich servers";
+        select.append(option);
+        select.value = "";
+        throw new Error("Connect an Immich server in Integrations before uploading.");
+      }
+      select.value = uploadConnections[0].id;
+      seedUploadAlbums();
+      try {
+        await refreshUploadAlbumOptions(uploadConnections[0]);
+      } catch (error) {
+        elements["upload-album-select"].value = "";
+        uploadPickerError(`Albums could not be refreshed. Library upload remains available. (${error && error.message ? error.message : error})`);
+      }
+    } catch (error) {
+      uploadConnections = [];
+      uploadPickerError(error && error.message ? error.message : String(error));
+    } finally {
+      uploadPickerBusy = false;
+      renderUploadPicker();
+    }
+  }
+
+  async function changeUploadConnection() {
+    if (uploadPickerBusy) return;
+    const connection = selectedUploadConnection();
+    if (!connection) return;
+    uploadPickerBusy = true;
+    uploadPickerError();
+    seedUploadAlbums();
+    renderUploadPicker();
+    try {
+      await refreshUploadAlbumOptions(connection);
+    } catch (error) {
+      elements["upload-album-select"].value = "";
+      uploadPickerError(`Albums could not be refreshed. Library upload remains available. (${error && error.message ? error.message : error})`);
+    } finally {
+      uploadPickerBusy = false;
+      renderUploadPicker();
+    }
+  }
+
+  async function confirmUploadDestination() {
+    if (uploadPickerBusy || !uploadPickerItems.length) return;
+    const connection = selectedUploadConnection();
+    if (!connection) return;
+    const albumId = elements["upload-album-select"].value || null;
+    const albumOption = [...elements["upload-album-select"].children].find((option) => option.value === albumId);
+    const origins = new Set([Immich.permissionPattern(connection.serverUrl),
+      ...hostPermissionPatternsForImages(uploadPickerItems)]);
+    let permission;
+    try { permission = browser.permissions.request({ origins: [...origins] }); }
+    catch (_error) { uploadPickerError("Firefox could not request access to the server and source media hosts."); return; }
     const id = createPreviewId();
     const key = `uploadJobRequest:${id}`;
-    state.busy = true;
-    updateSummary();
+    uploadPickerBusy = true;
+    uploadPickerError();
+    renderUploadPicker();
     try {
+      if (!await permission) throw new Error("Server and source-media access is required to upload to Immich.");
       await browser.storage.session.set({ [key]: {
-        createdAt: Date.now(), incognito: false,
-        items: renderedDownloadItems(images, template.value).map(({ url, filename }) => ({ url, filename }))
+        createdAt: Date.now(), incognito: false, autoStart: true,
+        connectionId: connection.id, albumId,
+        albumName: albumId ? String(albumOption?.textContent || "").slice(0, 200) : "",
+        items: uploadPickerItems.map((item) => ({ ...item }))
       } });
+      elements["upload-destination-dialog"].close();
       showWorkspace("upload", `request=${encodeURIComponent(id)}`);
-    } catch (_error) {
+    } catch (error) {
       await browser.storage.session.remove(key).catch(() => undefined);
-      setNotice("Firefox could not open Uploads. Please try again.", "error");
+      uploadPickerError(error && error.message ? error.message : "Firefox could not start the upload. Please try again.");
     } finally {
-      state.busy = false;
-      updateSummary();
+      uploadPickerBusy = false;
+      renderUploadPicker();
     }
   }
 
@@ -5223,6 +5381,8 @@
     globalThis.addEventListener("pagehide", () => {
       stopGalleryCollection();
       saveCurrentGallery();
+      uploadClient?.dispose();
+      uploadClient = null;
     });
     for (const view of navigationWorkspaces) {
       const id = workspaces[view][0];
@@ -5330,7 +5490,15 @@
       renderImages();
     });
     elements["archive-footer-button"].addEventListener("click", downloadSelectedArchive);
-    elements["upload-button"].addEventListener("click", uploadSelectedImages);
+    elements["upload-button"].addEventListener("click", openUploadDestination);
+    elements["upload-connection-select"].addEventListener("change", changeUploadConnection);
+    elements["confirm-upload-destination-button"].addEventListener("click", confirmUploadDestination);
+    elements["cancel-upload-destination-button"].addEventListener("click", () => elements["upload-destination-dialog"].close());
+    elements["close-upload-destination-button"].addEventListener("click", () => elements["upload-destination-dialog"].close());
+    elements["manage-upload-connections-button"].addEventListener("click", () => {
+      elements["upload-destination-dialog"].close();
+      showWorkspace("integrations");
+    });
     elements["download-button"].addEventListener("click", downloadSelectedImages);
   }
 

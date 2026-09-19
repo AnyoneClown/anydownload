@@ -12,6 +12,8 @@ const albumId = "00000000-0000-4000-8000-000000000004";
 const otherId = "00000000-0000-4000-8000-000000000005";
 const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0]);
 const blob = new Blob([png], { type: "image/png" });
+const mp4 = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0]);
+const videoBlob = new Blob([mp4], { type: "video/mp4" });
 const asset = { blob, filename: "image.png", createdAt: "2026-09-12T00:00:00.000Z", deviceAssetId: "ignored-v3" };
 const json = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", ...headers } });
 
@@ -76,6 +78,13 @@ async function main() {
     };
     assert.deepEqual(await Immich.uploadAsset(connection, asset), { assetId, duplicate: status === "duplicate" });
   }
+  global.fetch = async (_url, options) => {
+    assert.equal(options.body.get("assetData").name, "clip.mp4");
+    assert.equal(options.body.get("assetData").type, "video/mp4");
+    return json({ id: assetId, status: "created" }, 201);
+  };
+  assert.deepEqual(await Immich.uploadAsset(connection, { ...asset, blob: videoBlob, filename: "clip.mp4" }),
+    { assetId, duplicate: false }, "Immich accepts videos through the asset upload endpoint");
   global.fetch = async () => json({ id: assetId, status: key });
   await assert.rejects(Immich.uploadAsset(connection, asset), (error) => error.code === "invalid_response" && error.uncertain && !error.message.includes(key));
   global.fetch = async () => json({ error: key }, 200, { "content-length": String(3 * 1024 * 1024) });
@@ -141,6 +150,12 @@ async function main() {
   await assert.rejects(Images.fetchImageBytes(sourceUrl, controller.signal, permitted), { code: "cancelled" });
   await assert.rejects(Images.imageBlob(new Blob(["bad image"], { type: "image/png" })), { code: "invalid_image" });
   assert.equal((await Images.imageBlob(new Blob([png]))).type, "image/png");
+  global.fetch = async () => new Response(mp4, { headers: { "content-type": "video/mp4" } });
+  const fetchedVideo = await Images.fetchMediaBytes("https://source.example/clip.mp4", "video", undefined, permitted);
+  assert.deepEqual(fetchedVideo.bytes, mp4);
+  assert.equal(fetchedVideo.contentType, "video/mp4");
+  assert.equal((await Images.videoBlob(new Blob([mp4]), "clip.mp4")).type, "video/mp4");
+  await assert.rejects(Images.fetchMediaBytes(sourceUrl, "video", controller.signal, permitted), { code: "cancelled" });
   console.log("Immich provider and bounded image-fetch tests passed.");
 }
 

@@ -4,7 +4,7 @@
   // Contract verified against immich-app/immich v3.2.0/open-api/immich-openapi-specs.json.
   const SUPPORTED_VERSION = "3.2.0";
   const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
-  const MAX_IMAGE_BYTES = 64 * 1024 * 1024;
+  const MAX_MEDIA_BYTES = 64 * 1024 * 1024;
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const ALBUM_PERMISSIONS = Object.freeze(["album.read", "albumAsset.create", "user.read"]);
   const MESSAGES = Object.freeze({
@@ -19,9 +19,9 @@
     unsupported_api: "The Immich API endpoint was not found. Check the server address and use Immich 3.2.0.",
     invalid_response: "Immich returned an unexpected or oversized response. The remote result could not be confirmed.",
     server_error: "Immich could not finish the request. Check its availability and retry explicitly.",
-    rejected: "Immich rejected this image or operation. Check the file and server configuration.",
+    rejected: "Immich rejected this media file or operation. Check the file and server configuration.",
     album_failed: "The asset is available in Immich, but album attachment failed. Retry will only attach the existing asset.",
-    invalid_asset: "The image or remote asset identifier is invalid."
+    invalid_asset: "The media file or remote asset identifier is invalid."
   });
 
   function errorMessage(code) { return MESSAGES[code] || MESSAGES.server_error; }
@@ -152,8 +152,8 @@
   }
 
   async function uploadAsset(connection, { blob, filename, createdAt }, options) {
-    if (!(blob instanceof Blob) || !blob.size || blob.size > MAX_IMAGE_BYTES ||
-        !/^image\/[a-z0-9.+-]+$/i.test(blob.type) || typeof filename !== "string" ||
+    if (!(blob instanceof Blob) || !blob.size || blob.size > MAX_MEDIA_BYTES ||
+        !/^(?:image|video)\/[a-z0-9.+-]+$/i.test(blob.type) || typeof filename !== "string" ||
         !filename || filename.length > 180 || /[\x00-\x1f\x7f/\\]/.test(filename)) throw new ImmichError("invalid_asset");
     const date = new Date(createdAt);
     if (!Number.isFinite(date.getTime())) throw new ImmichError("invalid_asset");
@@ -178,7 +178,7 @@
     return { assetId, albumId, attached: true };
   }
 
-  const api = Object.freeze({ SUPPORTED_VERSION, ALBUM_PERMISSIONS, ImmichError, normalizeServerUrl, permissionPattern,
+  const api = Object.freeze({ SUPPORTED_VERSION, MAX_MEDIA_BYTES, ALBUM_PERMISSIONS, ImmichError, normalizeServerUrl, permissionPattern,
     errorMessage, testConnection, listAlbums, uploadAsset, addToAlbum });
   root.ImageDownloaderImmich = api;
   if (typeof module === "object" && module.exports) module.exports = api;

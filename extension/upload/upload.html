@@ -21,7 +21,7 @@
     </div>
     <main class="page-shell">
       <header class="page-header">
-        <div><p class="eyebrow">Your media, connected</p><h1>Uploads</h1><p class="subtitle">Send images to your Immich library and follow every transfer.</p></div>
+        <div><p class="eyebrow">Your media, connected</p><h1>Uploads</h1><p class="subtitle">Send images and videos to your Immich library and follow every transfer.</p></div>
         <a class="button-link" data-source-link href="upload.html"><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="M10 3v14M3 10h14"/></svg>New upload</a>
       </header>
       <nav class="integration-tabs" aria-label="Integrations">
@@ -33,7 +33,7 @@
       <p id="error-banner" role="alert" hidden></p>
       <section id="signin-card" class="card signin-card" hidden>
         <span class="section-icon" aria-hidden="true">↗</span>
-        <div><h2>Your library, connected</h2><p class="muted">Sign in to choose a destination and upload your images.</p></div>
+        <div><h2>Your library, connected</h2><p class="muted">Sign in to choose a destination and upload your media.</p></div>
         <a class="button-link primary-link" data-source-link href="../sync/sync.html"><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="6" r="3"/><path d="M4 17v-2a6 6 0 0 1 12 0v2"/></svg>Sign in</a>
       </section>
       <div id="upload-content" class="upload-layout" hidden>
@@ -49,18 +49,18 @@
             <p id="album-note" class="muted">Your choice is remembered. Loading albums asks Firefox for server access.</p>
           </div>
           <div class="images-section">
-            <h3>Images</h3>
+            <h3>Media</h3>
             <div class="file-picker">
               <svg class="picker-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m3 17 5-5 4 4 3-3 6 6"/></svg>
-              <label for="local-files">Choose images from your device</label>
+              <label for="local-files">Choose images or videos from your device</label>
               <p class="muted">Or use Upload selected in the media manager.</p>
-              <input id="local-files" type="file" accept="image/*" multiple aria-describedby="selection-note">
+              <input id="local-files" type="file" accept="image/*,video/mp4,video/webm,video/ogg,video/quicktime,video/x-m4v,video/x-matroska" multiple aria-describedby="selection-note">
             </div>
-            <p id="selection-note" class="muted">Select up to 500 images for one upload.</p>
+            <p id="selection-note" class="muted">Select up to 500 images and videos for one upload. Each file can be up to 64 MiB.</p>
           </div>
           <div class="actions upload-actions">
-            <button id="start-button" class="primary-button" type="button" disabled><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="M10 13V3m-4 4 4-4 4 4M3 13v4h14v-4"/></svg>Upload images</button>
-            <button id="retry-button" class="primary-button" type="button" hidden>Retry unfinished images</button>
+            <button id="start-button" class="primary-button" type="button" disabled><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="M10 13V3m-4 4 4-4 4 4M3 13v4h14v-4"/></svg>Upload media</button>
+            <button id="retry-button" class="primary-button" type="button" hidden>Retry unfinished media</button>
             <button id="cancel-button" type="button" disabled><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="m5 5 10 10M15 5 5 15"/></svg>Cancel</button>
           </div>
         </section>
@@ -68,20 +68,20 @@
           <p class="eyebrow">Transfer progress</p>
           <h2 id="progress-heading">Ready when you are</h2>
           <p id="progress-summary" role="status" aria-live="polite">No upload started.</p>
-          <progress id="upload-progress" max="1" value="0" aria-label="Images completed"></progress>
+          <progress id="upload-progress" max="1" value="0" aria-label="Media files completed"></progress>
           <div id="progress-empty" class="progress-empty">
             <span class="empty-icon" aria-hidden="true">↑</span>
-            <strong>A home for your images</strong>
-            <p>Choose a destination and images, then start your upload. Each image’s progress appears here.</p>
+            <strong>A home for your media</strong>
+            <p>Choose a destination and media, then start your upload. Each file’s progress appears here.</p>
           </div>
-          <ol id="results-list" aria-label="Per-image upload results"></ol>
+          <ol id="results-list" aria-label="Per-file upload results"></ol>
           <div class="transfer-note"><strong>Keep this view open during uploads.</strong><details><summary>About interrupted transfers</summary><p>Closing the popup, sidebar, tab, or Firefox interrupts the transfer. Reopen a saved upload below to retry unfinished steps. Transfers do not resume automatically.</p></details></div>
         </section>
         <section class="card history-card" aria-labelledby="history-heading">
           <div class="section-heading"><div><h2 id="history-heading">Recent uploads</h2><p class="muted">Saved on this device. Open an upload to review or retry it.</p></div><span class="status-badge">Local history</span></div>
           <div id="history-empty" class="history-empty"><strong>No uploads yet</strong><p>Your transfers will appear here after you start an upload.</p></div>
           <ul id="history-list"></ul>
-          <p class="history-note muted">Separate from download history. Removing a record keeps your images in Immich.</p>
+          <p class="history-note muted">Separate from download history. Removing a record keeps your media in Immich.</p>
         </section>
       </div>
     </main>

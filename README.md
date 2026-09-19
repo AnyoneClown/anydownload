@@ -14,11 +14,11 @@ Destination folders, Save As preferences, active download queues, downloaded fil
 
 Google sign-in opens a regular browser tab and returns automatically to the Account page on desktop and Android using a short-lived PKCE code. Tokens are stored in normal extension storage and excluded from synchronization. **Sign out** retains local and cloud data and stops synchronization. An installation stays bound to its Google account after sign-out, preventing an accidental upload to another account. Reconnect with that same account to resume. Updates preserve existing sessions for the shared project. An installation previously configured for another project keeps its local data but requires fresh consent and sign-in to the shared project. Removing the extension removes its local cache; account/cloud deletion is currently managed in Supabase.
 
-## Upload images to Immich
+## Upload media to Immich
 
 Open **Integrations** in the manager, sign in through **Account**, and use **Test & save connection** with your server URL and API key. This release targets Immich 3.2.0 and supports HTTP(S) LAN addresses and Tailscale hostnames. The Vault migration and authenticated backend endpoint are deployed to the shared service; see the [integration setup guide](supabase/INTEGRATIONS.md).
 
-Choose **Upload selected** in the manager, then your connection and either **Library — no album** or **Load albums**. Keep Uploads open until it finishes. The page also accepts images from your device and reopens saved uploads for explicit retry. Locally downloaded images remain eligible: check them in the manager or choose their local files. Upload and album results are independent of the local-download ledger. Keys are encrypted in Supabase Vault; image bytes travel directly from Firefox to Immich. Google sign-in does not grant Google Drive access.
+Choose **Upload selected** in the manager. AnyDownload refreshes the writable albums from Immich, then lets you choose your connection and either **Library — no album** or a current album. Keep Uploads open until it finishes. The page also accepts images and supported video files from your device and reopens saved uploads for explicit retry. Locally downloaded media remains eligible: check it in the manager or choose its local files. Upload and album results are independent of the local-download ledger. Keys are encrypted in Supabase Vault; media bytes travel directly from Firefox to Immich. Google sign-in does not grant Google Drive access.
 
 ## Try it in two minutes
 

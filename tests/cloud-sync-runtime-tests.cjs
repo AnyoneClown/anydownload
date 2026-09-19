@@ -521,7 +521,7 @@ async function integrationsSecurity() {
   const listed = await invoke("list");
   assert.deepEqual(listed, { ok: true, connections: [saved] });
   assert.equal(JSON.stringify(listed).includes(secret), false);
-  for (const from of [h.sender("popup/popup.html"), h.sender("sync/sync.html"), h.sender("content/collector.js"),
+  for (const from of [h.sender("sync/sync.html"), h.sender("content/collector.js"),
     h.sender("upload/upload.html", { tab: { incognito: true } }),
     h.sender("integrations/integrations.html", { id: "other@test" }),
     h.sender("integrations/integrations.html", { url: "https://evil.test/integrations/integrations.html" })]) {
@@ -530,6 +530,10 @@ async function integrationsSecurity() {
   assert.equal((await invoke("save", { provider: "immich", serverUrl: saved.serverUrl, apiKey: secret }, h.sender("upload/upload.html"))).ok, false);
   const credential = await invoke("credential", { connectionId: id }, h.sender("upload/upload.html"));
   assert.deepEqual(credential, { ok: true, connection: saved, apiKey: secret, ownerId: USER });
+  const popupCredential = await invoke("credential", { connectionId: id }, h.sender("popup/popup.html"));
+  assert.deepEqual(popupCredential, credential, "The media picker may read albums through a short-lived credential");
+  assert.equal((await invoke("save", { provider: "immich", serverUrl: saved.serverUrl, apiKey: secret }, h.sender("popup/popup.html"))).ok, false,
+    "The media picker cannot mutate connections");
   const count = h.calls.length;
   for (const values of [{ connectionId: id, userId: OTHER_USER }, { connectionId: id, token: "forged" }, { connectionId: "bad-id" }]) {
     assert.equal((await invoke("credential", values)).ok, false);

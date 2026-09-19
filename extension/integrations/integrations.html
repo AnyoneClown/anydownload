@@ -22,7 +22,7 @@
     <main class="page-shell">
       <header class="page-header">
         <div><p class="eyebrow">Your media, connected</p><h1>Integrations</h1><p class="subtitle">Connect your photo library. Send your images straight from Firefox.</p></div>
-        <a class="button-link primary-button" data-source-link href="../upload/upload.html" target="_blank" rel="noopener noreferrer"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 13V3m-4 4 4-4 4 4M3 13v4h14v-4"/></svg>Upload images</a>
+        <a class="button-link primary-button" data-source-link href="../upload/upload.html" target="_blank" rel="noopener noreferrer"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 13V3m-4 4 4-4 4 4M3 13v4h14v-4"/></svg>Upload media</a>
       </header>
       <nav class="integration-tabs" aria-label="Integrations">
         <a class="current" data-source-link href="integrations.html" aria-current="page"><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="M7 2v4m6-4v4M5 6h10v4a5 5 0 0 1-10 0V6m5 9v3"/></svg>Connections</a>
@@ -65,7 +65,7 @@
             </div>
             <div id="disconnect-section" class="disconnect-section" hidden>
               <button id="disconnect" class="danger-button" type="button" hidden disabled><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="M3 5h14M7 5V3h6v2M5 5l1 12h8l1-12M8 8v6m4-6v6"/></svg>Disconnect &amp; delete key</button>
-              <p class="hint">Uploaded images stay in Immich.</p>
+              <p class="hint">Uploaded media stays in Immich.</p>
             </div>
           </form>
           <aside class="connection-sidebar" aria-label="Uploading to Immich">
@@ -73,23 +73,23 @@
               <span class="upload-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 15V3M7 8l5-5 5 5M4 15v6h16v-6"/></svg></span>
               <p class="eyebrow">From page to library</p>
               <h2>A home for your finds</h2>
-              <p class="hint">Send images from a webpage or your device to Immich, with an album of your choice.</p>
+              <p class="hint">Send images and supported videos from a webpage or your device to Immich, with an album of your choice.</p>
               <a class="button-link" data-source-link href="../upload/upload.html" target="_blank" rel="noopener noreferrer">Open uploads <span aria-hidden="true">→</span></a>
             </section>
             <section class="card steps-card">
               <h2>Your next upload</h2>
               <ol class="device-steps">
                 <li><span class="step-number" aria-hidden="true">1</span><strong>Connect your library</strong><span>Save your server address and API key.</span></li>
-                <li><span class="step-number" aria-hidden="true">2</span><strong>Choose your images</strong><span>Use Upload selected in the media manager, or choose files from your device.</span></li>
-                <li><span class="step-number" aria-hidden="true">3</span><strong>Upload and follow along</strong><span>Keep the upload view open. Check progress and retry unfinished images there.</span></li>
+                <li><span class="step-number" aria-hidden="true">2</span><strong>Choose your media</strong><span>Use Upload selected in the media manager, or choose files from your device.</span></li>
+                <li><span class="step-number" aria-hidden="true">3</span><strong>Upload and follow along</strong><span>Keep the upload view open. Check progress and retry unfinished media there.</span></li>
               </ol>
             </section>
           </aside>
         </div>
         <details class="privacy-details">
-          <summary>How your connection and images are handled</summary>
+          <summary>How your connection and media are handled</summary>
           <p>Tests, album requests and uploads run on this device. Connect to your server’s local network or Tailscale network before uploading. HTTP and HTTPS are supported; an Immich /albums address is normalized to its server.</p>
-          <p>Your account stores the encrypted key and connection settings. Images travel directly from Firefox to Immich.</p>
+          <p>Your account stores the encrypted key and connection settings. Media travels directly from Firefox to Immich.</p>
         </details>
       </section>
     </main>

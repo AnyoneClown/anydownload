@@ -15,6 +15,7 @@ const SECRET = "never-save-this-api-key";
 const connection = { id: CONNECTION, provider: "immich", serverUrl: "http://192.168.0.103:2283", defaultAlbumId: null };
 const sourceItems = [{ url: "https://images.example/original.png", filename: "original.png" }];
 const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0]);
+const mp4 = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0]);
 const clone = value => structuredClone(value);
 const event = () => ({ listeners: [], addListener(fn) { this.listeners.push(fn); }, removeListener(fn) { this.listeners = this.listeners.filter(item => item !== fn); } });
 
@@ -90,10 +91,12 @@ function harness({ privateWindow = false, href = "moz-extension://test/upload/up
     },
     async listAlbums() { return [{ id: ALBUM, name: "Writable album" }]; }
   };
-  const imageFetch = { async fetchImageBytes(url, signal, options) {
-    assert.equal(await options.permissionContains("https://images.example/*"), true);
+  const imageFetch = { async fetchMediaBytes(url, mediaType, signal, options) {
+    const parsed = new URL(url);
+    assert.equal(await options.permissionContains(`${parsed.protocol}//${parsed.hostname}/*`), true);
     assert.equal(signal.aborted, false);
-    calls.push(["fetch", url]); return { bytes: png, contentType: "image/png" };
+    calls.push(["fetch", url]);
+    return mediaType === "video" ? { bytes: mp4, contentType: "video/mp4" } : { bytes: png, contentType: "image/png" };
   } };
   const workspace = { open: (view, route) => workspaceCalls.push([view, route]) };
   return { browser, document, elements, local, session, calls, workspaceCalls, held, locks, client, provider,
@@ -262,6 +265,19 @@ function harness({ privateWindow = false, href = "moz-extension://test/upload/up
   assert.equal(h.calls.some(call => call[0] === "fetch"), false);
   assert.equal(h.local[Page.STORE_KEY][0].items[0].url, null);
   assert.ok(!JSON.stringify(h.local).includes("base64"));
+
+  h = harness();
+  h.session["uploadJobRequest:request-123"] = {
+    createdAt: Date.now(), incognito: false, autoStart: true,
+    connectionId: CONNECTION, albumId: ALBUM, albumName: "Selected album",
+    items: [{ url: "https://videos.example/clip.mp4", filename: "clip.mp4", mediaType: "video" }]
+  };
+  page = await h.start();
+  assert.equal(page.job.status, "complete", "A destination chosen in Media starts the embedded upload automatically");
+  assert.equal(page.job.items[0].mediaType, "video");
+  assert.equal(page.job.albumId, ALBUM);
+  assert.equal(h.elements["selection-count"].textContent, "1 video");
+  assert.equal(h.calls.filter(call => call[0] === "upload").length, 1, "Direct video bytes are uploaded to Immich");
   const oldJob = clone(page.job);
   h.setAccount({ signedIn: true, ownerId: "55555555-5555-4555-8555-555555555555", email: "second@example.com" });
   await page.refresh();

@@ -473,7 +473,8 @@
       if (message.type === "INTEGRATIONS") {
         const pages = ["/integrations/integrations.html"];
         if (["status", "list", "credential", "defaultAlbum"].includes(message.action)) pages.push("/upload/upload.html");
-        if (["status", "list"].includes(message.action)) pages.push("/popup/popup.html", "/sidebar/sidebar.html");
+        if (["status", "list", "credential"].includes(message.action)) pages.push("/popup/popup.html");
+        if (["status", "list"].includes(message.action)) pages.push("/sidebar/sidebar.html");
         if (!trusted(sender, pages)) return Promise.resolve({ ok: false, code: "private" });
         if (message.action === "status") return ready.then(integrationStatus);
         if (["save", "delete"].includes(message.action)) invalidateIntegrations();

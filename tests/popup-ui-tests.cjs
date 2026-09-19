@@ -7,6 +7,16 @@ const vm = require("node:vm");
 const Core = require("../extension/shared/core.js");
 const Filters = require("../extension/shared/filters.js");
 const Templates = require("../extension/shared/templates.js");
+const Immich = require("../extension/shared/immich.js");
+const Integrations = require("../extension/shared/integrations.js");
+const integrationOwner = "11111111-1111-4111-8111-111111111111";
+const integrationConnection = {
+  id: "22222222-2222-4222-8222-222222222222", provider: "immich",
+  serverUrl: "https://immich.example", defaultAlbumId: null
+};
+const integrationAlbum = "33333333-3333-4333-8333-333333333333";
+const PickerImmich = { ...Immich, listAlbums: async () => [{ id: integrationAlbum, name: "Camera roll" }] };
+const browserEvent = () => ({ addListener() {}, removeListener() {} });
 
 class Element {
   constructor(tagName = "div") {
@@ -96,6 +106,8 @@ const context = vm.createContext({
   ImageDownloaderCore: Core,
   ImageDownloaderFilters: Filters,
   ImageDownloaderTemplates: Templates,
+  ImageDownloaderImmich: PickerImmich,
+  AnyDownloadIntegrations: Integrations,
   AnyDownloadTracker: require("../extension/shared/tracker.js"),
   AnyDownloadGallery: require("../extension/shared/gallery.js"),
   setTimeout: () => 1, clearTimeout() {}, addEventListener() {},
@@ -103,11 +115,20 @@ const context = vm.createContext({
     storage: {
       local: { get: async () => saved, set: async value => Object.assign(saved, value) },
       session: { get: async () => previewSession, set: async value => Object.assign(previewSession, value),
-        remove: async key => { delete previewSession[key]; } }
+        remove: async key => { delete previewSession[key]; } },
+      onChanged: browserEvent()
     },
     runtime: {
+      id: "test-extension",
+      onMessage: browserEvent(),
       getURL: file => `moz-extension://test/${file}`,
       sendMessage: async message => {
+        if (message.type === "INTEGRATIONS") {
+          if (message.action === "status") return { ok: true, signedIn: true, ownerId: integrationOwner, email: "owner@example.com" };
+          if (message.action === "list") return { ok: true, connections: [integrationConnection] };
+          if (message.action === "credential") return { ok: true, ownerId: integrationOwner,
+            connection: integrationConnection, apiKey: "test-key" };
+        }
         if (message.type === "DOWNLOAD_BATCH") {
           downloadMessages.push(message);
           return { ok: true, queued: message.items.length, failed: 0, total: message.items.length };
@@ -123,7 +144,8 @@ const context = vm.createContext({
         return { ok: true };
       }
     },
-    tabs: { create: async properties => openedTabs.push(properties) }
+    tabs: { create: async properties => openedTabs.push(properties), getCurrent: async () => ({ incognito: false }) },
+    permissions: { request: async () => true, contains: async () => true, onRemoved: browserEvent() }
   },
   document: {
     documentElement: new Element(),
@@ -601,24 +623,37 @@ for (const embedded of [false, true]) {
   assert.equal(clearedVideo.paused, true);
   assert.equal(clearedVideo.src, "", "Clearing the collection releases active video playback");
 
-  ui.state.images = [first];
+  ui.state.images = [first, clip];
   ui.state.incognito = false;
   first.downloadStatus = "downloaded";
   first.downloadFingerprint = "previous-local-download";
   ui.state.explicitRedownloads.add(first.downloadFingerprint);
   ui.state.selected.add(first.url);
+  ui.state.selected.add(clip.url);
   get("filename-template-input").value = "{filename}";
   ui.updateSummary();
-  assert.equal(get("upload-button").disabled, false, "Previously downloaded images remain eligible for explicit upload");
+  assert.equal(get("upload-button").disabled, false, "Selected images and direct videos are eligible for Immich upload");
   const downloadsBeforeUpload = downloadMessages.length;
   const tabsBeforeUpload = openedTabs.length;
   await get("upload-button").listeners.click();
-  assert.equal(ui.state.workspace, "upload", "Upload selected opens inside the current popup or sidebar");
+  assert.equal(get("upload-destination-dialog").open, true, "Upload selected opens an in-widget destination picker");
+  assert.equal(ui.state.workspace, "media", "Choosing an album keeps Media selected");
+  assert.equal(get("upload-album-select").value, "", "The Immich library is available without loading albums");
+  assert.equal(get("upload-album-select").children.some(option => option.value === integrationAlbum), true,
+    "Opening Upload selected automatically refreshes writable Immich albums");
+  get("upload-album-select").value = integrationAlbum;
+  await get("confirm-upload-destination-button").listeners.click();
+  assert.equal(ui.state.workspace, "upload", "Confirming the album opens upload progress inside the widget");
+  assert.equal(get("media-button").getAttribute("aria-current"), "page", "Upload progress keeps the Media tab selected");
   const uploadUrl = new URL(workspaceFrame.src);
   assert.equal(uploadUrl.pathname, "/upload/upload.html");
   assert.equal(uploadUrl.searchParams.get("embedded"), "1");
   const uploadId = uploadUrl.searchParams.get("request");
   assert.equal(previewSession[`uploadJobRequest:${uploadId}`].items[0].url, first.url);
+  assert.equal(previewSession[`uploadJobRequest:${uploadId}`].items.find(item => item.mediaType === "video").url, clip.url);
+  assert.equal(previewSession[`uploadJobRequest:${uploadId}`].connectionId, integrationConnection.id);
+  assert.equal(previewSession[`uploadJobRequest:${uploadId}`].albumId, integrationAlbum);
+  assert.equal(previewSession[`uploadJobRequest:${uploadId}`].autoStart, true);
   assert.equal(openedTabs.length, tabsBeforeUpload, "Upload selected does not open a browser tab");
   assert.equal(downloadMessages.length, downloadsBeforeUpload, "Upload does not enqueue a local download");
   assert.equal(first.downloadStatus, "downloaded", "Upload does not overwrite local completion state");

@@ -296,6 +296,33 @@
       </div>
     </dialog>
 
+    <dialog id="upload-destination-dialog" class="upload-destination-dialog" aria-labelledby="upload-destination-title" tabindex="-1">
+      <header class="upload-destination-header">
+        <div class="upload-destination-heading-copy">
+          <span class="upload-destination-icon" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M10 13V3m-4 4 4-4 4 4M3 13v4h14v-4"/></svg></span>
+          <div><p class="eyebrow">Immich destination</p><h2 id="upload-destination-title">Upload selected media</h2><p class="upload-destination-subtitle">Choose where this batch should go.</p></div>
+        </div>
+        <button id="close-upload-destination-button" class="icon-button" type="button" aria-label="Close upload destination">×</button>
+      </header>
+      <div class="upload-selection-summary">
+        <span class="upload-selection-summary-icon" aria-hidden="true"><svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="2"/><circle cx="7" cy="8" r="1"/><path d="m4 14 4-4 3 3 2-2 3 3"/></svg></span>
+        <p id="upload-destination-summary">Choose where the selected media should be uploaded.</p>
+      </div>
+      <div class="upload-destination-fields">
+        <label class="compact-field"><span>Connected server</span><select id="upload-connection-select"></select></label>
+        <div class="upload-album-heading"><label for="upload-album-select">Album</label></div>
+        <select id="upload-album-select"><option value="">Library — no album</option></select>
+        <p class="field-help">Choose Library to upload without adding these files to an album.</p>
+      </div>
+      <p id="upload-destination-error" class="field-help error" role="alert" hidden></p>
+      <div class="upload-destination-actions">
+        <button id="manage-upload-connections-button" class="text-button" type="button">Manage connections</button>
+        <span class="upload-destination-spacer"></span>
+        <button id="cancel-upload-destination-button" class="secondary-button" type="button">Cancel</button>
+        <button id="confirm-upload-destination-button" class="primary-button" type="button" disabled>Upload selected</button>
+      </div>
+    </dialog>
+
     <script src="../shared/core.js"></script>
     <script src="../shared/collector.js"></script>
     <script src="../shared/fapfolder.js"></script>
@@ -306,6 +333,8 @@
     <script src="../shared/tracker.js"></script>
     <script src="../shared/download-ledger.js"></script>
     <script src="../shared/gallery.js"></script>
+    <script src="../shared/immich.js"></script>
+    <script src="../shared/integrations.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

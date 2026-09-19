@@ -4,6 +4,17 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.20.0] - 2026-09-19
+
+### Added
+
+- Added direct video uploads to Immich for selected page media and local files, supporting MP4, WebM, Ogg/OGV, MOV, M4V, and MKV within the existing 64 MiB per-file limit.
+
+### Changed
+
+- Kept **Upload selected** inside the Media workspace with a compact destination picker that refreshes current writable albums automatically and starts the embedded transfer after confirmation.
+- Refined the upload picker with a clearer batch summary, grouped server and album fields, responsive actions, and cleaner status messaging.
+
 ## [1.19.2] - 2026-09-19
 
 ### Changed

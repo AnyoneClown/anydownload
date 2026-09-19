@@ -13,6 +13,8 @@ const serverUrl = "https://photos.tail123.ts.net:2283";
 const credential = { serverUrl, apiKey: "a-test-secret-never-store" };
 const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0]);
 const blob = new Blob([png], { type: "image/png" });
+const mp4 = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0]);
+const videoBlob = new Blob([mp4], { type: "video/mp4" });
 const create = (count = 1, options = {}) => Uploads.createJob(Array.from({ length: count }, (_, index) => ({
   url: `https://source.example/photo-${index}.png`, filename: `photo-${index}.png`, downloaded: true, apiKey: credential.apiKey
 })), { ownerId, connectionId, serverUrl, id: "test-upload-job", ...options });
@@ -32,7 +34,8 @@ async function main() {
     assert.throws(() => create(1, options), { code: "invalid_job" });
   }
   assert.throws(() => create(Uploads.MAX_ITEMS + 1), { code: "invalid_job" });
-  assert.throws(() => Uploads.createJob([{ url: "https://source.example/file.mp4" }], fresh), { code: "invalid_image" });
+  const video = Uploads.createJob([{ url: "https://source.example/file.mp4", filename: "file.mp4", mediaType: "video" }], fresh);
+  assert.equal(video.items[0].mediaType, "video");
   assert.throws(() => Uploads.createJob([{ url: "data:image/png;base64,AAAA" }], fresh), { code: "embedded_image" });
   assert.throws(() => Uploads.createJob([{ url: "https://user:password@source.example/photo.png" }], fresh), { code: "invalid_job" });
 
@@ -79,6 +82,11 @@ async function main() {
   assert.equal(Uploads.summarize(library).attached, 0);
   await Uploads.run(library, options);
   assert.equal(uploads, 2, "An explicit retry leaves confirmed completed images alone");
+
+  uploads = 0;
+  await Uploads.run(video, { ...options, fetchImage: async () => videoBlob });
+  assert.equal(video.status, "complete", "Direct videos use the same durable Immich asset pipeline");
+  assert.equal(video.items[0].mediaType, "video");
 
   uploads = 0; attachments = 0; snapshots = [];
   const album = create(1, { albumId });
