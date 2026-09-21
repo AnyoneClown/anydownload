@@ -22,7 +22,7 @@
       if (!Core.siteKeyForUrl(url.href) || url.username || url.password || url.href.length > 16384) {
         return "";
       }
-      url.hash = "";
+      if (url.origin !== "https://web.telegram.org") url.hash = "";
       return url.href;
     } catch (_error) {
       return "";

@@ -9,6 +9,181 @@
        /^https:\/\/web\.telegram\.org\/(?:k|a)\/stream\/[^/#]+$/i.test(value));
   }
 
+  function isReference(value) {
+    try {
+      const url = new URL(value);
+      return url.origin === "https://web.telegram.org" && url.pathname === "/k/" &&
+        !url.username && !url.password && !url.hash && value.length <= 1000 &&
+        url.searchParams.get("anydownload_telegram") === "1" &&
+        /^-?\d{1,20}$/.test(url.searchParams.get("peer")) &&
+        /^\d{1,20}$/.test(url.searchParams.get("mid")) &&
+        /^\d{1,30}$/.test(url.searchParams.get("id")) &&
+        ["photo", "video", "image"].includes(url.searchParams.get("kind"));
+    } catch (_error) { return false; }
+  }
+
+  // Serialized into Telegram's main world. Read only messages represented in
+  // the loaded DOM; never enumerate chat history or access account credentials.
+  async function pageMedia(options = {}) {
+    const pageUrl = location.href;
+    const result = { handled: true, pageUrl, pageTitle: document.title,
+      embeddedFrameCount: 0, images: [], warnings: [] };
+    const maximum = 64 * 1024 * 1024;
+    if (!/^https:\/\/web\.telegram\.org\/k\//.test(pageUrl) ||
+      options.expectedPage && options.expectedPage !== pageUrl) {
+      throw new Error("The Telegram chat changed. Return to the source chat and rescan.");
+    }
+    const proxy = globalThis.apiManagerProxy;
+    const downloads = globalThis.appDownloadManager;
+    if (!proxy || typeof proxy.getMessageByPeer !== "function") {
+      if (options.resolve) throw new Error("Telegram original media is unavailable. Reload Telegram and rescan.");
+      result.warnings.push("Telegram original media is unavailable. Reload Telegram and rescan; chat thumbnails have not been substituted for originals.");
+      return result;
+    }
+    function details(peer, mid, expectedId) {
+      const message = proxy.getMessageByPeer(Number(peer), Number(mid));
+      const media = message && message.media && (message.media.photo || message.media.document);
+      if (!media || !/^\d{1,30}$/.test(String(media.id)) || expectedId && String(media.id) !== expectedId) return null;
+      const attributes = Array.isArray(media.attributes) ? media.attributes.slice(0, 30) : [];
+      let thumb;
+      let width = 0, height = 0, duration = 0;
+      let size = Number(media.size) || 0;
+      let mimeType = String(media.mime_type || "").split(";", 1)[0].toLowerCase();
+      let kind;
+      if (media._ === "photo") {
+        const sizes = (Array.isArray(media.sizes) ? media.sizes : []).slice(0, 32)
+          .filter((item) => ["photoSize", "photoSizeProgressive"].includes(item._) &&
+            Number(item.w) > 0 && Number(item.h) > 0);
+        thumb = sizes.sort((a, b) => Number(b.w) * Number(b.h) - Number(a.w) * Number(a.h))[0];
+        if (!thumb) return null;
+        width = Number(thumb.w); height = Number(thumb.h);
+        size = Number(thumb.size) || Math.max(0, ...(Array.isArray(thumb.sizes) ? thumb.sizes.slice(0, 32).map(Number) : []));
+        mimeType = "image/jpeg";
+        kind = "photo";
+      } else if (media._ === "document") {
+        const video = attributes.find((item) => item._ === "documentAttributeVideo");
+        const image = attributes.find((item) => item._ === "documentAttributeImageSize");
+        if (video || /^video\//.test(mimeType)) {
+          kind = "video";
+          mimeType = /^video\//.test(mimeType) ? mimeType : "video/mp4";
+          width = Number(video && video.w) || Number(media.w) || 0;
+          height = Number(video && video.h) || Number(media.h) || 0;
+          duration = Number(video && video.duration) || 0;
+        } else if (/^image\//.test(mimeType)) {
+          kind = "image";
+          width = Number(image && image.w) || 0; height = Number(image && image.h) || 0;
+        } else return null;
+      } else return null;
+      if (!Number.isSafeInteger(size) || size <= 0 || size > maximum) {
+        throw new Error("A Telegram original has an unknown size or exceeds the 64 MiB per-file limit.");
+      }
+      const nameAttribute = attributes.find((item) => item._ === "documentAttributeFilename");
+      let filename = String(media.file_name || nameAttribute && nameAttribute.file_name || "").slice(0, 180);
+      const extensions = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
+        "image/gif": "gif", "video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov", "video/x-matroska": "mkv" };
+      const extension = extensions[mimeType] || (kind === "video" ? "mp4" : "jpg");
+      if (!filename) filename = `telegram-${kind}-${media.id}.${extension}`;
+      else if (!/\.(?:jpe?g|png|gif|webp|mp4|webm|mov|mkv|m4v|ogv)$/i.test(filename)) filename += `.${extension}`;
+      return { media, thumb, kind, width, height, duration, mimeType, filename };
+    }
+    if (options.resolve) {
+      const reference = new URL(options.resolve);
+      if (reference.origin !== "https://web.telegram.org" || reference.pathname !== "/k/" ||
+        reference.username || reference.password || reference.hash || options.resolve.length > 1000 ||
+        reference.searchParams.get("anydownload_telegram") !== "1" ||
+        !/^-?\d{1,20}$/.test(reference.searchParams.get("peer")) ||
+        !/^\d{1,20}$/.test(reference.searchParams.get("mid")) ||
+        !/^\d{1,30}$/.test(reference.searchParams.get("id"))) throw new Error("Invalid Telegram media reference.");
+      const original = details(reference.searchParams.get("peer"), reference.searchParams.get("mid"), reference.searchParams.get("id"));
+      if (!original || original.kind !== reference.searchParams.get("kind")) throw new Error("Telegram original media expired. Rescan the chat.");
+      if (original.media._ === "document") {
+        const media = original.media;
+        const dcId = Number(media.dc_id);
+        const accessHash = String(media.access_hash || "");
+        const fileReference = Array.isArray(media.file_reference) ? media.file_reference.slice(0, 512) : [];
+        if (!Number.isSafeInteger(dcId) || dcId <= 0 || dcId > 1000 ||
+          !/^-?\d{1,30}$/.test(accessHash) || !fileReference.length ||
+          fileReference.some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 255) ||
+          !/^(?:image|video)\/[a-z0-9.+-]+$/i.test(original.mimeType)) {
+          throw new Error("Telegram's original-file metadata is incomplete. Reload Telegram and rescan.");
+        }
+        const stream = new URL(`stream/${encodeURIComponent(JSON.stringify({
+          dcId,
+          location: { _: "inputDocumentFileLocation", id: String(media.id), access_hash: accessHash,
+            file_reference: fileReference, thumb_size: "" },
+          size: Number(media.size), mimeType: original.mimeType, fileName: original.filename
+        }))}`, location.href).href;
+        if (stream.length > 16384 || !/^https:\/\/web\.telegram\.org\/k\/stream\/[^/#]+$/i.test(stream)) {
+          throw new Error("Telegram did not expose a safe original-file stream.");
+        }
+        return { url: stream, mimeType: original.mimeType };
+      }
+      if (!downloads || typeof downloads.downloadMediaURL !== "function") throw new Error("Telegram's original-file downloader is unavailable.");
+      const pending = downloads.downloadMediaURL({ media: original.media, thumb: original.thumb });
+      let timer;
+      try {
+        const url = await Promise.race([pending, new Promise((_, reject) => {
+          timer = setTimeout(() => { reject(new Error("Telegram original-file loading timed out.")); }, 60000);
+        })]);
+        if (location.href !== pageUrl) throw new Error("The Telegram chat changed while loading media.");
+        if (typeof url !== "string" || !/^blob:https:\/\/web\.telegram\.org\/[a-z0-9-]+$/i.test(url)) {
+          throw new Error("Telegram did not expose a complete original file.");
+        }
+        return { url, mimeType: original.mimeType };
+      } finally { clearTimeout(timer); }
+    }
+    let payload = 0;
+    const seen = new Set();
+    const selector = ".bubble[data-mid], .grouped-item[data-mid], .document-container[data-mid]";
+    let nodes = document.querySelectorAll(selector);
+    if (options.targetUrl) {
+      const target = Array.from(document.querySelectorAll("img, video")).slice(0, 2000)
+        .find((element) => (element.currentSrc || element.src) === options.targetUrl);
+      const messageNode = target && target.closest(selector);
+      nodes = messageNode ? [messageNode] : [];
+    }
+    for (const node of Array.from(nodes).slice(0, 500)) {
+      const peerNode = node.closest("[data-peer-id]");
+      const peer = peerNode && peerNode.getAttribute("data-peer-id");
+      const mid = node.getAttribute("data-mid");
+      if (!/^-?\d{1,20}$/.test(peer) || !/^\d{1,20}$/.test(mid) || seen.has(`${peer}:${mid}`)) continue;
+      seen.add(`${peer}:${mid}`);
+      try {
+        const original = details(peer, mid);
+        if (!original) continue;
+        const reference = new URL("https://web.telegram.org/k/");
+        reference.search = new URLSearchParams({ anydownload_telegram: "1", peer, mid,
+          id: String(original.media.id), kind: original.kind }).toString();
+        let previewUrl = "";
+        try {
+          const image = node.querySelector("img.media-photo:not(.thumbnail), .document-thumb img, video");
+          const width = image && (image.videoWidth || image.naturalWidth);
+          const height = image && (image.videoHeight || image.naturalHeight);
+          if (width && height) {
+            const canvas = document.createElement("canvas");
+            const scale = Math.min(1, 240 / Math.max(width, height));
+            canvas.width = Math.max(1, Math.round(width * scale)); canvas.height = Math.max(1, Math.round(height * scale));
+            canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+            const data = canvas.toDataURL("image/jpeg", 0.7);
+            if (data.length <= 50000) previewUrl = data;
+          }
+        } catch (_error) { /* Unloaded thumbnails do not change the original. */ }
+        if (payload + reference.href.length + previewUrl.length > 1800000) previewUrl = "";
+        payload += reference.href.length + previewUrl.length;
+        if (payload > 1900000 || result.images.length >= 300) break;
+        result.images.push({ url: reference.href, previewUrl, filename: original.filename,
+          width: original.width, height: original.height, duration: original.duration,
+          mimeType: original.mimeType, mediaType: original.kind === "video" ? "video" : "image",
+          sourceProvider: "telegram", identityKey: `telegram:${peer}:${mid}:${original.media.id}`,
+          kinds: [original.kind === "photo" ? "Telegram original photo" : "Telegram original file"] });
+      } catch (error) {
+        if (result.warnings.length < 4) result.warnings.push(String(error.message || error).slice(0, 300));
+      }
+    }
+    result.warnings.push("Telegram originals: scan covers loaded messages only (up to 300 files). Keep this chat open for previews and downloads. Original files load on demand, with a 64 MiB per-file limit.");
+    return result;
+  }
+
   // Serialized into MAIN: Firefox's extension fetch cannot use Telegram's SW.
   // No Telegram account state or internal APIs are read.
   async function readChunk(url, expectedPage, offset) {
@@ -69,7 +244,9 @@
     }
   }
 
-  async function transfer(api, task, incognito, validateBlob) {
+  async function transfer(api, task, incognito, validateBlob, signal) {
+    const checkCancelled = () => { if (signal && signal.aborted) throw new Error("Telegram preview cancelled."); };
+    checkCancelled();
     if (!/^https:\/\/web\.telegram\.org\/(?:k|a)\//i.test(task.source || "")) {
       throw new Error("Telegram downloads require their original chat. Rescan the open Telegram tab.");
     }
@@ -77,19 +254,29 @@
     const candidates = tabs.filter((tab) => tab.url === task.source && Boolean(tab.incognito) === Boolean(incognito));
     if (candidates.length !== 1) throw new Error("Keep exactly one source Telegram tab open in the original chat and rescan.");
     const tabId = candidates[0].id;
+    let sourceUrl = task.url;
+    if (isReference(sourceUrl)) {
+      const resolved = await api.scripting.executeScript({ target: { tabId }, world: "MAIN",
+        func: pageMedia, args: [{ resolve: sourceUrl, expectedPage: task.source }] });
+      const value = resolved && resolved[0] && resolved[0].result;
+      if (!value || !isMediaUrl(value.url)) throw new Error("Telegram original-file resolution failed.");
+      sourceUrl = value.url;
+    }
+    checkCancelled();
     const parts = [];
     let offset = 0;
     let total = 0;
     let type = "";
     const deadline = Date.now() + 120000;
     do {
+      checkCancelled();
       if (Date.now() > deadline) throw new Error("Telegram transfer timed out. Open the media and retry.");
       const current = await api.tabs.get(tabId);
       if (current.url !== task.source || Boolean(current.incognito) !== Boolean(incognito)) {
         throw new Error("The Telegram source tab changed. Rescan the original chat.");
       }
       const results = await api.scripting.executeScript({
-        target: { tabId }, world: "MAIN", func: readChunk, args: [task.url, task.source, offset]
+        target: { tabId }, world: "MAIN", func: readChunk, args: [sourceUrl, task.source, offset]
       });
       const result = results && results[0] && results[0].result;
       if (!result || typeof result.data !== "string" || result.data.length > Math.ceil(CHUNK_BYTES / 3) * 4 ||
@@ -104,10 +291,11 @@
       type = type || result.type;
       offset += binary.length;
     } while (offset < total);
+    checkCancelled();
     return validateBlob(new Blob(parts, { type }), task.mediaType || "image", task.filename);
   }
 
-  const api = { isMediaUrl, readChunk, transfer };
+  const api = { isMediaUrl: (value) => isMediaUrl(value) || isReference(value), isReference, pageMedia, readChunk, transfer };
   root.AnyDownloadTelegram = api;
   if (typeof module === "object" && module.exports) module.exports = api;
 })(globalThis);

@@ -42,6 +42,7 @@ class Element {
   getAttribute(name) { return this.attributes[name] ?? null; }
   get src() { return this.attributes.src || ""; }
   set src(value) { this.attributes.src = value; this.srcWrites = (this.srcWrites || 0) + 1; }
+  remove() { this.parentElement.children = this.parentElement.children.filter(child => child !== this); this.isConnected = false; }
   removeAttribute(name) { delete this.attributes[name]; }
   addEventListener(name, callback) { this.listeners[name] = callback; }
   append(...children) {
@@ -99,8 +100,20 @@ const previewSession = {};
 const openedTabs = [];
 const settingsMessages = [];
 const downloadMessages = [];
+const Telegram = require("../extension/shared/telegram.js");
+const telegramTransfers = [];
+const revokedPreviews = [];
+class PreviewURL extends URL {}
+PreviewURL.createObjectURL = () => "blob:extension-preview";
+PreviewURL.revokeObjectURL = (url) => revokedPreviews.push(url);
+const telegramApi = { ...Telegram, transfer: async (_browser, task, incognito, _validate, signal) => {
+  telegramTransfers.push({ task, incognito, signal });
+  if (signal.aborted) throw new Error("cancelled");
+  return new Blob(["fixture"], { type: "video/mp4" });
+} };
 const context = vm.createContext({
-  URL, URLSearchParams, console,
+  URL: PreviewURL, URLSearchParams, console, AbortController,
+  AnyDownloadTelegram: telegramApi, ImageDownloaderImageFetch: { mediaBlob() {} },
   crypto: require("node:crypto").webcrypto,
   location: { href: "moz-extension://test/popup/popup.html?sourceTabId=7" },
   ImageDownloaderCore: Core,
@@ -583,6 +596,21 @@ for (const embedded of [false, true]) {
   assert.equal(playing.paused, true, "Closing an inline video must stop playback");
   assert.equal(playing.src, "");
   assert.equal(playing.reloaded, true, "Closing video must release its media connection");
+
+  const telegramClip = { ...clip, url: "https://web.telegram.org/k/?anydownload_telegram=1&peer=-123&mid=2&id=777&kind=video",
+    pageUrl: "https://web.telegram.org/k/#-123", filename: "holiday.mp4", mimeType: "video/mp4", sourceProvider: "telegram" };
+  ui.state.images = [telegramClip];
+  ui.openGalleryPreview(telegramClip);
+  const telegramPlayer = get("media-preview-stage").children[0];
+  assert.equal(telegramPlayer.tagName, "VIDEO", "Telegram files must use a playable video element");
+  assert.equal(telegramPlayer.controls, true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(telegramPlayer.src, "blob:extension-preview");
+  assert.equal(telegramTransfers[0].task.source, telegramClip.pageUrl);
+  get("close-preview-button").listeners.click();
+  assert.equal(telegramPlayer.paused, true);
+  assert.equal(telegramTransfers[0].signal.aborted, true);
+  assert.deepEqual(revokedPreviews, ["blob:extension-preview"], "Closing Telegram preview must release transferred bytes");
 
   ui.resetMediaFilters();
   const signed = [

@@ -4,6 +4,15 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.21.2] - 2026-09-21
+
+### Fixed
+
+- Resolve Telegram Web K's largest photo variant from loaded message metadata instead of saving the chat preview.
+- Recognize video documents before playback, preserving video MIME types, dimensions, duration, and filenames (including MP4).
+- Load original Telegram photos and playable videos on demand in gallery and separate-tab previews, releasing preview bytes when closed.
+- Build Telegram document streams with the required original-file `thumb_size` sentinel, fixing MP4 preview and download failures in the current Web K client.
+
 ## [1.21.1] - 2026-09-21
 
 ### Added

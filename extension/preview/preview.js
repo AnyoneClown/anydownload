@@ -125,8 +125,9 @@
     const validateUrl = typeof Core.validateMediaUrl === "function"
       ? Core.validateMediaUrl
       : Core.validateDownloadUrl;
-    const urlResult = validateUrl(payload && payload.url);
+    let urlResult = validateUrl(payload && payload.url);
     const sourceResult = validateUrl(payload && payload.sourceUrl);
+    if (sourceResult.ok && /^https:\/\/web\.telegram\.org\//.test(payload.sourceUrl)) sourceResult.value = payload.sourceUrl;
     if (sourceResult.ok && /^https?:/i.test(sourceResult.value)) {
       elements.source.href = sourceResult.value;
       elements.source.hidden = false;
@@ -176,6 +177,23 @@
     const alt = String(payload.alt || name).slice(0, 500);
     elements.name.textContent = name;
     document.title = `${name} — ${typeLabel} preview`;
+
+    const telegram = globalThis.AnyDownloadTelegram;
+    if (telegram && telegram.isMediaUrl(urlResult.value)) {
+      elements.loading.textContent = "Loading original media from Telegram…";
+      const controller = new AbortController();
+      let objectUrl = "";
+      addEventListener("pagehide", () => {
+        controller.abort();
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+      }, { once: true });
+      const blob = await telegram.transfer(browser, {
+        url: urlResult.value, source: payload.sourceUrl, mediaType, filename: name
+      }, Boolean(payload.incognito), globalThis.ImageDownloaderImageFetch.mediaBlob, controller.signal);
+      if (controller.signal.aborted) return;
+      objectUrl = URL.createObjectURL(blob);
+      urlResult = { ok: true, value: objectUrl };
+    }
 
     if (/^https?:/i.test(urlResult.value)) {
       elements.original.href = urlResult.value;

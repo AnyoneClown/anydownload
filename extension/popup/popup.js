@@ -611,6 +611,7 @@
     "use strict";
 
   const Core = globalThis.ImageDownloaderCore;
+  const Telegram = globalThis.AnyDownloadTelegram;
   const collectImagesFromPage = globalThis.ImageDownloaderCollector;
   const FapFolder = globalThis.AnyDownloadFapFolder;
   const collectFapFolderMediaFromPage = globalThis.AnyDownloadFapFolderCollector ||
@@ -763,6 +764,9 @@
   let sourceRescanTimer = null;
   let clearedGallery = null;
   let previewItems = [];
+  let telegramPreviewController = null;
+  let telegramPreviewUrl = "";
+  let telegramPreviewQueue = Promise.resolve();
   let previewIndex = 0;
   let previewOpener = null;
 
@@ -2136,11 +2140,10 @@
       return;
     }
     const youtube = Boolean(Gallery.youtubeUrl(image));
-    const telegram = /^blob:https:\/\/web\.telegram\.org\//i.test(image.url) ||
-      /^https:\/\/web\.telegram\.org\/(?:k|a)\/stream\//i.test(image.url);
-    const video = mediaTypeFor(image) === "video" && !youtube && !telegram;
+    const telegram = Telegram && Telegram.isMediaUrl(image.url);
+    const video = mediaTypeFor(image) === "video" && !youtube;
     const result = Core.validateMediaUrl(youtube || telegram ? image.previewUrl : image.url);
-    if (result.ok) {
+    if (result.ok || telegram) {
       const media = document.createElement(video ? "video" : "img");
       media.referrerPolicy = "no-referrer";
       if (video) {
@@ -2151,8 +2154,35 @@
         media.alt = String(image.alt || "").slice(0, 500);
       }
       media.addEventListener("error", () => { if (media.isConnected) elements["media-preview-error"].hidden = false; });
-      media.src = result.value;
       stage.appendChild(media);
+      if (telegram) {
+        const controller = new AbortController();
+        telegramPreviewController = controller;
+        const loading = document.createElement("p");
+        loading.className = "field-help";
+        loading.textContent = `Loading original ${video ? "video" : "photo"} from Telegram…`;
+        stage.appendChild(loading);
+        if (video && image.previewUrl) media.poster = image.previewUrl;
+        const previewTask = { url: image.url, source: image.pageUrl || state.pageUrl,
+          mediaType: mediaTypeFor(image), filename: image.filename };
+        const previewIncognito = state.incognito;
+        telegramPreviewQueue = telegramPreviewQueue.catch(() => undefined).then(async () => {
+          try {
+            const blob = await Telegram.transfer(browser, previewTask, previewIncognito,
+              globalThis.ImageDownloaderImageFetch.mediaBlob, controller.signal);
+            if (controller.signal.aborted) return;
+            telegramPreviewUrl = URL.createObjectURL(blob);
+            media.src = telegramPreviewUrl;
+            loading.remove();
+          } catch (error) {
+            if (!controller.signal.aborted) {
+              loading.textContent = error.message || "Telegram preview unavailable.";
+            }
+          }
+        });
+      } else {
+        media.src = result.value;
+      }
     } else {
       elements["media-preview-error"].hidden = false;
     }
@@ -2176,6 +2206,10 @@
   }
 
   function clearPreviewStage() {
+    if (telegramPreviewController) telegramPreviewController.abort();
+    telegramPreviewController = null;
+    if (telegramPreviewUrl) URL.revokeObjectURL(telegramPreviewUrl);
+    telegramPreviewUrl = "";
     const stage = elements["media-preview-stage"];
     for (const video of stage.querySelectorAll("video")) {
       video.pause();
@@ -2230,6 +2264,7 @@
       mediaType: mediaTypeFor(image),
       sourceUrl: Gallery.pageUrl(image.pageUrl || state.pageUrl),
       sourceTabId: state.sourceTabId,
+      incognito: state.incognito,
       createdAt: Date.now()
     };
     try {
@@ -4076,6 +4111,13 @@
           }
         }];
         preservedInstagramFallback = previousMatchesTab;
+      }
+
+      if (!injectionResults && Telegram && /^https:\/\/web\.telegram\.org\/k\//i.test(tab.url)) {
+        injectionResults = await browser.scripting.executeScript({
+          target: { tabId: tab.id }, world: "MAIN", func: Telegram.pageMedia,
+          args: [{ expectedPage: tab.url }]
+        });
       }
 
       if (!injectionResults) {

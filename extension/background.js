@@ -433,6 +433,16 @@
   async function resolveContextMedia(info, tab) {
     const requestedMediaType = info && info.mediaType === "video" ? "video" : "image";
     const sourceUrl = normalizedMediaUrl(info && info.srcUrl);
+    if (globalThis.AnyDownloadTelegram && /^https:\/\/web\.telegram\.org\/k\//i.test(tab && tab.url || "")) {
+      const results = await browser.scripting.executeScript({
+        target: { tabId: tab.id }, world: "MAIN", func: globalThis.AnyDownloadTelegram.pageMedia,
+        args: [{ expectedPage: tab.url, targetUrl: sourceUrl || "unavailable" }]
+      });
+      const images = results && results[0] && results[0].result && results[0].result.images;
+      const original = images && images.length === 1 && safeContextMedia(images[0]);
+      if (original) return original;
+      throw new Error("Telegram could not identify the original for this item. Scan the chat in AnyDownload instead.");
+    }
     let specializedError = "";
     if (
       requestedMediaType === "video" &&
@@ -638,8 +648,10 @@
         alt: image.alt,
         mediaType: image.mediaType,
         duration: image.duration,
-        sourceUrl: /^https?:/i.test(tab && tab.url || "") ? normalizedMediaUrl(tab.url) : "",
+        sourceUrl: /^https?:/i.test(tab && tab.url || "")
+          ? (Gallery ? Gallery.pageUrl(tab.url) : normalizedMediaUrl(tab.url)) : "",
         sourceTabId: tab && Number.isSafeInteger(tab.id) && tab.id >= 0 ? tab.id : null,
+        incognito: Boolean(tab && tab.incognito),
         createdAt: Date.now()
       }
     });

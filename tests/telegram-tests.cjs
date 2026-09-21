@@ -36,7 +36,90 @@ function browser(read, privateTab = false) {
     } }
   };
 }
+async function testOriginalMetadata() {
+  const photo = { _: "photo", id: "555", sizes: [
+    { _: "photoSize", type: "m", w: 320, h: 200, size: 12000 },
+    { _: "photoSizeProgressive", type: "y", w: 2560, h: 1600, sizes: [20000, 300000] },
+    { _: "photoStrippedSize", type: "i", bytes: [1, 2] }
+  ] };
+  const video = { _: "document", id: "777", dc_id: 2, access_hash: "-987654321",
+    file_reference: [5, 0, 17, 255], size: 123456, mime_type: "video/mp4", attributes: [
+    { _: "documentAttributeVideo", w: 1920, h: 1080, duration: 12 },
+    { _: "documentAttributeFilename", file_name: "holiday.mp4" }
+  ] };
+  const messages = { 1: { media: { photo } }, 2: { media: { document: video } },
+    3: { media: { document: { _: "document", id: "888", mime_type: "application/pdf", size: 500 } } } };
+  const nodes = [1, 2, 3].map((mid) => ({
+    getAttribute: () => String(mid),
+    closest: () => ({ getAttribute: () => "-123" }),
+    querySelector: () => ({ naturalWidth: 320, naturalHeight: 200 })
+  }));
+  const downloads = [];
+  const context = { location: { href: PAGE }, URL, URLSearchParams, setTimeout, clearTimeout,
+    document: { title: "Telegram", querySelectorAll: () => nodes,
+      createElement: () => ({ getContext: () => ({ drawImage() {} }), toDataURL: () => "data:image/jpeg;base64,/9j/" }) },
+    apiManagerProxy: { getMessageByPeer: (peer, mid) => { assert.equal(peer, -123); return messages[mid]; } },
+    appDownloadManager: { downloadMediaURL: async (options) => { downloads.push(options); return URL_VALUE; } }
+  };
+  const scan = vm.runInNewContext(`(${Telegram.pageMedia.toString()})`, context);
+  const result = await scan({ expectedPage: PAGE });
+  assert.equal(result.images.length, 2, "Ignore non-media documents without requiring a video DOM element");
+  assert.equal(downloads.length, 0, "Scanning must not fetch full originals");
+  const original = result.images[0];
+  assert.equal(original.width, 2560);
+  assert.equal(original.height, 1600);
+  assert(Telegram.isReference(original.url));
+  assert(Telegram.isMediaUrl(original.url));
+  assert.notEqual(original.url, original.previewUrl);
+  const clip = result.images[1];
+  assert.equal(clip.mediaType, "video");
+  assert.equal(clip.filename, "holiday.mp4");
+  assert.equal(clip.mimeType, "video/mp4");
+  assert.equal(clip.width, 1920);
+  assert.equal(clip.duration, 12);
+  assert(clip.previewUrl.startsWith("data:image/"));
+  await scan({ resolve: original.url, expectedPage: PAGE });
+  assert.equal(downloads[0].thumb.type, "y", "Resolve largest progressive photo, not displayed m preview");
+  const resolvedClip = await scan({ resolve: clip.url, expectedPage: PAGE });
+  assert.equal(downloads.length, 1, "Document videos use Telegram's range stream instead of its broken blob downloader");
+  assert(Telegram.isMediaUrl(resolvedClip.url));
+  const streamOptions = JSON.parse(decodeURIComponent(new URL(resolvedClip.url).pathname.split("/stream/")[1]));
+  assert.equal(streamOptions.location._, "inputDocumentFileLocation");
+  assert.equal(streamOptions.location.id, "777");
+  assert.equal(streamOptions.location.thumb_size, "", "Telegram requires the original-document thumb_size sentinel");
+  assert.equal(streamOptions.mimeType, "video/mp4");
+  assert.equal(streamOptions.size, 123456);
+  await assert.rejects(scan({ resolve: clip.url.replace("id=777", "id=999"), expectedPage: PAGE }), /expired/);
+  await assert.rejects(scan({ resolve: clip.url, expectedPage: PAGE + "other" }), /chat changed/);
+  photo.sizes[1].sizes = [70000000];
+  const oversized = await scan();
+  assert.equal(oversized.images.length, 1, "Never silently substitute a small photo when the original exceeds the limit");
+  const unavailable = vm.runInNewContext(`(${Telegram.pageMedia.toString()})`, { location: context.location, document: context.document });
+  const failed = await unavailable();
+  assert.equal(failed.images.length, 0);
+  assert.match(failed.warnings[0], /thumbnails have not been substituted/);
+
+  const api = browser(reader(fixture(Uint8Array.from([0xff, 0xd8, 0xff, 1]))));
+  const read = api.scripting.executeScript;
+  let resolutions = 0;
+  api.scripting.executeScript = async (options) => {
+    if (options.func === Telegram.pageMedia) {
+      resolutions++;
+      assert.equal(options.args[0].resolve, original.url);
+      return [{ result: { url: URL_VALUE } }];
+    }
+    return read(options);
+  };
+  const blob = await Telegram.transfer(api, { url: original.url, source: PAGE, mediaType: "image" }, false, Media.mediaBlob);
+  assert.equal(blob.type, "image/jpeg");
+  assert.equal(resolutions, 1, "Resolve once before reading chunks");
+  const cancelled = new AbortController();
+  cancelled.abort();
+  await assert.rejects(Telegram.transfer(api, { url: original.url, source: PAGE }, false, Media.mediaBlob, cancelled.signal), /cancelled/);
+}
+
 async function main() {
+  await testOriginalMetadata();
   for (const value of [URL_VALUE, STREAM]) assert(Telegram.isMediaUrl(value));
   for (const value of ["blob:https://evil.test/123", "blob:https://web.telegram.org.evil/123", "blob:null/123", "https://web.telegram.org/k/hls/file", "https://web.telegram.org/k/stream/a/b"]) {
     assert.equal(Telegram.isMediaUrl(value), false, value);

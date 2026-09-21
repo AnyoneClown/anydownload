@@ -14,8 +14,22 @@ async function openPreview({ session = {}, cache = new Map(), clock = now, searc
   const elements = new Map();
   const updates = [];
   const navigations = [];
+  const transfers = [];
+  const revoked = [];
+  const events = {};
+  class PreviewURL extends URL {}
+  PreviewURL.createObjectURL = () => "blob:preview-original";
+  PreviewURL.revokeObjectURL = (url) => revoked.push(url);
   vm.runInNewContext(source, {
     ImageDownloaderCore: Core,
+    URL: PreviewURL, AbortController,
+    addEventListener: (type, callback) => { events[type] = callback; },
+    ImageDownloaderImageFetch: { mediaBlob() {} },
+    AnyDownloadTelegram: { ...require("../extension/shared/telegram.js"),
+      transfer: async (_browser, task, incognito, _validate, signal) => {
+        transfers.push({ task, incognito, signal });
+        return new Blob(["fixture"]);
+      } },
     URLSearchParams,
     Date: { now: () => clock },
     location: { search, assign: url => navigations.push(url) },
@@ -55,7 +69,7 @@ async function openPreview({ session = {}, cache = new Map(), clock = now, searc
     }
   });
   await new Promise(setImmediate);
-  return { elements, updates, navigations };
+  return { elements, updates, navigations, transfers, revoked, events };
 }
 
 (async () => {
@@ -109,6 +123,16 @@ async function openPreview({ session = {}, cache = new Map(), clock = now, searc
   const video = await openPreview({ session: { [key]: { ...payload, url: "https://cdn.example.test/clip.mp4", mediaType: "video" } } });
   assert.equal(video.elements.get("preview-video").src, "https://cdn.example.test/clip.mp4");
   assert.equal(video.elements.get("preview-video").hidden, false);
+  const telegramUrl = "https://web.telegram.org/k/?anydownload_telegram=1&peer=-123&mid=2&id=777&kind=video";
+  const telegram = await openPreview({ session: { [key]: { ...payload, url: telegramUrl,
+    sourceUrl: "https://web.telegram.org/k/#-123", mediaType: "video", incognito: true } } });
+  assert.equal(telegram.elements.get("preview-video").src, "blob:preview-original");
+  assert.equal(telegram.elements.get("source-link").href, "https://web.telegram.org/k/#-123");
+  assert.equal(telegram.elements.get("original-link").hidden, true, "Do not navigate to a synthetic file reference");
+  assert.equal(telegram.transfers[0].incognito, true);
+  telegram.events.pagehide();
+  assert.equal(telegram.transfers[0].signal.aborted, true);
+  assert.deepEqual(telegram.revoked, ["blob:preview-original"]);
   console.log("Preview page checks passed.");
 })().catch(error => {
   console.error(error);
