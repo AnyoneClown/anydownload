@@ -53,12 +53,19 @@ async function main() {
   const output = await Telegram.transfer(browser(read), task, false, Media.mediaBlob);
   assert.equal(output.type, "video/mp4");
   assert.deepEqual(new Uint8Array(await output.arrayBuffer()), bytes);
-  const blobSource = URL.createObjectURL(new Blob([bytes], { type: "video/mp4" }));
-  try {
-    const blobRead = reader((_url, options) => fetch(blobSource, options));
-    const blobOutput = await Telegram.transfer(browser(blobRead), { ...task, url: URL_VALUE }, false, Media.mediaBlob);
-    assert.equal(blobOutput.size, bytes.length, "Real blob byte ranges must transfer completely");
-  } finally { URL.revokeObjectURL(blobSource); }
+  // Model browser blob ranges explicitly. Node 22's blob: fetch drops the
+  // inclusive final byte while advertising the full Content-Range; Node 24
+  // fixes that Node-only behavior. Keep the production length check strict.
+  const sourceBlob = new Blob([bytes], { type: "video/mp4" });
+  const blobRead = reader(async (_url, options) => {
+    const [, first, last] = /bytes=(\d+)-(\d+)/.exec(options.headers.Range).map(Number);
+    const end = Math.min(last, sourceBlob.size - 1);
+    return new Response(sourceBlob.slice(first, end + 1), {
+      status: 206, headers: { "content-range": `bytes ${first}-${end}/${sourceBlob.size}`, "content-type": sourceBlob.type }
+    });
+  });
+  const blobOutput = await Telegram.transfer(browser(blobRead), { ...task, url: URL_VALUE }, false, Media.mediaBlob);
+  assert.deepEqual(new Uint8Array(await blobOutput.arrayBuffer()), bytes, "Blob byte ranges must transfer completely");
   await assert.rejects(Telegram.transfer(browser(read, true), task, false, Media.mediaBlob), /source Telegram tab/);
   await assert.rejects(read(STREAM, PAGE + "different", 0), /source changed/);
   await assert.rejects(reader(fixture(bytes, { "content-range": `bytes 1-${CHUNK}/${bytes.length}` }))(STREAM, PAGE, 0), /requested file range/);

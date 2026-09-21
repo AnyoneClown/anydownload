@@ -4,12 +4,16 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
-## [1.21.0] - 2026-09-21
+## [1.21.1] - 2026-09-21
 
 ### Added
 
 - Collect loaded Telegram Web chat photos and videos, including page-owned blobs and Web K progressive service-worker video URLs. Transfer complete files through the original tab into the Firefox download queue with byte validation, a 64 MiB per-file limit, and normal/private-window separation.
 - Show photo thumbnails and Telegram loading guidance; clear media when switching chats and avoid restoring expired Telegram galleries.
+
+### Fixed
+
+- Make Telegram Blob range fixtures compatible with Node 22 used in release CI. Version 1.21.0 stopped at this test before publishing; production byte validation remains unchanged.
 
 ## [1.20.0] - 2026-09-19
 
