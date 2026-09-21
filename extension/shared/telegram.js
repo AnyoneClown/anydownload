@@ -6,7 +6,49 @@
   function isMediaUrl(value) {
     return typeof value === "string" && value.length <= 16384 &&
       (/^blob:https:\/\/web\.telegram\.org\/[a-z0-9-]+$/i.test(value) ||
-       /^https:\/\/web\.telegram\.org\/(?:k|a)\/stream\/[^/#]+$/i.test(value));
+       /^https:\/\/web\.telegram\.org\/(?:k|a)\/(?:stream|document)\/[^/#]+$/i.test(value));
+  }
+
+  function repairDocumentUrl(value, task = {}) {
+    try {
+      const url = new URL(value);
+      const match = /^\/(k|a)\/(?:stream|document)\/([^/#]+)$/i.exec(url.pathname);
+      if (url.origin !== "https://web.telegram.org" || url.username || url.password ||
+        url.search || url.hash || !match || value.length > 16384) return value;
+      const options = JSON.parse(decodeURIComponent(match[2]));
+      const location = options && options.location;
+      const dcId = Number(options && options.dcId);
+      const size = Number(options && options.size);
+      const id = String(location && location.id || "");
+      const accessHash = String(location && location.access_hash || "");
+      const fileReference = Array.isArray(location && location.file_reference)
+        ? location.file_reference.slice(0, 512) : [];
+      if (!Number.isSafeInteger(dcId) || dcId <= 0 || dcId > 1000 ||
+        !Number.isSafeInteger(size) || size <= 0 || size > MAX_BYTES ||
+        !location || location._ !== "inputDocumentFileLocation" ||
+        !/^\d{1,30}$/.test(id) || !/^-?\d{1,30}$/.test(accessHash) || !fileReference.length ||
+        fileReference.some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 255)) return value;
+      const filename = String(task.filename || options.fileName || "").slice(0, 180);
+      let mimeType = String(options.mimeType || "").split(";", 1)[0].toLowerCase();
+      const extensions = { mp4: "video/mp4", m4v: "video/mp4", mov: "video/quicktime",
+        webm: "video/webm", mkv: "video/x-matroska", ogv: "video/ogg",
+        jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif" };
+      const extension = /\.([a-z0-9]{2,5})$/i.exec(filename);
+      if (!/^(?:image|video)\/[a-z0-9.+-]+$/i.test(mimeType)) {
+        mimeType = extensions[String(extension && extension[1] || "").toLowerCase()] ||
+          (task.mediaType === "video" ? "video/mp4" : task.mediaType === "image" ? "image/jpeg" : "");
+      }
+      if (!/^(?:image|video)\/[a-z0-9.+-]+$/i.test(mimeType)) return value;
+      const repaired = new URL(`${match[1].toLowerCase()}/stream/${encodeURIComponent(JSON.stringify({
+        dcId,
+        location: { _: "inputDocumentFileLocation", id, access_hash: accessHash,
+          file_reference: fileReference, thumb_size: "" },
+        size, mimeType, ...(filename ? { fileName: filename } : {})
+      }))}`, url.origin + "/").href;
+      return repaired.length <= 16384 ? repaired : value;
+    } catch (_error) {
+      return value;
+    }
   }
 
   function isReference(value) {
@@ -262,6 +304,7 @@
       if (!value || !isMediaUrl(value.url)) throw new Error("Telegram original-file resolution failed.");
       sourceUrl = value.url;
     }
+    sourceUrl = repairDocumentUrl(sourceUrl, task);
     checkCancelled();
     const parts = [];
     let offset = 0;
@@ -292,10 +335,14 @@
       offset += binary.length;
     } while (offset < total);
     checkCancelled();
-    return validateBlob(new Blob(parts, { type }), task.mediaType || "image", task.filename);
+    const mediaType = task.mediaType === "video" ||
+      /\.(?:mp4|m4v|mov|webm|mkv|ogv)$/i.test(String(task.filename || "")) ||
+      (!task.mediaType && /^video\//i.test(type)) ? "video" : "image";
+    return validateBlob(new Blob(parts, { type }), mediaType, task.filename);
   }
 
-  const api = { isMediaUrl: (value) => isMediaUrl(value) || isReference(value), isReference, pageMedia, readChunk, transfer };
+  const api = { isMediaUrl: (value) => isMediaUrl(value) || isReference(value), isReference,
+    repairDocumentUrl, pageMedia, readChunk, transfer };
   root.AnyDownloadTelegram = api;
   if (typeof module === "object" && module.exports) module.exports = api;
 })(globalThis);

@@ -4,6 +4,12 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.21.3] - 2026-09-21
+
+### Fixed
+
+- Repair saved Telegram `document/` and pre-1.21.2 `stream/` URLs before previewing or downloading, restoring their video MIME type, filename, and required original-file marker.
+
 ## [1.21.2] - 2026-09-21
 
 ### Fixed

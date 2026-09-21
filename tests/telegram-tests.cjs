@@ -8,6 +8,14 @@ const Media = require("../extension/shared/image-fetch.js");
 const PAGE = "https://web.telegram.org/k/#-123";
 const URL_VALUE = "blob:https://web.telegram.org/01234567-abcd-1234-abcd-012345678901";
 const STREAM = "https://web.telegram.org/k/stream/%7B%22id%22%3A1%7D";
+const LEGACY_DOCUMENT = "https://web.telegram.org/k/document/" + encodeURIComponent(JSON.stringify({
+  dcId: 2,
+  location: { _: "inputDocumentFileLocation", id: "777", access_hash: "-987654321",
+    file_reference: [5, 0, 17, 255] },
+  size: 123456,
+  mimeType: "application/octet-stream",
+  fileName: "document"
+}));
 const CHUNK = 256 * 1024;
 
 function reader(fetch, page = PAGE) {
@@ -120,7 +128,7 @@ async function testOriginalMetadata() {
 
 async function main() {
   await testOriginalMetadata();
-  for (const value of [URL_VALUE, STREAM]) assert(Telegram.isMediaUrl(value));
+  for (const value of [URL_VALUE, STREAM, LEGACY_DOCUMENT]) assert(Telegram.isMediaUrl(value));
   for (const value of ["blob:https://evil.test/123", "blob:https://web.telegram.org.evil/123", "blob:null/123", "https://web.telegram.org/k/hls/file", "https://web.telegram.org/k/stream/a/b"]) {
     assert.equal(Telegram.isMediaUrl(value), false, value);
   }
@@ -136,6 +144,28 @@ async function main() {
   const output = await Telegram.transfer(browser(read), task, false, Media.mediaBlob);
   assert.equal(output.type, "video/mp4");
   assert.deepEqual(new Uint8Array(await output.arrayBuffer()), bytes);
+  const repaired = Telegram.repairDocumentUrl(LEGACY_DOCUMENT, { filename: "0001-IMG_5767.MP4", mediaType: "video" });
+  assert.match(repaired, /^https:\/\/web\.telegram\.org\/k\/stream\//);
+  const repairedOptions = JSON.parse(decodeURIComponent(new URL(repaired).pathname.split("/stream/")[1]));
+  assert.equal(repairedOptions.location.thumb_size, "");
+  assert.equal(repairedOptions.mimeType, "video/mp4");
+  assert.equal(repairedOptions.fileName, "0001-IMG_5767.MP4");
+  const repairedStream = Telegram.repairDocumentUrl(LEGACY_DOCUMENT.replace("/document/", "/stream/"), {
+    filename: "0001-IMG_5767.MP4", mediaType: "image"
+  });
+  const repairedStreamOptions = JSON.parse(decodeURIComponent(new URL(repairedStream).pathname.split("/stream/")[1]));
+  assert.equal(repairedStreamOptions.location.thumb_size, "", "Repair pre-1.21.2 stream URLs as well as document URLs");
+  assert.equal(repairedStreamOptions.mimeType, "video/mp4");
+  let transferredUrl = "";
+  const legacyRead = reader(async (url, options) => {
+    transferredUrl = url;
+    return fixture(bytes)(url, options);
+  });
+  const legacyOutput = await Telegram.transfer(browser(legacyRead), {
+    ...task, url: LEGACY_DOCUMENT, filename: "0001-IMG_5767.MP4", mediaType: "image"
+  }, false, Media.mediaBlob);
+  assert.equal(legacyOutput.type, "video/mp4", "MP4 filenames repair legacy entries misclassified as images");
+  assert.match(transferredUrl, /\/stream\//, "Legacy Telegram document URLs must transfer through a repaired range stream");
   // Model browser blob ranges explicitly. Node 22's blob: fetch drops the
   // inclusive final byte while advertising the full Content-Range; Node 24
   // fixes that Node-only behavior. Keep the production length check strict.
