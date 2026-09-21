@@ -14,6 +14,7 @@
       options || {}
     );
     const found = new Map();
+    const telegramPage = /^https:\/\/web\.telegram\.org\/(?:k|a)\//i.test(document.baseURI);
     const warnings = [];
     const IMAGE_EXTENSION = /\.(?:apng|avif|bmp|gif|ico|jpe?g|jxl|png|svg|tiff?|webp)$/i;
     const VIDEO_EXTENSION = /\.(?:m4v|mkv|mov|mp4|ogg|ogv|webm)$/i;
@@ -125,6 +126,9 @@
       try {
         const parsed = new URL(value, document.baseURI);
         if (parsed.protocol === "blob:") {
+          if (telegramPage && /^blob:https:\/\/web\.telegram\.org\/[a-z0-9-]+$/i.test(value)) {
+            return value;
+          }
           if (shouldRecordSkip) {
             if (expectedMediaType === "video") {
               skippedBlobVideoUrls += 1;
@@ -161,6 +165,7 @@
           .replace(/^(?:application|video)\//, "");
         if (
           VIDEO_MANIFEST_EXTENSION.test(parsed.pathname) ||
+          (telegramPage && /\/(?:hls|hls_stream|hls_quality_file)\//i.test(parsed.pathname)) ||
           ["dash+xml", "dash", "hls", "m3u8", "mpd", "mpegurl", "vnd.apple.mpegurl", "x-mpegurl"]
             .includes(format) ||
           isVideoManifestMimeType(declaredType)
@@ -981,8 +986,27 @@
         }
       }
       if (tagName === "img") {
+        // Ignore Telegram avatars, emoji and blurred placeholders.
+        if (telegramPage && element.closest &&
+          (element.closest(".avatar, .Avatar, .emoji, .thumbnail") ||
+            !element.closest(".bubble, .Message, .media-viewer-whole, #MediaViewer, .media-container"))) {
+          continue;
+        }
         const resolved = resolveImageElement(element);
         if (resolved) {
+          if (telegramPage && resolved.url.startsWith("blob:")) {
+            try {
+              const canvas = document.createElement("canvas");
+              const scale = Math.min(1, 240 / Math.max(element.naturalWidth, element.naturalHeight));
+              canvas.width = Math.max(1, Math.round(element.naturalWidth * scale));
+              canvas.height = Math.max(1, Math.round(element.naturalHeight * scale));
+              canvas.getContext("2d").drawImage(element, 0, 0, canvas.width, canvas.height);
+              resolved.previewUrl = canvas.toDataURL("image/jpeg", 0.7);
+            } catch (_error) {
+              // An unloaded thumbnail must not prevent collecting the source.
+            }
+            resolved.kind = "Telegram photo";
+          }
           addImage(resolved.url, resolved);
         }
       } else if (tagName === "image" && element.namespaceURI === "http://www.w3.org/2000/svg") {
@@ -1019,7 +1043,7 @@
         }
       }
 
-      if (settings.includeBackgrounds && !truncated && !payloadLimitReached) {
+      if (settings.includeBackgrounds && !telegramPage && !truncated && !payloadLimitReached) {
         try {
           const style = sourceDocument ? element.style : getComputedStyle(element);
           const values = [
@@ -1076,6 +1100,9 @@
       warnings.push("Canvas pixels are not downloadable as source images.");
     }
 
+    if (telegramPage) {
+      warnings.push("Telegram: only loaded media is collected. Open photos/videos and scroll the chat, then rescan. Keep this Telegram tab and chat open while downloading (64 MiB per file). Expired blobs and HLS/DASH streams are not supported.");
+    }
     return {
       pageUrl: safeText(settings.pageUrl || location.href, 16384),
       pageTitle: safeText(document.title, 300),

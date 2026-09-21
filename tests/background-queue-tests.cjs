@@ -11,6 +11,8 @@ const DownloadQueue = require("../extension/shared/download-queue.js");
 const QUEUE_STORAGE_KEY = "downloadQueueState:v1";
 const SCRIPT_PATHS = [
   "../extension/shared/core.js",
+  "../extension/shared/image-fetch.js",
+  "../extension/shared/telegram.js",
   "../extension/shared/youtube.js",
   "../extension/shared/templates.js",
   "../extension/shared/download-ledger.js",
@@ -291,7 +293,7 @@ function createHarness(options = {}) {
 
   const context = {
     AbortController: AbortControllerFixture,
-    Blob: BlobFixture,
+    Blob: options.nativeBlob ? Blob : BlobFixture,
     TextDecoder,
     TextEncoder,
     URL: TestURL,
@@ -1552,7 +1554,33 @@ async function testCompletedDownloadLedgerAndStatusLookup() {
   assert.equal(privateStatus.statuses[0].status, "new", "Normal completion state must not leak into private windows");
 }
 
+async function testTelegramSourceTransfer() {
+  const harness = createHarness({ nativeBlob: true });
+  const page = "https://web.telegram.org/k/#-123";
+  const source = "blob:https://web.telegram.org/01234567-abcd-1234-abcd-012345678901";
+  harness.browser.tabs.query = async () => [{ id: 77, url: page, incognito: false }];
+  harness.browser.tabs.get = async (id) => ({ id, url: page, incognito: false });
+  const bytes = Buffer.from([0xff, 0xd8, 0xff, 1, 2, 3]);
+  harness.browser.scripting.executeScript = async (options) => {
+    assert.equal(options.target.tabId, 77);
+    assert.equal(options.world, "MAIN");
+    assert.deepEqual(Array.from(options.args), [source, page, 0]);
+    return [{ result: { data: bytes.toString("base64"), total: bytes.length, type: "image/jpeg" } }];
+  };
+  const result = await harness.send({ type: "DOWNLOAD_BATCH", pageUrl: page,
+    folder: "Telegram", items: [{ url: source, filename: "photo.jpg", mediaType: "image" }] });
+  assert.equal(result.ok, true);
+  assert.equal(harness.downloadCalls.length, 1);
+  assert.equal(harness.downloadCalls[0].url, harness.createdObjectUrls[0]);
+  assert.notEqual(harness.downloadCalls[0].url, source, "Firefox must receive an extension-owned blob");
+  assert.equal(harness.revokedObjectUrls.length, 0, "Retain bytes until native completion");
+  await harness.emitDownloadChange(harness.downloadCalls[0].id, { state: "complete", bytesReceived: bytes.length });
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  assert.deepEqual(harness.revokedObjectUrls, harness.createdObjectUrls);
+}
+
 (async () => {
+  await testTelegramSourceTransfer();
   const galleries = createHarness();
   const galleryMessage = { type: "SITE_GALLERY", siteKey: "https://gallery.test", epoch: 0 };
   await Promise.all(["first", "second"].map((name) => galleries.send({

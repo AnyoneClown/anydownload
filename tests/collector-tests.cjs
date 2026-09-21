@@ -889,4 +889,26 @@ withFakePage([element("img", { src: "/current.jpg" })], () => {
   assert.equal(result.pageUrl, nextUrl, "Fetched gallery pages must use their own document and base URL");
 });
 
+// Telegram keeps actual media in page-owned blobs and SW progressive URLs.
+{
+  const photoUrl = "blob:https://web.telegram.org/01234567-abcd-1234-abcd-012345678901";
+  const photo = element("img", { src: photoUrl }, { naturalWidth: 1200, naturalHeight: 800 });
+  photo.closest = (selector) => selector.includes(".bubble") ? photo : null;
+  const avatar = element("img", { src: "blob:https://web.telegram.org/avatar" });
+  avatar.closest = () => avatar;
+  const stream = "https://web.telegram.org/k/stream/%7B%22id%22%3A1%7D";
+  const video = element("video", { src: stream });
+  const hls = element("video", { src: "https://web.telegram.org/k/hls/playlist" });
+  withFakePage([photo, avatar, video, hls], () => {
+    const result = collectImagesFromPage();
+    assert.deepEqual(urls(result), [photoUrl, stream]);
+    assert.equal(result.images[0].width, 1200);
+    assert.equal(result.images[1].mediaType, "video");
+    assert(result.warnings.some((warning) => warning.includes("Keep this Telegram tab")));
+  }, "https://web.telegram.org/k/#-123");
+  withFakePage([photo], () => {
+    assert.equal(collectImagesFromPage().images.length, 0, "Other sites cannot collect Telegram blobs");
+  });
+}
+
 console.log("All collector fixture checks passed.");

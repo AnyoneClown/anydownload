@@ -303,6 +303,10 @@
 
     try {
       const parsed = new URL(value);
+      // Telegram's page-owned files are transferred through their source tab.
+      if (/^blob:https:\/\/web\.telegram\.org\/[a-z0-9-]+$/i.test(value)) {
+        return { ok: true, value };
+      }
       if (!["http:", "https:"].includes(parsed.protocol)) {
         return { ok: false, error: `Unsupported URL scheme: ${parsed.protocol}` };
       }

@@ -1696,7 +1696,12 @@
         let objectUrl = "";
         let downloadId = null;
         try {
-          const resolvedUrl = await resolveQueueMediaUrl(task);
+          const telegram = globalThis.AnyDownloadTelegram;
+          const resolvedUrl = telegram && telegram.isMediaUrl(task.url)
+            ? (objectUrl = URL.createObjectURL(await telegram.transfer(
+              browser, task, context.incognito, globalThis.ImageDownloaderImageFetch.mediaBlob
+            )))
+            : await resolveQueueMediaUrl(task);
           const downloadUrl = resolvedUrl.startsWith("data:")
             ? (objectUrl = dataUrlToObjectUrl(resolvedUrl))
             : resolvedUrl;
@@ -3384,6 +3389,7 @@
       return {
         url: item.url,
         filename,
+        mediaType: item.mediaType,
         source: batch.source,
         targetPath: Core.buildDownloadPath(batch.folder, filename)
       };
@@ -3400,7 +3406,12 @@
         const entry = entries[index];
         let objectUrl = "";
         try {
-          const resolvedUrl = await resolveQueueMediaUrl(entry);
+          const telegram = globalThis.AnyDownloadTelegram;
+          const resolvedUrl = telegram && telegram.isMediaUrl(entry.url)
+            ? (objectUrl = URL.createObjectURL(await telegram.transfer(
+              browser, entry, batch.incognito, globalThis.ImageDownloaderImageFetch.mediaBlob
+            )))
+            : await resolveQueueMediaUrl(entry);
           const downloadUrl = resolvedUrl.startsWith("data:")
             ? (objectUrl = dataUrlToObjectUrl(resolvedUrl))
             : resolvedUrl;

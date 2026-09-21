@@ -197,6 +197,9 @@
     }
     try {
       const parsed = new URL(value);
+      if (/^blob:https:\/\/web\.telegram\.org\/[a-z0-9-]+$/i.test(value)) {
+        return { ok: true, value };
+      }
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
         return { ok: false, error: "Unsupported media URL scheme." };
       }

@@ -64,7 +64,7 @@ const trackingJs = fs.readFileSync(path.join(root, "tracking/tracking.js"), "utf
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.name, "AnyDownload — Page Media Downloader");
-assert.equal(manifest.version, "1.20.0");
+assert.equal(manifest.version, "1.21.0");
 assert.equal(manifest.action.default_title, "Download page media");
 assert.equal(Core.MAX_BATCH_TOTAL_URL_LENGTH, 2000000);
 assert.deepEqual(manifest.permissions.sort(), ["activeTab", "alarms", "downloads", "menus", "notifications", "scripting", "storage"]);
@@ -73,6 +73,8 @@ assert.deepEqual(
   manifest.background.scripts,
   [
     "shared/core.js",
+    "shared/image-fetch.js",
+    "shared/telegram.js",
     "shared/collector.js",
     "shared/fapfolder.js",
     "shared/instagram.js",
@@ -625,6 +627,8 @@ for (const relativePath of [
   "shared/archive.js",
   "shared/collector.js",
   "shared/core.js",
+  "shared/image-fetch.js",
+  "shared/telegram.js",
   "shared/download-queue.js",
   "shared/fapfolder.js",
   "shared/tracker.js",

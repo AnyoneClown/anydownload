@@ -1711,6 +1711,9 @@
   }
 
   function pageScopeKeyForUrl(value) {
+    if (/^https:\/\/web\.telegram\.org\/(?:k|a)\//i.test(String(value))) {
+      return String(value);
+    }
     try {
       if (Instagram && typeof Instagram.routeKeyForUrl === "function") {
         const instagramKey = Instagram.routeKeyForUrl(value);
@@ -2133,8 +2136,10 @@
       return;
     }
     const youtube = Boolean(Gallery.youtubeUrl(image));
-    const video = mediaTypeFor(image) === "video" && !youtube;
-    const result = Core.validateMediaUrl(youtube ? image.previewUrl : image.url);
+    const telegram = /^blob:https:\/\/web\.telegram\.org\//i.test(image.url) ||
+      /^https:\/\/web\.telegram\.org\/(?:k|a)\/stream\//i.test(image.url);
+    const video = mediaTypeFor(image) === "video" && !youtube && !telegram;
+    const result = Core.validateMediaUrl(youtube || telegram ? image.previewUrl : image.url);
     if (result.ok) {
       const media = document.createElement(video ? "video" : "img");
       media.referrerPolicy = "no-referrer";
@@ -4112,7 +4117,9 @@
 
       const nextSiteKey = Core.siteKeyForUrl(merged.page.pageUrl);
       const nextPageScopeKey = pageScopeKeyForUrl(merged.page.pageUrl);
-      const preserveThisPage = Boolean(nextSiteKey) && nextSiteKey === previousSiteKey;
+      const preserveThisPage = Boolean(nextSiteKey) && nextSiteKey === previousSiteKey &&
+        (!/^https:\/\/web\.telegram\.org\//i.test(merged.page.pageUrl) ||
+          nextPageScopeKey === previousPageScopeKey);
       state.siteKey = nextSiteKey;
       state.pageScopeKey = nextPageScopeKey;
       if (!preserveThisPage) {
@@ -4489,6 +4496,10 @@
   async function openUploadDestination() {
     if (state.incognito || state.busy || galleryCollection) return;
     const images = selectedDownloadableImages();
+    if (/^https:\/\/web\.telegram\.org\//i.test(state.pageUrl)) {
+      setNotice("Download Telegram media first, then select the saved files in Uploads.", "error");
+      return;
+    }
     if (!images.length || images.length > 500) {
       setNotice("Choose between 1 and 500 images or videos to upload.", "error");
       return;
@@ -4680,6 +4691,10 @@
   }
 
   function downloadSelectedArchive() {
+    if (/^https:\/\/web\.telegram\.org\//i.test(state.pageUrl)) {
+      setNotice("Download Telegram photos as individual files. Direct Telegram ZIP creation is not supported.", "error");
+      return undefined;
+    }
     const selected = selectedDownloadableImages();
     if (state.busy || !selected.length) {
       if (!state.busy) {
@@ -5247,7 +5262,8 @@
           if (state.liveCapture) {
             stopLiveCapture();
           }
-          if (state.siteKey && Core.siteKeyForUrl(nextUrl) === state.siteKey) {
+          if (state.siteKey && Core.siteKeyForUrl(nextUrl) === state.siteKey &&
+            !/^https:\/\/web\.telegram\.org\//i.test(nextUrl)) {
             state.pageUrl = nextUrl;
             state.pageScopeKey = nextPageScopeKey;
             state.pageTitle = tab && tab.title || state.pageTitle;

@@ -59,6 +59,8 @@
       return null;
     }
     const sourceUrl = pageUrl(value.pageUrl);
+    // Telegram files belong to an open tab/session and must be rescanned.
+    if (/^https:\/\/web\.telegram\.org\//i.test(sourceUrl)) return null;
     if (Core.siteKeyForUrl(sourceUrl) !== siteKey) {
       return null;
     }
