@@ -589,8 +589,8 @@ async function run() {
 
   // Current Relay profile payloads omit the username from the profile wrapper
   // and expose post covers as display_uri inside a Polaris timeline. Preserve
-  // every server-rendered post even when its lazy grid image has not loaded,
-  // and reuse the wrapper pk for normal bounded feed pagination.
+  // every server-rendered post even when its lazy grid image has not loaded.
+  // A carousel cover is expanded from the exact post's complete Relay payload.
   {
     const requests = [];
     const result = await scan("https://www.instagram.com/alice/", {
@@ -612,7 +612,7 @@ async function run() {
                 pk: "1002",
                 code: "RELAY2",
                 media_type: 8,
-                carousel_media_count: 3,
+                carousel_media_count: 7,
                 display_uri: "https://scontent.cdninstagram.com/relay-2.jpg",
                 user: { pk: "42", username: "alice" }
               } }
@@ -624,6 +624,28 @@ async function run() {
     }, {}, async (url) => {
       requests.push(url);
       const parsed = new URL(url);
+      if (parsed.pathname === "/p/RELAY2/") {
+        const fullCarousel = {
+          code: "RELAY2",
+          user: { username: "alice" },
+          carousel_media_count: 7,
+          carousel_media: [
+            imageNode("relay-2-a", "https://scontent.cdninstagram.com/relay-2.jpg"),
+            imageNode("relay-2-b", "https://scontent.cdninstagram.com/relay-2-b.jpg"),
+            imageNode("relay-2-c", "https://scontent.cdninstagram.com/relay-2-c.jpg"),
+            imageNode("relay-2-d", "https://scontent.cdninstagram.com/relay-2-d.jpg"),
+            imageNode("relay-2-e", "https://scontent.cdninstagram.com/relay-2-e.jpg"),
+            videoNode("relay-2-f", "https://scontent.cdninstagram.com/relay-2-f.mp4",
+              "https://scontent.cdninstagram.com/relay-2-f.jpg"),
+            imageNode("relay-2-g", "https://scontent.cdninstagram.com/relay-2-g.jpg")
+          ]
+        };
+        return response(url, htmlDocument({ scripts: [{ value: {
+          require: [["RelayPrefetchedStreamCache", "next", [], [{
+            result: { data: { xig_polaris_media: { if_not_gated_logged_out: fullCarousel } } }
+          }]]]
+        } }] }));
+      }
       assert.equal(parsed.pathname, "/api/v1/feed/user/42/");
       return jsonResponse(url, {
         items: [{
@@ -637,12 +659,22 @@ async function run() {
     assert.deepEqual(result.images.map((item) => item.url), [
       "https://scontent.cdninstagram.com/relay-1.jpg",
       "https://scontent.cdninstagram.com/relay-2.jpg",
+      "https://scontent.cdninstagram.com/relay-2-b.jpg",
+      "https://scontent.cdninstagram.com/relay-2-c.jpg",
+      "https://scontent.cdninstagram.com/relay-2-d.jpg",
+      "https://scontent.cdninstagram.com/relay-2-e.jpg",
+      "https://scontent.cdninstagram.com/relay-2-f.mp4",
+      "https://scontent.cdninstagram.com/relay-2-g.jpg",
       "https://scontent.cdninstagram.com/feed-3.jpg"
     ]);
     assert.deepEqual(result.images.map((item) => item.instagramCollections[0].id), [
-      "RELAY1", "RELAY2", "FEED3"
+      "RELAY1", "RELAY2", "RELAY2", "RELAY2", "RELAY2", "RELAY2", "RELAY2", "RELAY2", "FEED3"
     ]);
-    assert.equal(requests.length, 1);
+    assert.equal(result.images[6].mediaType, "video");
+    assert.deepEqual(requests.map((url) => new URL(url).pathname), [
+      "/api/v1/feed/user/42/", "/p/RELAY2/"
+    ]);
+    assert.ok(!result.warnings.some((warning) => /could not resolve every slide/i.test(warning)));
   }
 
   // Profile feeds are paged with the signed-in session. Every carousel child

@@ -124,6 +124,7 @@
     const foundRecordKeysByUrl = new Map();
     const owners = new Set();
     const profilePks = new Set();
+    const profileCarousels = new Map();
     const highlightDescriptors = new Map();
     const visitedDocuments = new Set();
     const queuedDocuments = [];
@@ -1309,6 +1310,16 @@
         return;
       }
       const id = objectIdentifier(object) || objectId(object);
+      const shortcode = objectIdentifier(object);
+      const declaredCount = positiveNumber(
+        safeProperty(object, "carousel_media_count") ||
+          safeProperty(object, "carouselMediaCount")
+      );
+      if (shortcode && declaredCount > childMedia(object).length && declaredCount > 1) {
+        profileCarousels.set(shortcode, Math.max(
+          Math.min(32, declaredCount), profileCarousels.get(shortcode) || 0
+        ));
+      }
       addMediaContainer(object, baseUrl, "post", false, {
         kind: "profile",
         username: expectedUsername,
@@ -2724,6 +2735,30 @@
       }
       const visitedPosts = new Set();
       const requests = [];
+      function hasCompleteCarousel(shortcode, count) {
+        if (!count) {
+          return false;
+        }
+        const membership = safeCollectionMembership({
+          type: "post", id: shortcode, owner: route.username
+        });
+        return Array.from({ length: count }, (_, index) => found.has(
+          `identity:${mediaIdentityForCollection({}, membership, index + 1)}`
+        )).every(Boolean);
+      }
+      function queueCarousel(shortcode, count, structured) {
+        const mediaId = mediaIdFromShortcode(shortcode);
+        if (!mediaId || visitedPosts.has(shortcode) || hasCompleteCarousel(shortcode, count)) {
+          return;
+        }
+        visitedPosts.add(shortcode);
+        requests.push({ shortcode, mediaId, count, structured,
+          endpoint: new URL(`/api/v1/media/${encodeURIComponent(mediaId)}/info/`, route.pageUrl).href,
+          postUrl: new URL(`/p/${encodeURIComponent(shortcode)}/`, route.pageUrl).href });
+      }
+      for (const [shortcode, count] of profileCarousels) {
+        queueCarousel(shortcode, count, true);
+      }
       for (const anchor of profileAnchors()) {
         let carousel = false;
         try {
@@ -2747,25 +2782,87 @@
         }
         const postRoute = parseRoute(href);
         const shortcode = postRoute.shortcode;
-        const mediaId = mediaIdFromShortcode(shortcode);
-        const membership = safeCollectionMembership({
-          type: "post",
-          id: shortcode,
-          owner: route.username
-        });
-        if (!carousel || !mediaId || visitedPosts.has(shortcode) || found.has(
-          `identity:${mediaIdentityForCollection({}, membership, 2)}`
-        )) {
+        if (!carousel) {
           continue;
         }
-        visitedPosts.add(shortcode);
-        const endpoint = new URL(
-          `/api/v1/media/${encodeURIComponent(mediaId)}/info/`,
-          route.pageUrl
-        );
-        requests.push({ endpoint: endpoint.href, shortcode, mediaId });
+        queueCarousel(shortcode, profileCarousels.get(shortcode) || 0, false);
       }
 
+      function exactCarouselFromHtml(html, request) {
+        let best = null;
+        let inspected = 0;
+        const seen = new WeakSet();
+        function walk(value, depth) {
+          if (!value || depth > MAX_JSON_DEPTH || inspected >= 50000 ||
+            best && exactContainerIsComplete(best) ||
+            typeof value !== "object" || seen.has(value)) {
+            return;
+          }
+          seen.add(value);
+          inspected += 1;
+          if (!Array.isArray(value) &&
+            (objectIdentifier(value) === request.shortcode || objectId(value) === request.mediaId) &&
+            ownerFromObject(value) === route.username) {
+            const children = childMedia(value);
+            if (children.length && (!best || children.length > childMedia(best).length)) {
+              best = value;
+            }
+          }
+          const entries = Array.isArray(value) ? value.slice(0, 2048) : Object.values(value).slice(0, 512);
+          for (const child of entries) {
+            walk(child, depth + 1);
+            if (best && exactContainerIsComplete(best)) break;
+          }
+        }
+        for (const script of scriptsFromHtml(html)) {
+          for (const value of parseJsonValues(script.text)) {
+            walk(value, 0);
+            if (best && exactContainerIsComplete(best)) break;
+          }
+          if (best && exactContainerIsComplete(best)) break;
+        }
+        return best;
+      }
+      async function fetchExactCarousel(request) {
+        if (fetchedDocumentCount >= settings.maxDocuments || visitedDocuments.has(request.postUrl)) {
+          documentLimitReached = true;
+          return null;
+        }
+        visitedDocuments.add(request.postUrl);
+        fetchedDocumentCount += 1;
+        const fetched = await fetchHtmlDocument({ url: request.postUrl }, false, EXACT_FETCH_TIMEOUT_MS);
+        const finalRoute = fetched && parseRoute(fetched.url);
+        if (!fetched || !["post", "reel"].includes(finalRoute.kind) ||
+          finalRoute.shortcode !== request.shortcode) {
+          return null;
+        }
+        const item = exactCarouselFromHtml(fetched.text, request);
+        return item ? { item, url: fetched.url } : null;
+      }
+      async function fetchCarousel(request) {
+        let exact = null;
+        if (request.structured) {
+          exact = await fetchExactCarousel(request);
+          if (exact && exactContainerIsComplete(exact.item)) return exact;
+        }
+        const fetched = await fetchInstagramJson(
+          request.endpoint, "profile-carousel", false, EXACT_FETCH_TIMEOUT_MS
+        );
+        const item = fetched && feedPageFrom(fetched.value).items.find((candidate) =>
+          objectIdentifier(candidate) === request.shortcode ||
+          objectId(candidate) === request.mediaId
+        );
+        if (item && (!exact || childMedia(item).length > childMedia(exact.item).length)) {
+          exact = { item, url: fetched.url };
+        }
+        if (!request.structured && (!exact || !exactContainerIsComplete(exact.item))) {
+          const html = await fetchExactCarousel(request);
+          if (html && (!exact || childMedia(html.item).length > childMedia(exact.item).length)) {
+            exact = html;
+          }
+        }
+        return exact;
+      }
       const availableDocuments = Math.max(0, settings.maxDocuments - fetchedDocumentCount);
       const boundedRequests = requests.slice(0, availableDocuments);
       if (boundedRequests.length < requests.length) {
@@ -2773,26 +2870,55 @@
       }
       const fetchedCarousels = await mapWithConcurrency(
         boundedRequests,
-        (request) => fetchInstagramJson(
-          request.endpoint,
-          "profile-carousel",
-          false,
-          EXACT_FETCH_TIMEOUT_MS
-        ),
+        fetchCarousel,
         MAX_FETCH_CONCURRENCY
       );
       for (let index = 0; index < boundedRequests.length; index += 1) {
         const request = boundedRequests[index];
         const fetched = fetchedCarousels[index];
-        if (!fetched) {
-          continue;
+        if (fetched) {
+          addProfilePost(fetched.item, fetched.url, route.username);
         }
-        for (const item of feedPageFrom(fetched.value).items) {
-          if (objectIdentifier(item) === request.shortcode || objectId(item) === request.mediaId) {
-            addProfilePost(item, fetched.url, route.username);
-          }
+        if (request.count && !hasCompleteCarousel(request.shortcode, request.count)) {
+          warnings.add(`Instagram could not resolve every slide in carousel ${request.shortcode}.`);
         }
       }
+    }
+
+    function orderProfileCarouselRecords() {
+      const entries = Array.from(found.entries());
+      const groups = new Map();
+      const prefix = `instagram:post:${route.username}:`;
+      function groupFor(record) {
+        const identity = safeText(record && record.identityKey, 300);
+        if (!identity.startsWith(prefix)) return "";
+        const separator = identity.lastIndexOf(":");
+        return /^\d+$/.test(identity.slice(separator + 1))
+          ? identity.slice(0, separator) : "";
+      }
+      for (const entry of entries) {
+        const group = groupFor(entry[1]);
+        if (group) {
+          if (!groups.has(group)) groups.set(group, []);
+          groups.get(group).push(entry);
+        }
+      }
+      const ordered = [];
+      const emitted = new Set();
+      for (const entry of entries) {
+        const group = groupFor(entry[1]);
+        if (!group) {
+          ordered.push(entry);
+        } else if (!emitted.has(group)) {
+          emitted.add(group);
+          ordered.push(...groups.get(group).sort((left, right) =>
+            Number(left[1].identityKey.slice(group.length + 1)) -
+            Number(right[1].identityKey.slice(group.length + 1))
+          ));
+        }
+      }
+      found.clear();
+      for (const [key, record] of ordered) found.set(key, record);
     }
 
     function profilePk() {
@@ -2984,6 +3110,7 @@
       await collectProfileFeed(pk);
       await collectProfileGridCarousels();
       processProfileGridDom();
+      orderProfileCarouselRecords();
       if (settings.includeStories || settings.includeHighlights) {
         await collectProfileStoriesAndHighlights(pk);
       }

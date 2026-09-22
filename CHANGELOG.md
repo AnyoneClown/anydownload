@@ -4,6 +4,12 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.21.5] - 2026-09-22
+
+### Fixed
+
+- Expand Instagram profile carousel covers from each exact post when the profile feed supplies only a cover and slide count, preserving every exposed photo or direct video in the post.
+
 ## [1.21.4] - 2026-09-22
 
 ### Fixed
