@@ -4,6 +4,13 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.21.4] - 2026-09-22
+
+### Fixed
+
+- Detect every purchased photo and video in loaded Telegram Stars posts while continuing to exclude locked previews.
+- Read Instagram's current Relay profile timeline and `display_uri` covers so server-rendered posts are not lost when lazy grid images or legacy profile endpoints are unavailable.
+
 ## [1.21.3] - 2026-09-21
 
 ### Fixed

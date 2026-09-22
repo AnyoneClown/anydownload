@@ -587,6 +587,64 @@ async function run() {
     assert.equal(result.images[0].identityKey, "instagram:post:alice:ROTATE1:1");
   }
 
+  // Current Relay profile payloads omit the username from the profile wrapper
+  // and expose post covers as display_uri inside a Polaris timeline. Preserve
+  // every server-rendered post even when its lazy grid image has not loaded,
+  // and reuse the wrapper pk for normal bounded feed pagination.
+  {
+    const requests = [];
+    const result = await scan("https://www.instagram.com/alice/", {
+      scripts: [script({ require: [["RelayPrefetchedStreamCache", "next", [], [{
+        result: { data: { xig_user_by_username: {
+          pk: "42",
+          polaris_ordered_timeline_connection: {
+            edges: [
+              { node: {
+                __typename: "XIGPolarisImageMedia",
+                pk: "1001",
+                code: "RELAY1",
+                media_type: 1,
+                display_uri: "https://scontent.cdninstagram.com/relay-1.jpg",
+                user: { pk: "42", username: "alice" }
+              } },
+              { node: {
+                __typename: "XIGPolarisCarouselMedia",
+                pk: "1002",
+                code: "RELAY2",
+                media_type: 8,
+                carousel_media_count: 3,
+                display_uri: "https://scontent.cdninstagram.com/relay-2.jpg",
+                user: { pk: "42", username: "alice" }
+              } }
+            ],
+            page_info: { end_cursor: "RELAY-CURSOR", has_next_page: true }
+          }
+        } } }
+      }]]]})]
+    }, {}, async (url) => {
+      requests.push(url);
+      const parsed = new URL(url);
+      assert.equal(parsed.pathname, "/api/v1/feed/user/42/");
+      return jsonResponse(url, {
+        items: [{
+          code: "FEED3",
+          user: { username: "alice" },
+          ...imageNode("feed-3", "https://scontent.cdninstagram.com/feed-3.jpg")
+        }],
+        more_available: false
+      });
+    });
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://scontent.cdninstagram.com/relay-1.jpg",
+      "https://scontent.cdninstagram.com/relay-2.jpg",
+      "https://scontent.cdninstagram.com/feed-3.jpg"
+    ]);
+    assert.deepEqual(result.images.map((item) => item.instagramCollections[0].id), [
+      "RELAY1", "RELAY2", "FEED3"
+    ]);
+    assert.equal(requests.length, 1);
+  }
+
   // Profile feeds are paged with the signed-in session. Every carousel child
   // is kept in source order and media owned by another account is rejected.
   {

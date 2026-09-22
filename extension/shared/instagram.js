@@ -112,7 +112,7 @@
     const INSTAGRAM_POST_QUERY_DOC_ID = "27852811784380813";
     const MAX_COLLECTION_MEMBERSHIPS = 16;
     const MAX_FETCH_CONCURRENCY = 3;
-    const INSTAGRAM_SCRIPT_MARKER = /["'](?:carousel_media|carouselMedia|contentUrl|content_url|display_resources|display_url|edge_owner_to_timeline_media|edge_sidecar_to_children|image_url|image_versions2|is_video|media_code|media_type|playback_url|reel_id|reels_media|shortcode|shortcode_media|thumbnailUrl|timeline_media|video_url|video_versions|xdt_[a-z0-9_]+)["']\s*:/i;
+    const INSTAGRAM_SCRIPT_MARKER = /["'](?:carousel_media|carouselMedia|contentUrl|content_url|display_resources|display_uri|displayUri|display_url|edge_owner_to_timeline_media|edge_sidecar_to_children|image_url|image_versions2|is_video|media_code|media_type|playback_url|polaris_ordered_timeline_connection|polarisOrderedTimelineConnection|reel_id|reels_media|shortcode|shortcode_media|thumbnailUrl|timeline_media|video_url|video_versions|xdt_[a-z0-9_]+)["']\s*:/i;
     const PROFILE_SCRIPT_MARKER = /["']username["']\s*:/i;
     const childMediaCache = new WeakMap();
     const dimensionCache = new WeakMap();
@@ -627,7 +627,8 @@
         );
       }
       const directKeys = [
-        ["display_url", 60], ["displayUrl", 60], ["image_url", 55], ["imageUrl", 55],
+        ["display_url", 60], ["displayUrl", 60], ["display_uri", 60], ["displayUri", 60],
+        ["image_url", 55], ["imageUrl", 55],
         ["thumbnail_src", 15], ["thumbnail_url", 15], ["thumbnailUrl", 15]
       ];
       for (const [key, priority] of directKeys) {
@@ -1237,7 +1238,9 @@
 
     function hasMediaShape(object) {
       return Boolean(
-        safeProperty(object, "display_url") || safeProperty(object, "image_versions2") ||
+        safeProperty(object, "display_url") || safeProperty(object, "display_uri") ||
+        safeProperty(object, "displayUri") ||
+        safeProperty(object, "image_versions2") ||
         safeProperty(object, "video_url") || safeProperty(object, "video_versions") ||
         safeProperty(object, "edge_sidecar_to_children") || safeProperty(object, "carousel_media") ||
         safeProperty(object, "contentUrl") || safeProperty(object, "content_url")
@@ -1320,20 +1323,38 @@
     }
 
     function processMatchingProfileObject(object, baseUrl, expectedUsername) {
-      if (usernameFrom(object) !== expectedUsername) {
+      const directMatch = usernameFrom(object) === expectedUsername;
+      const timelineItemsForProfile = [];
+      for (const key of [
+        "edge_owner_to_timeline_media", "edgeOwnerToTimelineMedia",
+        "timeline_media", "timelineMedia",
+        "polaris_ordered_timeline_connection", "polarisOrderedTimelineConnection"
+      ]) {
+        timelineItemsForProfile.push(...timelineItems(safeProperty(object, key)));
+      }
+      const matchingItems = timelineItemsForProfile.filter((item) =>
+        ownerFromObject(item) === expectedUsername
+      );
+      if (!directMatch && !matchingItems.length) {
         return;
       }
-      registerMatchingProfile(object, expectedUsername);
+      if (directMatch) {
+        registerMatchingProfile(object, expectedUsername);
+      } else {
+        // Current Relay profile payloads put the profile pk beside
+        // polaris_ordered_timeline_connection, but omit the username on that
+        // wrapper. The child posts still identify the requested profile.
+        const pk = profilePkFromObject(object);
+        if (pk) {
+          profilePks.add(pk);
+          owners.add(expectedUsername);
+        }
+      }
       if (!settings.includeProfilePosts) {
         return;
       }
-      for (const key of [
-        "edge_owner_to_timeline_media", "edgeOwnerToTimelineMedia",
-        "timeline_media", "timelineMedia"
-      ]) {
-        for (const item of timelineItems(safeProperty(object, key))) {
-          addProfilePost(item, baseUrl, expectedUsername);
-        }
+      for (const item of matchingItems) {
+        addProfilePost(item, baseUrl, expectedUsername);
       }
     }
 

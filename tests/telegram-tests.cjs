@@ -55,9 +55,21 @@ async function testOriginalMetadata() {
     { _: "documentAttributeVideo", w: 1920, h: 1080, duration: 12 },
     { _: "documentAttributeFilename", file_name: "holiday.mp4" }
   ] };
+  const paidPhoto = { _: "photo", id: "999", sizes: [
+    { _: "photoSize", type: "x", w: 1280, h: 1920, size: 420000 }
+  ] };
+  const paidVideo = { _: "document", id: "1000", dc_id: 4, access_hash: "123456789",
+    file_reference: [9, 8, 7], size: 654321, mime_type: "video/mp4", attributes: [
+    { _: "documentAttributeVideo", w: 1080, h: 1920, duration: 9 }
+  ] };
   const messages = { 1: { media: { photo } }, 2: { media: { document: video } },
-    3: { media: { document: { _: "document", id: "888", mime_type: "application/pdf", size: 500 } } } };
-  const nodes = [1, 2, 3].map((mid) => ({
+    3: { media: { document: { _: "document", id: "888", mime_type: "application/pdf", size: 500 } } },
+    4: { media: { _: "messageMediaPaidMedia", stars_amount: "25", extended_media: [
+      { _: "messageExtendedMedia", media: { _: "messageMediaPhoto", photo: paidPhoto } },
+      { _: "messageExtendedMedia", media: { _: "messageMediaDocument", document: paidVideo } },
+      { _: "messageExtendedMediaPreview", w: 320, h: 480 }
+    ] } } };
+  const nodes = [1, 2, 3, 4].map((mid) => ({
     getAttribute: () => String(mid),
     closest: () => ({ getAttribute: () => "-123" }),
     querySelector: () => ({ naturalWidth: 320, naturalHeight: 200 })
@@ -71,7 +83,7 @@ async function testOriginalMetadata() {
   };
   const scan = vm.runInNewContext(`(${Telegram.pageMedia.toString()})`, context);
   const result = await scan({ expectedPage: PAGE });
-  assert.equal(result.images.length, 2, "Ignore non-media documents without requiring a video DOM element");
+  assert.equal(result.images.length, 4, "Collect each unlocked Stars item and ignore non-media documents");
   assert.equal(downloads.length, 0, "Scanning must not fetch full originals");
   const original = result.images[0];
   assert.equal(original.width, 2560);
@@ -86,6 +98,14 @@ async function testOriginalMetadata() {
   assert.equal(clip.width, 1920);
   assert.equal(clip.duration, 12);
   assert(clip.previewUrl.startsWith("data:image/"));
+  const starsPhoto = result.images.find((item) => new URL(item.url).searchParams.get("id") === "999");
+  const starsClip = result.images.find((item) => new URL(item.url).searchParams.get("id") === "1000");
+  assert(starsPhoto.kinds.includes("Telegram Stars original photo"));
+  assert.equal(starsPhoto.width, 1280);
+  assert.equal(starsClip.mediaType, "video");
+  assert.equal(starsClip.filename, "telegram-video-1000.mp4");
+  assert(starsClip.kinds.includes("Telegram Stars original file"));
+  assert(result.warnings.some((warning) => /1 Telegram Stars item is still locked/.test(warning)));
   await scan({ resolve: original.url, expectedPage: PAGE });
   assert.equal(downloads[0].thumb.type, "y", "Resolve largest progressive photo, not displayed m preview");
   const resolvedClip = await scan({ resolve: clip.url, expectedPage: PAGE });
@@ -97,11 +117,17 @@ async function testOriginalMetadata() {
   assert.equal(streamOptions.location.thumb_size, "", "Telegram requires the original-document thumb_size sentinel");
   assert.equal(streamOptions.mimeType, "video/mp4");
   assert.equal(streamOptions.size, 123456);
+  await scan({ resolve: starsPhoto.url, expectedPage: PAGE });
+  assert.equal(downloads[1].media.id, "999", "Resolve purchased Stars photos through Telegram's downloader");
+  const resolvedStarsClip = await scan({ resolve: starsClip.url, expectedPage: PAGE });
+  const starsStreamOptions = JSON.parse(decodeURIComponent(new URL(resolvedStarsClip.url).pathname.split("/stream/")[1]));
+  assert.equal(starsStreamOptions.location.id, "1000");
+  assert.equal(starsStreamOptions.size, 654321);
   await assert.rejects(scan({ resolve: clip.url.replace("id=777", "id=999"), expectedPage: PAGE }), /expired/);
   await assert.rejects(scan({ resolve: clip.url, expectedPage: PAGE + "other" }), /chat changed/);
   photo.sizes[1].sizes = [70000000];
   const oversized = await scan();
-  assert.equal(oversized.images.length, 1, "Never silently substitute a small photo when the original exceeds the limit");
+  assert.equal(oversized.images.length, 3, "Skip only the oversized original while retaining other media in the chat");
   const unavailable = vm.runInNewContext(`(${Telegram.pageMedia.toString()})`, { location: context.location, document: context.document });
   const failed = await unavailable();
   assert.equal(failed.images.length, 0);

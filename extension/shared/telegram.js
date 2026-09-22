@@ -82,10 +82,31 @@
       result.warnings.push("Telegram original media is unavailable. Reload Telegram and rescan; chat thumbnails have not been substituted for originals.");
       return result;
     }
-    function details(peer, mid, expectedId) {
+    function mediaCandidates(peer, mid) {
       const message = proxy.getMessageByPeer(Number(peer), Number(mid));
-      const media = message && message.media && (message.media.photo || message.media.document);
-      if (!media || !/^\d{1,30}$/.test(String(media.id)) || expectedId && String(media.id) !== expectedId) return null;
+      const messageMedia = message && message.media;
+      const candidates = [];
+      let locked = 0;
+      function add(container, paid) {
+        const media = container && (container.photo || container.document ||
+          (["photo", "document"].includes(container._) ? container : null));
+        if (!media || !/^\d{1,30}$/.test(String(media.id)) ||
+          candidates.some((item) => String(item.media.id) === String(media.id))) return;
+        candidates.push({ media, paid });
+      }
+      add(messageMedia, false);
+      const extendedMedia = Array.isArray(messageMedia && messageMedia.extended_media)
+        ? messageMedia.extended_media
+        : Array.isArray(messageMedia && messageMedia.extendedMedia) ? messageMedia.extendedMedia : [];
+      for (const extended of extendedMedia.slice(0, 32)) {
+        if (extended && extended._ === "messageExtendedMedia") add(extended.media, true);
+        else if (extended && extended._ === "messageExtendedMediaPreview") locked++;
+      }
+      return { candidates, locked };
+    }
+    function details(candidate) {
+      const media = candidate && candidate.media;
+      if (!media) return null;
       const attributes = Array.isArray(media.attributes) ? media.attributes.slice(0, 30) : [];
       let thumb;
       let width = 0, height = 0, duration = 0;
@@ -126,7 +147,8 @@
       const extension = extensions[mimeType] || (kind === "video" ? "mp4" : "jpg");
       if (!filename) filename = `telegram-${kind}-${media.id}.${extension}`;
       else if (!/\.(?:jpe?g|png|gif|webp|mp4|webm|mov|mkv|m4v|ogv)$/i.test(filename)) filename += `.${extension}`;
-      return { media, thumb, kind, width, height, duration, mimeType, filename };
+      return { media, thumb, kind, width, height, duration, mimeType, filename,
+        paid: candidate.paid === true };
     }
     if (options.resolve) {
       const reference = new URL(options.resolve);
@@ -136,7 +158,10 @@
         !/^-?\d{1,20}$/.test(reference.searchParams.get("peer")) ||
         !/^\d{1,20}$/.test(reference.searchParams.get("mid")) ||
         !/^\d{1,30}$/.test(reference.searchParams.get("id"))) throw new Error("Invalid Telegram media reference.");
-      const original = details(reference.searchParams.get("peer"), reference.searchParams.get("mid"), reference.searchParams.get("id"));
+      const requestedId = reference.searchParams.get("id");
+      const match = mediaCandidates(reference.searchParams.get("peer"), reference.searchParams.get("mid"))
+        .candidates.find((candidate) => String(candidate.media.id) === requestedId);
+      const original = details(match);
       if (!original || original.kind !== reference.searchParams.get("kind")) throw new Error("Telegram original media expired. Rescan the chat.");
       if (original.media._ === "document") {
         const media = original.media;
@@ -176,6 +201,7 @@
     }
     let payload = 0;
     const seen = new Set();
+    let lockedPaidMedia = 0;
     const selector = ".bubble[data-mid], .grouped-item[data-mid], .document-container[data-mid]";
     let nodes = document.querySelectorAll(selector);
     if (options.targetUrl) {
@@ -190,8 +216,10 @@
       const mid = node.getAttribute("data-mid");
       if (!/^-?\d{1,20}$/.test(peer) || !/^\d{1,20}$/.test(mid) || seen.has(`${peer}:${mid}`)) continue;
       seen.add(`${peer}:${mid}`);
-      try {
-        const original = details(peer, mid);
+      const messageMedia = mediaCandidates(peer, mid);
+      lockedPaidMedia += messageMedia.locked;
+      for (const candidate of messageMedia.candidates) try {
+        const original = details(candidate);
         if (!original) continue;
         const reference = new URL("https://web.telegram.org/k/");
         reference.search = new URLSearchParams({ anydownload_telegram: "1", peer, mid,
@@ -217,11 +245,16 @@
           width: original.width, height: original.height, duration: original.duration,
           mimeType: original.mimeType, mediaType: original.kind === "video" ? "video" : "image",
           sourceProvider: "telegram", identityKey: `telegram:${peer}:${mid}:${original.media.id}`,
-          kinds: [original.kind === "photo" ? "Telegram original photo" : "Telegram original file"] });
+          kinds: [original.paid
+            ? original.kind === "photo" ? "Telegram Stars original photo" : "Telegram Stars original file"
+            : original.kind === "photo" ? "Telegram original photo" : "Telegram original file"] });
       } catch (error) {
         if (result.warnings.length < 4) result.warnings.push(String(error.message || error).slice(0, 300));
       }
     }
+    if (lockedPaidMedia) result.warnings.push(
+      `${lockedPaidMedia.toLocaleString()} Telegram Stars item${lockedPaidMedia === 1 ? " is" : "s are"} still locked and cannot be downloaded.`
+    );
     result.warnings.push("Telegram originals: scan covers loaded messages only (up to 300 files). Keep this chat open for previews and downloads. Original files load on demand, with a 64 MiB per-file limit.");
     return result;
   }
