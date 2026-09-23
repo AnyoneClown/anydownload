@@ -4,6 +4,15 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.21.6] - 2026-09-23
+
+### Changed
+
+- Reuse live-page fingerprints until relevant DOM or viewport changes, avoiding repeated broad page queries between safety scans.
+- Cache media search and filename-sort keys, and bound Instagram's fallback JSON and DOM traversal work.
+- Keep upload progress rows in place, load history summaries from a compact index, and migrate existing upload jobs into separate storage records so each durable checkpoint writes only its own job. Reading source bytes updates progress without a storage write.
+- Build validated source-upload Blobs from bounded response chunks without an extra full-size byte-array copy.
+
 ## [1.21.5] - 2026-09-22
 
 ### Fixed

@@ -79,8 +79,8 @@
     return mediaType === "video" ? videoBlob(value, filename) : imageBlob(value);
   }
 
-  async function fetchMediaBytes(value, mediaType = "image", signal = new AbortController().signal,
-    { permissionContains, onProgress = () => undefined } = {}) {
+  async function fetchMedia(value, mediaType, signal,
+    { permissionContains, onProgress = () => undefined } = {}, asBlob = false) {
     if (!["image", "video"].includes(mediaType)) throw failure("source_failed");
     const invalidCode = mediaType === "video" ? "invalid_video" : "invalid_image";
     const tooLargeCode = mediaType === "video" ? "video_too_large" : "image_too_large";
@@ -113,6 +113,8 @@
       if (!response.body || typeof response.body.getReader !== "function") throw failure("source_failed");
       const reader = response.body.getReader();
       const chunks = [];
+      const prefix = new Uint8Array(4096);
+      let prefixLength = 0;
       let size = 0;
       try {
         while (true) {
@@ -122,6 +124,11 @@
           size += chunk.value.byteLength;
           if (size > MAX_MEDIA_BYTES) throw failure(tooLargeCode);
           chunks.push(chunk.value);
+          if (prefixLength < prefix.length) {
+            const length = Math.min(prefix.length - prefixLength, chunk.value.byteLength);
+            prefix.set(chunk.value.subarray(0, length), prefixLength);
+            prefixLength += length;
+          }
           onProgress(size);
         }
       } finally {
@@ -129,14 +136,15 @@
         reader.releaseLock();
       }
       if (!size) throw failure(invalidCode);
+      const contentType = mediaType === "video"
+        ? videoContentTypeForBytes(prefix.subarray(0, prefixLength), type, url.pathname)
+        : contentTypeForBytes(prefix.subarray(0, prefixLength));
+      if (!contentType) throw failure(invalidCode);
+      if (signal.aborted) throw failure("cancelled");
+      if (asBlob) return new Blob(chunks, { type: contentType });
       const bytes = new Uint8Array(size);
       let offset = 0;
       for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-      const contentType = mediaType === "video"
-        ? videoContentTypeForBytes(bytes, type, url.pathname)
-        : contentTypeForBytes(bytes);
-      if (!contentType) throw failure(invalidCode);
-      if (signal.aborted) throw failure("cancelled");
       return { bytes, contentType };
     } catch (error) {
       if (signal.aborted) throw failure("cancelled");
@@ -149,12 +157,20 @@
     }
   }
 
+  function fetchMediaBytes(value, mediaType = "image", signal = new AbortController().signal, options) {
+    return fetchMedia(value, mediaType, signal, options, false);
+  }
+
+  function fetchMediaBlob(value, mediaType = "image", signal = new AbortController().signal, options) {
+    return fetchMedia(value, mediaType, signal, options, true);
+  }
+
   function fetchImageBytes(value, signal, options) {
     return fetchMediaBytes(value, "image", signal, options);
   }
 
   const api = Object.freeze({ MAX_MEDIA_BYTES, MAX_IMAGE_BYTES, contentTypeForBytes, videoContentTypeForBytes,
-    imageBlob, videoBlob, mediaBlob, fetchMediaBytes, fetchImageBytes, errorMessage });
+    imageBlob, videoBlob, mediaBlob, fetchMediaBytes, fetchMediaBlob, fetchImageBytes, errorMessage });
   root.ImageDownloaderImageFetch = api;
   if (typeof module === "object" && module.exports) module.exports = api;
 })(typeof globalThis === "object" ? globalThis : this);

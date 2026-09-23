@@ -252,6 +252,32 @@
       "data-lazy-src", "data-original", "data-original-src", "data-full", "data-full-src", "data-large",
       "data-zoom-image", "style", "class", "width", "height"
     ];
+    const pageUrl = String(document.URL || "").slice(0, 16384);
+    const pageRoot = document.documentElement;
+    const height = pageRoot ? pageRoot.scrollHeight : 0;
+    const width = pageRoot ? pageRoot.scrollWidth : 0;
+    const viewport = typeof window === "object" ?
+      `${window.innerWidth}:${window.innerHeight}:${window.devicePixelRatio || 1}` : "";
+    const cacheKey = "__anyDownloadLiveFingerprintV2";
+    let cache = globalThis[cacheKey];
+    if (cache && (cache.document !== document || cache.pageRoot !== pageRoot ||
+        cache.maxElements !== maxElements)) {
+      cache.observer.disconnect();
+      clearTimeout(cache.expiryTimer);
+      delete globalThis[cacheKey];
+      cache = null;
+    }
+    if (cache && cache.observer.takeRecords().length) cache.dirty = true;
+    if (cache && !cache.dirty && cache.pageUrl === pageUrl && cache.height === height &&
+        cache.width === width && cache.viewport === viewport) {
+      clearTimeout(cache.expiryTimer);
+      cache.expiryTimer = setTimeout(() => {
+        cache.observer.disconnect();
+        if (globalThis[cacheKey] === cache) delete globalThis[cacheKey];
+      }, 10000);
+      cache.expiryTimer.unref?.();
+      return cache.result;
+    }
     let hash = 2166136261;
     let count = 0;
 
@@ -265,15 +291,16 @@
       hash = Math.imul(hash, 16777619) >>> 0;
     }
 
-    add(document.URL);
+    add(pageUrl);
     add(document.images ? document.images.length : 0);
     try {
       add(document.querySelectorAll("video").length);
     } catch (_error) {
       add(0);
     }
-    add(document.documentElement ? document.documentElement.scrollHeight : 0);
-    add(document.documentElement ? document.documentElement.scrollWidth : 0);
+    add(height);
+    add(width);
+    add(viewport);
 
     let nodes = [];
     try {
@@ -311,10 +338,39 @@
       count += 1;
     }
 
-    return {
+    const result = {
       fingerprint: `${nodes.length}:${count}:${hash.toString(16).padStart(8, "0")}`,
-      pageUrl: String(document.URL || "").slice(0, 16384)
+      pageUrl
     };
+    if (typeof MutationObserver === "function" && pageRoot) {
+      try {
+        if (!cache) {
+          cache = { document, pageRoot, maxElements, dirty: false };
+          cache.observer = new MutationObserver(() => { cache.dirty = true; });
+          cache.observer.observe(document, { subtree: true, childList: true, attributes: true,
+            attributeFilter: ["src", "srcset", "sizes", "href", "type", "download", "poster", "data-src", "data-srcset",
+              "data-lazy-src", "data-lazy-srcset", "data-original", "data-original-src", "data-full",
+              "data-full-src", "data-large", "data-zoom-image", "style", "class", "width", "height", "media"] });
+          globalThis[cacheKey] = cache;
+        }
+        cache.dirty = false;
+        cache.pageUrl = pageUrl;
+        cache.height = height;
+        cache.width = width;
+        cache.viewport = viewport;
+        cache.result = result;
+        clearTimeout(cache.expiryTimer);
+        cache.expiryTimer = setTimeout(() => {
+          cache.observer.disconnect();
+          if (globalThis[cacheKey] === cache) delete globalThis[cacheKey];
+        }, 10000);
+        cache.expiryTimer.unref?.();
+      } catch (_error) {
+        cache?.observer?.disconnect();
+        if (globalThis[cacheKey] === cache) delete globalThis[cacheKey];
+      }
+    }
+    return result;
   }
 
   function normalizedInstagramCollections(value) {
@@ -734,6 +790,9 @@
   const ignoredKeyByImage = new WeakMap();
   const renderedMetaNodes = new Map();
   const renderedNameNodes = new Map();
+  const searchTextCache = new WeakMap();
+  const sortNameCache = new WeakMap();
+  const filenameCollator = new Intl.Collator(undefined, { numeric: true });
   const visibleDimensionRows = new Map();
   let thumbnailObserver = null;
   let dimensionObserver = null;
@@ -2697,6 +2756,29 @@
     scheduleDownloadStatusRefresh();
   }
 
+  function searchTextFor(image) {
+    const kinds = (image.kinds || []).join(" ");
+    const cached = searchTextCache.get(image);
+    if (cached && cached.url === image.url && cached.filename === image.filename &&
+        cached.alt === image.alt && cached.pageTitle === image.pageTitle && cached.kinds === kinds) {
+      return cached.text;
+    }
+    const text = `${image.url} ${image.filename || ""} ${image.alt || ""} ${image.pageTitle || ""} ${kinds}`.toLocaleLowerCase();
+    searchTextCache.set(image, { url: image.url, filename: image.filename,
+      alt: image.alt, pageTitle: image.pageTitle, kinds, text });
+    return text;
+  }
+
+  function sortNameFor(image) {
+    const cached = sortNameCache.get(image);
+    if (cached && cached.url === image.url && cached.filename === image.filename &&
+        cached.mediaType === image.mediaType) return cached.name;
+    const name = baseFilenameForMedia(image, 0);
+    sortNameCache.set(image, { url: image.url, filename: image.filename,
+      mediaType: image.mediaType, name });
+    return name;
+  }
+
   function filteredImages() {
     if (state.showSelected) return sortImages(selectedDownloadableImages());
     const query = elements["filter-input"].value.trim().toLocaleLowerCase();
@@ -2709,14 +2791,11 @@
     if (!query) {
       return sortImages(inCurrentView);
     }
-    return sortImages(inCurrentView.filter((image) => {
-      const haystack = `${image.url} ${image.filename || ""} ${image.alt || ""} ${image.pageTitle || ""} ${(image.kinds || []).join(" ")}`.toLocaleLowerCase();
-      return haystack.includes(query);
-    }));
+    return sortImages(inCurrentView.filter((image) => searchTextFor(image).includes(query)));
   }
 
   function sortImages(images) {
-    if (state.sort === "name") images.sort((a, b) => baseFilenameForMedia(a, 0).localeCompare(baseFilenameForMedia(b, 0), undefined, { numeric: true }));
+    if (state.sort === "name") images.sort((a, b) => filenameCollator.compare(sortNameFor(a), sortNameFor(b)));
     if (state.sort === "resolution") images.sort((a, b) => (b.width || 0) * (b.height || 0) - (a.width || 0) * (a.height || 0));
     return images;
   }
@@ -4241,6 +4320,7 @@
       elements["page-label"].textContent = merged.page.pageTitle || hostname;
       updateFilenameTemplateUi();
       if (settings.live) {
+        // Keep refreshed URLs selectable while the status lookup is still pending.
         renderImages();
       }
 

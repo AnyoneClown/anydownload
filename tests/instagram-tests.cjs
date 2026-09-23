@@ -1531,6 +1531,17 @@ async function run() {
     assert.equal(result.images[0].url, "https://scontent.cdninstagram.com/wrapped.jpg");
   }
 
+  // A malformed wrapper still exposes a valid nested hydration object.
+  {
+    const payload = { graphql: { shortcode_media: {
+      shortcode: "NESTED1", ...imageNode("402", "https://scontent.cdninstagram.com/nested.jpg")
+    } } };
+    const result = await scan("https://www.instagram.com/p/NESTED1/", {
+      scripts: [script(`window.data = {invalid: true, payload: ${JSON.stringify(payload)}};`, "text/javascript", true)]
+    });
+    assert.deepEqual(result.images.map((item) => item.url), ["https://scontent.cdninstagram.com/nested.jpg"]);
+  }
+
   // Route-scoped JSON-LD is a safe fallback when Instagram omits its internal
   // hydration shape. Direct schema.org video plus its thumbnail is supported.
   {

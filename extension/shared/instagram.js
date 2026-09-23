@@ -1497,46 +1497,6 @@
       walk(rootValue, 0, "", true);
     }
 
-    function balancedJsonAt(text, start) {
-      const opening = text[start];
-      if (opening !== "{" && opening !== "[") {
-        return null;
-      }
-      const stack = [opening];
-      let quoted = false;
-      let escaped = false;
-      for (let index = start + 1; index < text.length; index += 1) {
-        const character = text[index];
-        if (quoted) {
-          if (escaped) {
-            escaped = false;
-          } else if (character === "\\") {
-            escaped = true;
-          } else if (character === '"') {
-            quoted = false;
-          }
-          continue;
-        }
-        if (character === '"') {
-          quoted = true;
-          continue;
-        }
-        if (character === "{" || character === "[") {
-          stack.push(character);
-        } else if (character === "}" || character === "]") {
-          const expected = character === "}" ? "{" : "[";
-          if (stack[stack.length - 1] !== expected) {
-            return null;
-          }
-          stack.pop();
-          if (!stack.length) {
-            return { text: text.slice(start, index + 1), end: index + 1 };
-          }
-        }
-      }
-      return null;
-    }
-
     function parseJsonValues(rawText) {
       const text = safeText(rawText, settings.maxDocumentBytes);
       const values = [];
@@ -1550,21 +1510,49 @@
       } catch (_error) {
         // Instagram also embeds JSON after assignment/callback prefixes.
       }
+      const stack = [];
+      const outer = [];
+      const nested = [];
+      let quoted = false;
+      let escaped = false;
+      // Collect balanced spans in one pass. Malformed outer wrappers can still
+      // expose a valid nested object, without rescanning a multi-megabyte tail.
+      for (let index = 0; index < text.length; index += 1) {
+        const character = text[index];
+        if (quoted) {
+          if (escaped) escaped = false;
+          else if (character === "\\") escaped = true;
+          else if (character === '"') quoted = false;
+          continue;
+        }
+        if (character === '"') {
+          quoted = true;
+        } else if (character === "{" || character === "[") {
+          if (stack.length >= MAX_JSON_DEPTH * 4) stack.length = 0;
+          stack.push({ character, start: index });
+        } else if (character === "}" || character === "]") {
+          const expected = character === "}" ? "{" : "[";
+          if (!stack.length || stack[stack.length - 1].character !== expected) {
+            stack.length = 0;
+            continue;
+          }
+          const start = stack.pop().start;
+          const target = stack.length ? nested : outer;
+          if (target.length < MAX_JSON_VALUES_PER_SCRIPT) target.push({ start, end: index + 1 });
+        }
+      }
+      const candidates = [...outer, ...nested].sort((a, b) => a.start - b.start || b.end - a.end);
       let attempts = 0;
-      for (let index = 0; index < text.length && attempts < MAX_JSON_VALUES_PER_SCRIPT; index += 1) {
-        if (text[index] !== "{" && text[index] !== "[") {
-          continue;
-        }
+      let acceptedEnd = 0;
+      for (const candidate of candidates) {
+        if (attempts >= MAX_JSON_VALUES_PER_SCRIPT) break;
+        if (candidate.start < acceptedEnd) continue;
         attempts += 1;
-        const balanced = balancedJsonAt(text, index);
-        if (!balanced) {
-          continue;
-        }
         try {
-          values.push(JSON.parse(balanced.text));
-          index = balanced.end - 1;
+          values.push(JSON.parse(text.slice(candidate.start, candidate.end)));
+          acceptedEnd = candidate.end;
         } catch (_error) {
-          // Move one character and try a nested object in the invalid wrapper.
+          // Try a nested span or a later assignment without rescanning text.
         }
       }
       return values;
@@ -2264,10 +2252,16 @@
         }
       }
       try {
-        const all = document.querySelectorAll("*");
-        const maximum = Math.min(Number(all && all.length) || 0, 128);
-        for (let index = 0; index < maximum; index += 1) {
-          add(all[index]);
+        if (typeof document.createTreeWalker === "function" && typeof NodeFilter !== "undefined") {
+          const walker = document.createTreeWalker(document, NodeFilter.SHOW_ELEMENT);
+          for (let index = 0; index < 128; index += 1) {
+            const node = walker.nextNode();
+            if (!node) break;
+            add(node);
+          }
+        } else {
+          const all = document.querySelectorAll("*");
+          for (let index = 0; index < Math.min(Number(all && all.length) || 0, 128); index += 1) add(all[index]);
         }
       } catch (_error) {
         // Targeted runtime roots above are sufficient when broad traversal fails.

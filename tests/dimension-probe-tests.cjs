@@ -190,6 +190,43 @@ assert.deepEqual(hostPermissionPatternsForImages([]), []);
 }
 
 {
+  const previousDocument = global.document;
+  const previousObserver = global.MutationObserver;
+  const attributes = { src: "https://images.test/first.jpg" };
+  const node = { localName: "img", getAttribute: name => attributes[name] || "" };
+  let queries = 0;
+  let observer;
+  global.MutationObserver = class {
+    constructor(callback) { this.callback = callback; observer = this; }
+    observe(_target, options) { this.options = options; }
+    disconnect() { this.disconnected = true; }
+    takeRecords() { return []; }
+  };
+  global.document = {
+    URL: "https://gallery.test/live",
+    images: { length: 1 },
+    documentElement: { scrollHeight: 900, scrollWidth: 600 },
+    querySelectorAll() { queries += 1; return [node]; }
+  };
+  try {
+    const first = collectLiveGalleryFingerprint({ maxElements: 2500 });
+    assert.ok(observer.options.attributeFilter.includes("sizes"), "Responsive source changes invalidate the cached fingerprint");
+    const readsAfterFirst = queries;
+    assert.equal(collectLiveGalleryFingerprint({ maxElements: 2500 }).fingerprint, first.fingerprint);
+    assert.equal(queries, readsAfterFirst, "An unchanged page reuses its fingerprint without another DOM query");
+    attributes.src = "https://images.test/second.jpg";
+    observer.callback([{ type: "attributes" }]);
+    assert.notEqual(collectLiveGalleryFingerprint({ maxElements: 2500 }).fingerprint, first.fingerprint);
+    assert.ok(queries > readsAfterFirst, "A media mutation recomputes the fingerprint");
+  } finally {
+    const cache = global.__anyDownloadLiveFingerprintV2;
+    if (cache) { clearTimeout(cache.expiryTimer); cache.observer.disconnect(); delete global.__anyDownloadLiveFingerprintV2; }
+    global.document = previousDocument;
+    global.MutationObserver = previousObserver;
+  }
+}
+
+{
   const first = { url: "https://images.test/first.jpg", width: 800, height: 600 };
   const unchecked = { url: "https://images.test/unchecked.jpg", width: 800, height: 600 };
   const replacement = { url: first.url, width: 2400, height: 1600 };

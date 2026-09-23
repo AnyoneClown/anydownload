@@ -17,6 +17,7 @@ const sourceItems = [{ url: "https://images.example/original.png", filename: "or
 const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0]);
 const mp4 = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0]);
 const clone = value => structuredClone(value);
+const jobKey = id => `${Page.JOB_KEY_PREFIX}${id}`;
 const event = () => ({ listeners: [], addListener(fn) { this.listeners.push(fn); }, removeListener(fn) { this.listeners = this.listeners.filter(item => item !== fn); } });
 
 class Element {
@@ -51,8 +52,12 @@ function harness({ privateWindow = false, href = "moz-extension://test/upload/up
     return work;
   } };
   const area = data => ({
-    async get(key) { calls.push(["get", key]); return { [key]: clone(data[key]) }; },
-    async set(values) { Object.assign(data, clone(values)); },
+    async get(key) {
+      calls.push(["get", key]);
+      const keys = Array.isArray(key) ? key : [key];
+      return Object.fromEntries(keys.filter(item => Object.hasOwn(data, item)).map(item => [item, clone(data[item])]));
+    },
+    async set(values) { calls.push(["set", Object.keys(values)]); Object.assign(data, clone(values)); },
     async remove(key) { delete data[key]; }
   });
   const browser = {
@@ -99,7 +104,7 @@ function harness({ privateWindow = false, href = "moz-extension://test/upload/up
     return mediaType === "video" ? { bytes: mp4, contentType: "video/mp4" } : { bytes: png, contentType: "image/png" };
   } };
   const workspace = { open: (view, route) => workspaceCalls.push([view, route]) };
-  return { browser, document, elements, local, session, calls, workspaceCalls, held, locks, client, provider,
+  return { browser, document, elements, local, session, calls, workspaceCalls, held, locks, client, provider, imageFetch,
     setAccount: value => { account = value; }, setAlbumFailure: value => { failAlbum = value; },
     start: () => Page.initialize({ browser, document, location: { href }, locks, client, provider, imageFetch, workspace }) };
 }
@@ -124,8 +129,17 @@ function harness({ privateWindow = false, href = "moz-extension://test/upload/up
   assert.equal(h.elements["selection-count"].textContent, "1 image");
   assert.equal(h.elements["progress-empty"].hidden, false);
   assert.equal(h.elements["history-empty"].hidden, false);
+  const fetchMediaBytes = h.imageFetch.fetchMediaBytes;
+  h.imageFetch.fetchMediaBytes = async (...args) => {
+    assert.equal(h.local[jobKey(page.job.id)].items[0].uploadStatus, "pending",
+      "Reading source bytes does not need a durable checkpoint before the remote upload");
+    assert.match(h.elements["results-list"].children[0].children[1].textContent, /Reading image/);
+    return fetchMediaBytes(...args);
+  };
   const uploadAsset = h.provider.uploadAsset;
+  let activeResultRow;
   h.provider.uploadAsset = async (...args) => {
+    activeResultRow = h.elements["results-list"].children[0];
     assert.equal(h.elements["retry-button"].textContent, "Uploading…");
     assert.equal(h.elements["retry-button"].disabled, true);
     assert.equal(h.elements["selection-note"].textContent, "Uploading 1 image. Keep this view open.");
@@ -138,18 +152,31 @@ function harness({ privateWindow = false, href = "moz-extension://test/upload/up
   assert.equal(h.elements["progress-empty"].hidden, true);
   assert.equal(h.elements["history-empty"].hidden, true);
   assert.equal(h.elements["results-list"].children[0].children[1].textContent, "Uploaded to Immich");
+  assert.equal(h.elements["results-list"].children[0], activeResultRow,
+    "Progress updates reuse the existing result row");
   assert.equal(h.elements["history-list"].children[0].children[1].textContent, "Complete");
   assert.deepEqual(h.calls.find(call => call[0] === "permission")[1].origins, ["http://192.168.0.103/*", "https://images.example/*"]);
   assert.equal(h.calls.filter(call => call[0] === "upload").length, 1);
   assert.equal(h.calls.filter(call => call[0] === "album").length, 0);
   assert.deepEqual(h.local["downloadLedger:v1"], { unchanged: true });
   assert.ok(!JSON.stringify(h.local).includes(SECRET));
-  assert.deepEqual(Sync.snapshot({ [Page.STORE_KEY]: h.local[Page.STORE_KEY] }), {}, "Upload results never enter general sync");
+  assert.deepEqual(Sync.snapshot(h.local), {}, "Upload results never enter general sync");
+  assert.equal(h.local[Page.STORE_KEY], undefined, "New jobs use per-job storage");
+  assert.equal(h.local[Page.INDEX_KEY].jobs.length, 1);
   for (const [status, label] of [["running", "Uploading"], ["queued", "Ready"], ["partial", "Needs attention"]]) {
-    h.local[Page.STORE_KEY][0].status = status;
+    await page.store.save({ ...h.local[jobKey(page.job.id)], status });
     await page.refresh();
     assert.equal(h.elements["history-list"].children[0].children[1].textContent, label);
   }
+  const otherJob = Uploads.createJob(sourceItems, { ownerId: OWNER, connectionId: CONNECTION,
+    serverUrl: connection.serverUrl, id: "another-job" });
+  await page.store.save(otherJob);
+  const callsBeforeCheckpoint = h.calls.length;
+  await page.store.save(page.job);
+  const checkpointWrites = h.calls.slice(callsBeforeCheckpoint).filter(call => call[0] === "set");
+  assert.deepEqual(checkpointWrites.map(call => call[1]), [[jobKey(page.job.id), Page.INDEX_KEY]],
+    "A checkpoint writes only its job and the small index");
+  assert.deepEqual(h.local[jobKey(otherJob.id)], otherJob, "Other saved uploads stay untouched");
 
   h = harness({ failAlbum: true });
   page = await h.start();
@@ -174,7 +201,8 @@ function harness({ privateWindow = false, href = "moz-extension://test/upload/up
   const saveCheckpoint = h.browser.storage.local.set;
   let rejectAssetCheckpoint = true;
   h.browser.storage.local.set = async values => {
-    if (rejectAssetCheckpoint && values[Page.STORE_KEY]?.some(entry => entry.items[0].assetId)) {
+    if (rejectAssetCheckpoint && Object.entries(values).some(([key, entry]) =>
+      key.startsWith(Page.JOB_KEY_PREFIX) && entry.items[0].assetId)) {
       rejectAssetCheckpoint = false;
       throw new Error("Disk unavailable");
     }
@@ -182,7 +210,7 @@ function harness({ privateWindow = false, href = "moz-extension://test/upload/up
   };
   await page.begin(false);
   assert.equal(page.job.items[0].assetId, ASSET, "Confirmed asset survives a failed checkpoint in memory");
-  assert.equal(h.local[Page.STORE_KEY][0].items[0].assetId, null);
+  assert.equal(h.local[jobKey(page.job.id)].items[0].assetId, null);
   await page.begin(true);
   assert.equal(page.job.status, "complete");
   assert.equal(h.calls.filter(call => call[0] === "upload").length, 1, "Checkpoint retry saves the known asset instead of uploading it again");
@@ -227,7 +255,27 @@ function harness({ privateWindow = false, href = "moz-extension://test/upload/up
   h = harness({ href: `moz-extension://test/upload/upload.html?job=${libraryJob.id}`, stored: { [Page.STORE_KEY]: [libraryJob] } });
   page = await h.start();
   assert.equal(h.elements["album-select"].value, "", "Library-only history stays library-only when the connection default changes");
+  assert.equal(h.local[Page.STORE_KEY], undefined, "Legacy upload history migrates after the new index is saved");
+  assert.deepEqual(h.local[jobKey(libraryJob.id)], libraryJob);
   connection.defaultAlbumId = null;
+
+  const migrationOne = Uploads.createJob(sourceItems, { ownerId: OWNER, connectionId: CONNECTION,
+    serverUrl: connection.serverUrl, id: "migrate-one" });
+  const migrationTwo = Uploads.createJob(sourceItems, { ownerId: OWNER, connectionId: CONNECTION,
+    serverUrl: connection.serverUrl, id: "migrate-two" });
+  h = harness({ stored: { [Page.STORE_KEY]: [migrationOne, migrationTwo] } });
+  const migrationSet = h.browser.storage.local.set;
+  let migrationWrites = 0;
+  h.browser.storage.local.set = async values => {
+    if (Object.hasOwn(values, Page.STORE_KEY) && ++migrationWrites === 2) throw new Error("Disk unavailable");
+    return migrationSet(values);
+  };
+  await assert.rejects(Page.createStore(h.browser, h.locks).list(OWNER), /Disk unavailable/);
+  assert.deepEqual(h.local[Page.STORE_KEY], [migrationTwo], "An interrupted migration keeps the remaining legacy job");
+  h.browser.storage.local.set = migrationSet;
+  assert.deepEqual(await Page.createStore(h.browser, h.locks).list(OWNER), [migrationOne, migrationTwo],
+    "A fresh page resumes an interrupted migration without losing either job");
+  assert.equal(h.local[Page.STORE_KEY], undefined);
 
   h = harness({ href: "moz-extension://test/upload/upload.html?embedded=1", stored: { [Page.STORE_KEY]: [libraryJob] } });
   await h.start();
@@ -263,7 +311,7 @@ function harness({ privateWindow = false, href = "moz-extension://test/upload/up
   await page.begin(false);
   assert.equal(page.job.status, "complete", "Images already downloaded locally can be uploaded");
   assert.equal(h.calls.some(call => call[0] === "fetch"), false);
-  assert.equal(h.local[Page.STORE_KEY][0].items[0].url, null);
+  assert.equal(h.local[jobKey(page.job.id)].items[0].url, null);
   assert.ok(!JSON.stringify(h.local).includes("base64"));
 
   h = harness();
@@ -292,7 +340,7 @@ function harness({ privateWindow = false, href = "moz-extension://test/upload/up
   const fullStore = Page.createStore(h.browser, h.locks);
   for (let index = 0; index < 19; index++) await fullStore.save({ ...oldJob, id: `history-${index}` });
   await assert.rejects(fullStore.save({ ...oldJob, id: "one-too-many" }), /history is full/);
-  assert.equal(h.local[Page.STORE_KEY].length, 20);
+  assert.equal(h.local[Page.INDEX_KEY].jobs.length, 20);
   assert.throws(() => Page.validateRequest({ createdAt: Date.now(), incognito: true, items: sourceItems }), /invalid/);
   assert.throws(() => Page.validateRequest({ createdAt: 0, incognito: false, items: sourceItems }), /expired/);
   console.log("Upload Progress tests passed: permissions, separate ledger, local files, album-only retry, interruption, cancellation, account isolation, bounded history.");

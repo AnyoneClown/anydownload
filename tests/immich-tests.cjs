@@ -138,6 +138,17 @@ async function main() {
   assert.equal(fetched.contentType, "image/png");
   assert.equal(calls, 1);
   const permitted = { permissionContains: async () => true };
+  global.fetch = async () => new Response(new ReadableStream({
+    start(stream) {
+      stream.enqueue(png.subarray(0, 3));
+      stream.enqueue(png.subarray(3));
+      stream.close();
+    }
+  }), { headers: { "content-type": "image/png" } });
+  const fetchedBlob = await Images.fetchMediaBlob(sourceUrl, "image", undefined, permitted);
+  assert.equal(fetchedBlob.type, "image/png");
+  assert.deepEqual(new Uint8Array(await fetchedBlob.arrayBuffer()), png,
+    "Upload fetches build a validated Blob from bounded chunks");
   global.fetch = async () => { throw new Error(`source error ${key}`); };
   await assert.rejects(Images.fetchImageBytes(sourceUrl, undefined, permitted), (error) => error.code === "source_failed" && !error.message.includes(key));
   global.fetch = async () => new Response(png, { headers: { "content-length": String(Images.MAX_IMAGE_BYTES + 1) } });

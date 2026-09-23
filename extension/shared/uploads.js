@@ -142,9 +142,9 @@
     // Credentials stay on the call stack, separate from the job object passed to persistence and rendering.
     Object.keys(job).forEach((key) => delete job[key]);
     Object.assign(job, normalized);
-    async function checkpoint() {
+    async function checkpoint(item, durable = true) {
       job.updatedAt = new Date().toISOString();
-      try { await onChange(job); } catch (_error) { throw failure("checkpoint_failed"); }
+      try { await onChange(job, item || null, durable); } catch (_error) { throw failure("checkpoint_failed"); }
     }
     job.status = "running";
     await checkpoint();
@@ -155,7 +155,8 @@
         item.errorCode = "";
         if (!item.assetId) {
           item.uploadStatus = "fetching";
-          await checkpoint();
+          // Fetching cannot mutate Immich; show progress without rewriting the saved job.
+          await checkpoint(item, false);
           let blob;
           try {
             const fetched = await fetchImage(item, signal);
@@ -170,12 +171,12 @@
           } catch (error) {
             item.uploadStatus = signal.aborted ? "cancelled" : "failed";
             item.errorCode = signal.aborted ? "cancelled" : safeCode(error && error.code);
-            await checkpoint();
+            await checkpoint(item);
             if (signal.aborted) break;
             continue;
           }
           item.uploadStatus = "uploading";
-          await checkpoint();
+          await checkpoint(item);
           try {
             const result = await provider.uploadAsset(credential, { blob, filename: item.filename,
               deviceAssetId: item.deviceAssetId, createdAt: item.createdAt }, { signal });
@@ -189,12 +190,12 @@
             item.errorCode = uncertain ? "uncertain" : safeCode(error && error.code);
           } finally { blob = null; }
           // Do not attempt an album request until the returned asset identity is durable.
-          await checkpoint();
+          await checkpoint(item);
         }
         if (signal.aborted) break;
         if (item.assetId && job.albumId && item.albumStatus !== "complete") {
           item.albumStatus = "attaching";
-          await checkpoint();
+          await checkpoint(item);
           try {
             await provider.addToAlbum(credential, job.albumId, item.assetId, { signal });
             item.albumStatus = "complete";
@@ -203,7 +204,7 @@
             item.albumStatus = "failed";
             item.errorCode = signal.aborted ? "cancelled" : safeCode(error && error.code || "album_failed");
           }
-          await checkpoint();
+          await checkpoint(item);
         }
       }
       job.status = job.items.every(complete) ? "complete" : signal.aborted ? "cancelled" : "partial";

@@ -3,32 +3,140 @@
   const Core = root.ImageDownloaderCore || (typeof module === "object" ? require("../shared/core.js") : null);
   const Uploads = root.ImageDownloaderUploads || (typeof module === "object" ? require("../shared/uploads.js") : null);
   const STORE_KEY = "externalUploads:v1";
+  const INDEX_KEY = "externalUploads:index:v2";
+  const JOB_KEY_PREFIX = "externalUploads:job:v2:";
   const MAX_JOBS = 20;
   const MAX_BYTES = 4 * 1024 * 1024;
   const ID = /^[a-z0-9-]{8,80}$/i;
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
   function createStore(browser, locks) {
-    const read = async () => {
-      const stored = (await browser.storage.local.get(STORE_KEY))[STORE_KEY];
-      if (stored === undefined) return [];
-      if (!Array.isArray(stored) || stored.length > MAX_JOBS) throw new Error("Saved upload records are invalid.");
-      return stored;
-    };
-    async function write(change) {
-      return locks.request(STORE_KEY, async () => {
-        const jobs = change(await read());
-        // ponytail: one bounded record; split by job if checkpoint writes become slow.
-        if (jobs.length > MAX_JOBS || new TextEncoder().encode(JSON.stringify(jobs)).length > MAX_BYTES) {
-          throw new Error("Upload history is full. Remove an old upload record before starting another.");
+    const keyFor = (id) => `${JOB_KEY_PREFIX}${id}`;
+    const invalid = () => new Error("Saved upload records are invalid.");
+    const full = () => new Error("Upload history is full. Remove an old upload record before starting another.");
+    const bytesFor = (job) => new TextEncoder().encode(JSON.stringify(job)).length;
+    let initialized = false;
+    let initializing = null;
+
+    function entryFor(job) {
+      if (!job || typeof job.id !== "string" || !ID.test(job.id) ||
+          typeof job.ownerId !== "string" || !job.ownerId ||
+          !Array.isArray(job.items) || job.items.length > Uploads.MAX_ITEMS ||
+          typeof job.createdAt !== "string" || !Uploads.JOB_STATUSES.includes(job.status)) throw invalid();
+      return { id: job.id, ownerId: job.ownerId, bytes: bytesFor(job), createdAt: job.createdAt,
+        status: job.status, total: job.items.length,
+        videos: job.items.filter((item) => item.mediaType === "video").length };
+    }
+
+    function checkedIndex(value) {
+      if (value === undefined) return { schemaVersion: 2, jobs: [] };
+      if (!value || value.schemaVersion !== 2 || !Array.isArray(value.jobs) ||
+          value.jobs.length > MAX_JOBS) throw invalid();
+      const seen = new Set();
+      for (const entry of value.jobs) {
+        if (!entry || typeof entry.id !== "string" || !ID.test(entry.id) ||
+            typeof entry.ownerId !== "string" || !entry.ownerId ||
+            !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 ||
+            typeof entry.createdAt !== "string" || !Uploads.JOB_STATUSES.includes(entry.status) ||
+            !Number.isSafeInteger(entry.total) || entry.total < 0 || entry.total > Uploads.MAX_ITEMS ||
+            !Number.isSafeInteger(entry.videos) || entry.videos < 0 || entry.videos > entry.total ||
+            seen.has(entry.id)) throw invalid();
+        seen.add(entry.id);
+      }
+      if (value.jobs.reduce((sum, entry) => sum + entry.bytes, 0) > MAX_BYTES) throw invalid();
+      return value;
+    }
+
+    async function readIndex() {
+      return checkedIndex((await browser.storage.local.get(INDEX_KEY))[INDEX_KEY]);
+    }
+
+    async function ensureMigrated() {
+      if (initialized) return;
+      if (initializing) return initializing;
+      initializing = locks.request(STORE_KEY, async () => {
+        const stored = await browser.storage.local.get([INDEX_KEY, STORE_KEY]);
+        let index = checkedIndex(stored[INDEX_KEY]);
+        let legacy = stored[STORE_KEY];
+        if (legacy === undefined) {
+          initialized = true;
+          return;
         }
-        await browser.storage.local.set({ [STORE_KEY]: jobs });
+        if (!Array.isArray(legacy) || legacy.length > MAX_JOBS) throw invalid();
+        const remaining = legacy.map(entryFor);
+        const ids = [...index.jobs, ...remaining].map((entry) => entry.id);
+        if (ids.length > MAX_JOBS || new Set(ids).size !== ids.length ||
+            [...index.jobs, ...remaining].reduce((sum, entry) => sum + entry.bytes, 0) > MAX_BYTES) throw invalid();
+        // Move one job at a time. Each set replaces the shrinking legacy array
+        // while adding its new key, so migration needs little extra space.
+        while (legacy.length) {
+          const job = legacy[0];
+          const nextIndex = { schemaVersion: 2, jobs: [...index.jobs, entryFor(job)] };
+          const nextLegacy = legacy.slice(1);
+          await browser.storage.local.set({ [keyFor(job.id)]: job, [INDEX_KEY]: nextIndex,
+            [STORE_KEY]: nextLegacy });
+          index = nextIndex;
+          legacy = nextLegacy;
+        }
+        await browser.storage.local.remove(STORE_KEY).catch(() => undefined);
+        initialized = true;
+      }).finally(() => { initializing = null; });
+      return initializing;
+    }
+
+    async function list(ownerId) {
+      await ensureMigrated();
+      const entries = (await readIndex()).jobs.filter((entry) => entry.ownerId === ownerId);
+      if (!entries.length) return [];
+      const values = await browser.storage.local.get(entries.map((entry) => keyFor(entry.id)));
+      return entries.map((entry) => {
+        const job = values[keyFor(entry.id)];
+        if (!job || job.id !== entry.id || job.ownerId !== ownerId) throw invalid();
+        return job;
+      });
+    }
+
+    async function summaries(ownerId) {
+      await ensureMigrated();
+      return (await readIndex()).jobs.filter((entry) => entry.ownerId === ownerId);
+    }
+
+    async function get(id, ownerId) {
+      await ensureMigrated();
+      if (!(await readIndex()).jobs.some((entry) => entry.id === id && entry.ownerId === ownerId)) return null;
+      const job = (await browser.storage.local.get(keyFor(id)))[keyFor(id)];
+      if (!job || job.id !== id || job.ownerId !== ownerId) throw invalid();
+      return job;
+    }
+
+    async function save(job) {
+      await ensureMigrated();
+      const entry = entryFor(job);
+      return locks.request(STORE_KEY, async () => {
+        const index = await readIndex();
+        const previous = index.jobs.find((item) => item.id === entry.id);
+        if (previous && previous.ownerId !== entry.ownerId) throw invalid();
+        const jobs = previous
+          ? index.jobs.map((item) => item.id === entry.id ? entry : item)
+          : [...index.jobs, entry];
+        if (jobs.length > MAX_JOBS || jobs.reduce((sum, item) => sum + item.bytes, 0) > MAX_BYTES) throw full();
+        await browser.storage.local.set({ [keyFor(entry.id)]: job, [INDEX_KEY]: { schemaVersion: 2, jobs } });
+      });
+    }
+
+    async function remove(id, ownerId) {
+      await ensureMigrated();
+      return locks.request(STORE_KEY, async () => {
+        const index = await readIndex();
+        if (!index.jobs.some((entry) => entry.id === id && entry.ownerId === ownerId)) return;
+        await browser.storage.local.set({ [INDEX_KEY]: {
+          schemaVersion: 2, jobs: index.jobs.filter((entry) => entry.id !== id)
+        } });
+        await browser.storage.local.remove(keyFor(id));
       });
     }
     return {
-      list: async (ownerId) => (await read()).filter((job) => job.ownerId === ownerId),
-      save: (job) => write((jobs) => [...jobs.filter((item) => item.id !== job.id), job]),
-      remove: (id, ownerId) => write((jobs) => jobs.filter((job) => job.id !== id || job.ownerId !== ownerId))
+      list, summaries, get, save, remove
     };
   }
 
@@ -89,6 +197,8 @@
     let requestedAlbumId = null;
     let requestedAlbumName = "";
     let autoStart = false;
+    let renderedJobId = null;
+    let renderedRows = new Map();
     const params = new URL(location.href).searchParams;
 
     function error(message = "") {
@@ -111,13 +221,29 @@
     }
     const selectedConnection = () => connections.find((entry) => entry.id === elements["connection-select"].value);
     function mediaLabel(values) {
-      const records = Array.isArray(values) ? values : [];
-      const videos = records.filter((item) => item.mediaType === "video").length;
-      if (videos === records.length && records.length) return `${records.length} video${records.length === 1 ? "" : "s"}`;
-      if (!videos) return `${records.length} image${records.length === 1 ? "" : "s"}`;
-      return `${records.length} media files`;
+      const total = Array.isArray(values) ? values.length : Number(values && values.total) || 0;
+      const videos = Array.isArray(values) ? values.filter((item) => item.mediaType === "video").length
+        : Number(values && values.videos) || 0;
+      if (videos === total && total) return `${total} video${total === 1 ? "" : "s"}`;
+      if (!videos) return `${total} image${total === 1 ? "" : "s"}`;
+      return `${total} media files`;
     }
-    function render() {
+    function updateResultRow(item, entry) {
+      const asset = item.assetId ? item.duplicate ? "Already in Immich" : "Uploaded to Immich" : {
+        pending: "Waiting to upload", fetching: `Reading ${item.mediaType === "video" ? "video" : "image"}…`, uploading: "Uploading…",
+        failed: "Upload failed", uncertain: "Upload needs confirmation", cancelled: "Cancelled"
+      }[item.uploadStatus];
+      const album = item.assetId && job.albumId ? {
+        pending: "Album step pending", attaching: "Adding to album…", complete: "Added to album", failed: "Album step failed"
+      }[item.albumStatus] : "";
+      const description = `${asset}${album ? ` · ${album}` : ""}${item.errorCode ? ` — ${Uploads.errorMessage(item.errorCode)}` : ""}`;
+      if (entry.title.textContent !== item.filename) entry.title.textContent = item.filename;
+      if (entry.detail.textContent !== description) entry.detail.textContent = description;
+      entry.row.dataset.complete = String(Boolean(item.assetId && ["none", "complete"].includes(item.albumStatus)));
+      entry.row.dataset.error = String(Boolean(item.errorCode));
+    }
+
+    function render(changedItemId = null) {
       elements["account-status"].textContent = account.signedIn ? `Signed in as ${account.email || "your AnyDownload account"}` : "Sign in on the Account page to connect a destination and upload.";
       elements["upload-content"].hidden = !account.signedIn;
       elements["signin-card"].hidden = account.signedIn;
@@ -136,7 +262,6 @@
       elements["retry-button"].disabled = busy || !selectedConnection() || Boolean(job &&
         (job.connectionId !== selectedConnection()?.id || job.serverUrl !== selectedConnection()?.serverUrl));
       elements["cancel-button"].disabled = !busy;
-      const imageCount = selectedMedia.length;
       elements["selection-count"].textContent = mediaLabel(selectedMedia);
       elements["selection-note"].textContent = job
         ? job.status === "complete" ? "All media uploaded. Choose New upload to send more." : "To retry local media after reopening, choose the original files again."
@@ -151,7 +276,9 @@
         elements["progress-summary"].textContent = "No upload started.";
         elements["upload-progress"].max = 1;
         elements["upload-progress"].value = 0;
-        elements["results-list"].replaceChildren();
+        if (renderedJobId !== null) elements["results-list"].replaceChildren();
+        renderedJobId = null;
+        renderedRows = new Map();
         return;
       }
       const complete = job.items.filter((item) => item.assetId && (item.albumStatus === "none" || item.albumStatus === "complete")).length;
@@ -159,31 +286,32 @@
       elements["upload-progress"].max = job.items.length;
       elements["upload-progress"].value = complete;
       elements["progress-summary"].textContent = `${complete} of ${mediaLabel(job.items)} complete${complete < job.items.length ? ` · ${job.items.length - complete} unfinished` : ""}.`;
-      const rows = job.items.map((item) => {
-        const row = document.createElement("li");
-        const title = document.createElement("strong");
-        title.textContent = item.filename;
-        const detail = document.createElement("span");
-        const asset = item.assetId ? item.duplicate ? "Already in Immich" : "Uploaded to Immich" : {
-          pending: "Waiting to upload", fetching: `Reading ${item.mediaType === "video" ? "video" : "image"}…`, uploading: "Uploading…",
-          failed: "Upload failed", uncertain: "Upload needs confirmation", cancelled: "Cancelled"
-        }[item.uploadStatus];
-        const album = item.assetId && job.albumId ? {
-          pending: "Album step pending", attaching: "Adding to album…", complete: "Added to album", failed: "Album step failed"
-        }[item.albumStatus] : "";
-        detail.textContent = `${asset}${album ? ` · ${album}` : ""}${item.errorCode ? ` — ${Uploads.errorMessage(item.errorCode)}` : ""}`;
-        row.dataset.complete = String(Boolean(item.assetId && ["none", "complete"].includes(item.albumStatus)));
-        row.dataset.error = String(Boolean(item.errorCode));
-        row.append(title, detail);
-        return row;
-      });
-      elements["results-list"].replaceChildren(...rows);
+      if (renderedJobId !== job.id || renderedRows.size !== job.items.length) {
+        renderedRows = new Map();
+        const rows = job.items.map((item) => {
+          const row = document.createElement("li");
+          const title = document.createElement("strong");
+          const detail = document.createElement("span");
+          row.append(title, detail);
+          const entry = { row, title, detail };
+          renderedRows.set(item.id, entry);
+          updateResultRow(item, entry);
+          return row;
+        });
+        elements["results-list"].replaceChildren(...rows);
+        renderedJobId = job.id;
+      } else if (changedItemId && renderedRows.has(changedItemId)) {
+        const item = job.items.find((candidate) => candidate.id === changedItemId);
+        if (item) updateResultRow(item, renderedRows.get(changedItemId));
+      } else {
+        for (const item of job.items) updateResultRow(item, renderedRows.get(item.id));
+      }
     }
 
     async function history() {
       const ownerId = account.ownerId;
       const currentEpoch = epoch;
-      const savedJobs = await store.list(ownerId);
+      const savedJobs = await store.summaries(ownerId);
       if (!account.signedIn || account.ownerId !== ownerId || epoch !== currentEpoch) return;
       const rows = savedJobs.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).map((saved) => {
         const row = document.createElement("li");
@@ -191,7 +319,7 @@
         link.href = `upload.html?job=${encodeURIComponent(saved.id)}`;
         link.addEventListener("click", (event) => preserveTransfer(event, link));
         const title = document.createElement("strong");
-        title.textContent = `${mediaLabel(saved.items)} to Immich`;
+        title.textContent = `${mediaLabel(saved)} to Immich`;
         const date = document.createElement("span");
         date.textContent = new Date(saved.createdAt).toLocaleString();
         link.append(title, date);
@@ -328,7 +456,7 @@
           if (!ID.test(jobId)) throw new Error("Invalid saved upload.");
           await locks.request(`upload:${jobId}`, { ifAvailable: true }, async (lock) => {
             if (!lock) throw new Error("This upload is active in another tab. Use that tab to control it.");
-            const saved = (await store.list(ownerId)).find((entry) => entry.id === jobId);
+            const saved = await store.get(jobId, ownerId);
             if (!current()) return;
             if (!saved) throw new Error("This upload is unavailable for the signed-in account.");
             const restored = Uploads.recoverJob(saved);
@@ -362,7 +490,8 @@
         if (!file) { const missing = new Error("Reselect the original local media file."); missing.code = "file_required"; throw missing; }
         return file;
       }
-      return imageFetch.fetchMediaBytes(item.url, item.mediaType, signal, {
+      const fetchMedia = imageFetch.fetchMediaBlob || imageFetch.fetchMediaBytes;
+      return fetchMedia(item.url, item.mediaType, signal, {
         permissionContains: (pattern) => browser.permissions.contains({ origins: [pattern] })
       });
     }
@@ -402,7 +531,7 @@
         await locks.request(`upload:${activeJob.id}`, { ifAvailable: true }, async (lock) => {
           if (!lock) throw new Error("This upload is active in another tab. Use that tab to control it.");
           // Reload inside the lock so two tabs cannot retry a stale asset upload.
-          job = Uploads.recoverJob((await store.list(account.ownerId)).find((entry) => entry.id === activeJob.id));
+          job = Uploads.recoverJob(await store.get(activeJob.id, account.ownerId));
           // A failed checkpoint can leave a confirmed asset only in this tab's memory.
           // Save that identity before retrying; never throw it away and upload again.
           const retained = Uploads.recoverJob(activeJob);
@@ -430,9 +559,9 @@
             render();
             elements["progress-panel"].scrollIntoView({ block: "start" });
             await Uploads.run(runningJob, { credential, signal: combined, provider, fetchImage,
-              onChange: async (changed) => {
-                await store.save(changed);
-                if (epoch === currentEpoch) { job = changed; render(); }
+              onChange: async (changed, changedItem, durable) => {
+                if (durable !== false) await store.save(changed);
+                if (epoch === currentEpoch) { job = changed; render(changedItem?.id); }
               }
             });
           });
@@ -500,7 +629,7 @@
     return { store, begin, refresh, get job() { return job; } };
   }
 
-  const api = { initialize, createStore, validateRequest, STORE_KEY };
+  const api = { initialize, createStore, validateRequest, STORE_KEY, INDEX_KEY, JOB_KEY_PREFIX };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.AnyDownloadUploadPage = api;
   if (root.document && root.browser) root.document.addEventListener("DOMContentLoaded", () => {
