@@ -447,8 +447,11 @@ async function run() {
       title: "",
       owner: "alice"
     }]);
-    assert.equal(requests.length, 1);
-    assert.match(requests[0], /\/api\/v1\/users\/web_profile_info\//);
+    assert.deepEqual(requests.map((url) => new URL(url).pathname), [
+      "/api/v1/users/web_profile_info/",
+      `/api/v1/media/${instagramMediaIdFromShortcode("VISIBLE1")}/info/`,
+      "/p/VISIBLE1/"
+    ]);
     assert.ok(!result.warnings.some((warning) => /related Instagram page/i.test(warning)));
   }
 
@@ -497,6 +500,153 @@ async function run() {
       `instagram:post:alice:${shortcode}:1`,
       `instagram:post:alice:${shortcode}:2`
     ]);
+  }
+
+  // A loaded profile can mix many carousels with standalone photos and a reel.
+  // Resolving a carousel must not suppress exact lookups for the other posts,
+  // including a photo whose lazy grid thumbnail has not loaded yet.
+  {
+    const posts = Array.from({ length: 21 }, (_, index) => ({
+      code: `MIXED${String(index + 1).padStart(3, "0")}`,
+      user: { username: "alice" },
+      ...(index < 18 ? {
+        media_type: 8,
+        carousel_media_count: 2,
+        carousel_media: [1, 2].map((slide) => imageNode(
+          `mixed-${index}-${slide}`, `https://scontent.cdninstagram.com/mixed-${index}-${slide}.jpg`
+        ))
+      } : index === 20 ? {
+        media_type: 2,
+        ...videoNode("mixed-reel", "https://scontent.cdninstagram.com/mixed-reel.mp4",
+          "https://scontent.cdninstagram.com/mixed-reel.jpg")
+      } : {
+        media_type: 1,
+        ...imageNode(`mixed-${index}`, `https://scontent.cdninstagram.com/mixed-${index}.jpg`)
+      })
+    }));
+    const requests = [];
+    const result = await scan("https://www.instagram.com/alice/", {
+      scripts: [script({ data: { user: { pk: "42", username: "alice" } } })],
+      elements: posts.map((post, index) => fakeDomElement("a", {
+        attributes: { href: `/alice/${index === 20 ? "reel" : "p"}/${post.code}/` },
+        children: [
+          fakeDomElement("img", {
+            attributes: index === 19 ? {} : {
+              src: `https://scontent.cdninstagram.com/mixed-cover-${index}.jpg`
+            },
+            width: 480, height: 600
+          }),
+          ...(index < 18 ? [fakeDomElement("svg", {
+            attributes: { "aria-label": "Carousel" }
+          })] : [])
+        ]
+      }))
+    }, {}, async (url) => {
+      requests.push(url);
+      const pathname = new URL(url).pathname;
+      const post = posts.find((candidate) =>
+        pathname === `/api/v1/media/${instagramMediaIdFromShortcode(candidate.code)}/info/`
+      );
+      return jsonResponse(url, post ? { items: [post] } : {}, { ok: Boolean(post) });
+    });
+    assert.deepEqual([...new Set(result.images.map((item) => item.instagramCollections[0].id))],
+      posts.map((post) => post.code));
+    assert.equal(result.images.length, 39);
+    assert.equal(result.images.at(-1).url, "https://scontent.cdninstagram.com/mixed-reel.mp4");
+    assert.equal(result.images.at(-1).mediaType, "video");
+    assert.ok(result.images.every((item) => !item.url.includes("mixed-cover")));
+    assert.equal(requests.length, 22, "All 21 posts fit within the existing 32-document budget");
+  }
+
+  // Exhausted network work must still retain every usable, unresolved grid
+  // photo. A duplicate unloaded anchor must not hide its later loaded copy,
+  // and covers must not overwrite resolved slides or add other owners' posts.
+  {
+    const cover = (href, name) => fakeDomElement("a", {
+      attributes: { href },
+      children: name ? [fakeDomElement("img", {
+        attributes: { src: `https://scontent.cdninstagram.com/${name}.jpg` },
+        width: 1440, height: 1800
+      })] : []
+    });
+    let requests = 0;
+    const result = await scan("https://www.instagram.com/alice/", {
+      scripts: [script({ data: { user: {
+        pk: "42", username: "alice",
+        edge_owner_to_timeline_media: { edges: [{ node: {
+          code: "RESOLVED1", user: { username: "alice" },
+          carousel_media: [
+            imageNode("resolved-1", "https://scontent.cdninstagram.com/resolved-1.jpg"),
+            imageNode("resolved-2", "https://scontent.cdninstagram.com/resolved-2.jpg")
+          ]
+        } }] }
+      } } })],
+      elements: [
+        cover("/alice/p/RESOLVED1/", "incorrect-cover"),
+        cover("/alice/p/RECOVER1/"),
+        cover("/alice/p/RECOVER1/", "recovered-1"),
+        cover("/p/RECOVER2/", "recovered-2"),
+        cover("/bob/p/OTHER123/", "other-owner"),
+        cover("https://instagram.com.evil.test/p/EVIL123/", "other-host"),
+        cover("/stories/highlights/123/", "highlight-cover"),
+        cover("/alice/reel/REEL999/", "reel-poster")
+      ]
+    }, { maxDocuments: 1 }, async (url) => {
+      requests += 1;
+      return jsonResponse(url, {}, { ok: false });
+    });
+    assert.equal(requests, 1);
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://scontent.cdninstagram.com/resolved-1.jpg",
+      "https://scontent.cdninstagram.com/resolved-2.jpg",
+      "https://scontent.cdninstagram.com/recovered-1.jpg",
+      "https://scontent.cdninstagram.com/recovered-2.jpg"
+    ]);
+    assert.ok(result.warnings.some((warning) => /bounded document/i.test(warning)));
+  }
+
+  // Missing standalone photos and reels can also be resolved from their exact
+  // HTML when the media-info API is rejected. Only the matching owned post is
+  // accepted, and a resolved video must not be overwritten by its grid poster.
+  {
+    const posts = [
+      { code: "HTMLPHOTO", media_type: 1, user: { username: "alice" },
+        ...imageNode("html-photo", "https://scontent.cdninstagram.com/html-photo.jpg") },
+      { code: "HTMLREEL1", media_type: 2, user: { username: "alice" },
+        ...videoNode("html-reel", "https://scontent.cdninstagram.com/html-reel.mp4",
+          "https://scontent.cdninstagram.com/html-reel.jpg") }
+    ];
+    const requests = [];
+    const result = await scan("https://www.instagram.com/alice/", {
+      scripts: [script({ data: { user: { pk: "42", username: "alice" } } })],
+      elements: posts.map((post) => fakeDomElement("a", {
+        attributes: { href: `/alice/${post.media_type === 2 ? "reel" : "p"}/${post.code}/` },
+        children: [fakeDomElement("img", {
+          attributes: { src: `https://scontent.cdninstagram.com/${post.code}-cover.jpg` },
+          width: 1440, height: 1800
+        })]
+      }))
+    }, {}, async (url) => {
+      const pathname = new URL(url).pathname;
+      requests.push(pathname);
+      const post = posts.find((item) =>
+        pathname === `/${item.media_type === 2 ? "reel" : "p"}/${item.code}/`
+      );
+      if (!post) return jsonResponse(url, {}, { ok: false });
+      return response(url, htmlDocument({ scripts: [{ value: {
+        unrelated: { ...post, code: "UNRELATED", user: { username: "bob" } },
+        wrongOwner: { ...post, user: { username: "bob" } },
+        data: { xig_polaris_media: { if_not_gated_logged_out: post } }
+      } }] }));
+    });
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://scontent.cdninstagram.com/html-photo.jpg",
+      "https://scontent.cdninstagram.com/html-reel.mp4"
+    ]);
+    assert.deepEqual(result.images.map((item) => item.mediaType), ["image", "video"]);
+    assert.equal(requests.length, 5);
+    assert.ok(requests.includes("/p/HTMLPHOTO/"));
+    assert.ok(requests.includes("/reel/HTMLREEL1/"));
   }
 
   // Independent visible-grid carousel lookups run with bounded concurrency,

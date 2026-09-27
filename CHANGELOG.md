@@ -4,6 +4,12 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.21.7] - 2026-09-27
+
+### Fixed
+
+- Capture standalone Instagram profile photos and reels alongside carousels, including posts whose grid thumbnails have not loaded. Keep unresolved visible photos when individual post requests fail or reach the collection limit.
+
 ## [1.21.6] - 2026-09-23
 
 ### Changed

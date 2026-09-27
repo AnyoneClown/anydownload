@@ -2665,40 +2665,55 @@
       return profileAnchorCache;
     }
 
+    function profileGridPostRoute(anchor) {
+      let href = "";
+      try {
+        href = instagramHttpUrl(anchor.getAttribute("href") || anchor.href, route.pageUrl);
+      } catch (_error) {
+        return null;
+      }
+      const postRoute = parseRoute(href);
+      return ["post", "reel"].includes(postRoute.kind) && postRoute.shortcode &&
+        (!postRoute.username || postRoute.username === route.username) ? postRoute : null;
+    }
+
+    function collectedProfilePostIds() {
+      const ids = new Set();
+      for (const record of found.values()) {
+        for (const collection of record.instagramCollections) {
+          if (collection.type === "post" && collection.owner === route.username) {
+            ids.add(collection.id);
+          }
+        }
+      }
+      return ids;
+    }
+
     function processProfileGridDom() {
       // Instagram can render a profile grid without exposing its feed data to
       // page-context API requests. Restrict this fallback to direct media in
       // canonical post/reel links, excluding avatars, highlight covers, and
-      // navigation images. It intentionally collects only visible grid items;
-      // the profile-feed API remains responsible for pagination and carousel
-      // expansion when the current session permits it.
-      if (route.kind !== "profile" || !settings.includeProfilePosts || found.size) {
+      // navigation images. Fill gaps per post even when other lookups succeeded,
+      // without replacing resolved media with a cropped cover or a reel poster.
+      if (route.kind !== "profile" || !settings.includeProfilePosts) {
         return;
       }
-      const visitedPosts = new Set();
+      const visitedPosts = collectedProfilePostIds();
       for (const anchor of profileAnchors()) {
         if (itemLimitReached || payloadLimitReached) {
           break;
         }
-        let href = "";
-        try {
-          href = instagramHttpUrl(
-            anchor.getAttribute("href") || anchor.href,
-            route.pageUrl
-          );
-        } catch (_error) {
-          href = "";
-        }
-        const postRoute = parseRoute(href);
-        if (!href || !["post", "reel"].includes(postRoute.kind) || !postRoute.shortcode ||
-          visitedPosts.has(postRoute.shortcode)) {
+        const postRoute = profileGridPostRoute(anchor);
+        if (!postRoute || visitedPosts.has(postRoute.shortcode)) {
           continue;
         }
-        visitedPosts.add(postRoute.shortcode);
-        const records = domMediaIn(anchor);
+        const records = domMediaIn(anchor).filter((item) =>
+          postRoute.kind !== "reel" || item.mediaType === "video"
+        );
         if (!records.length) {
           continue;
         }
+        visitedPosts.add(postRoute.shortcode);
         const membership = safeCollectionMembership({
           type: "post",
           id: postRoute.shortcode,
@@ -2723,11 +2738,12 @@
       }
     }
 
-    async function collectProfileGridCarousels() {
+    async function collectProfileGridPosts() {
       if (route.kind !== "profile" || !settings.includeProfilePosts) {
         return;
       }
       const visitedPosts = new Set();
+      const collectedPosts = collectedProfilePostIds();
       const requests = [];
       function hasCompleteCarousel(shortcode, count) {
         if (!count) {
@@ -2740,7 +2756,7 @@
           `identity:${mediaIdentityForCollection({}, membership, index + 1)}`
         )).every(Boolean);
       }
-      function queueCarousel(shortcode, count, structured) {
+      function queuePost(shortcode, count, structured, kind = "post") {
         const mediaId = mediaIdFromShortcode(shortcode);
         if (!mediaId || visitedPosts.has(shortcode) || hasCompleteCarousel(shortcode, count)) {
           return;
@@ -2748,12 +2764,17 @@
         visitedPosts.add(shortcode);
         requests.push({ shortcode, mediaId, count, structured,
           endpoint: new URL(`/api/v1/media/${encodeURIComponent(mediaId)}/info/`, route.pageUrl).href,
-          postUrl: new URL(`/p/${encodeURIComponent(shortcode)}/`, route.pageUrl).href });
+          postUrl: new URL(`/${kind === "reel" ? "reel" : "p"}/${encodeURIComponent(shortcode)}/`,
+            route.pageUrl).href });
       }
       for (const [shortcode, count] of profileCarousels) {
-        queueCarousel(shortcode, count, true);
+        queuePost(shortcode, count, true);
       }
       for (const anchor of profileAnchors()) {
+        const postRoute = profileGridPostRoute(anchor);
+        if (!postRoute) {
+          continue;
+        }
         let carousel = false;
         try {
           carousel = Array.from(anchor.querySelectorAll("[aria-label], title")).some((marker) =>
@@ -2765,24 +2786,14 @@
         } catch (_error) {
           carousel = false;
         }
-        let href = "";
-        try {
-          href = instagramHttpUrl(
-            anchor.getAttribute("href") || anchor.href,
-            route.pageUrl
-          );
-        } catch (_error) {
-          href = "";
-        }
-        const postRoute = parseRoute(href);
         const shortcode = postRoute.shortcode;
-        if (!carousel) {
+        if (!carousel && collectedPosts.has(shortcode)) {
           continue;
         }
-        queueCarousel(shortcode, profileCarousels.get(shortcode) || 0, false);
+        queuePost(shortcode, profileCarousels.get(shortcode) || 0, false, postRoute.kind);
       }
 
-      function exactCarouselFromHtml(html, request) {
+      function exactPostFromHtml(html, request) {
         let best = null;
         let inspected = 0;
         const seen = new WeakSet();
@@ -2798,7 +2809,8 @@
             (objectIdentifier(value) === request.shortcode || objectId(value) === request.mediaId) &&
             ownerFromObject(value) === route.username) {
             const children = childMedia(value);
-            if (children.length && (!best || children.length > childMedia(best).length)) {
+            if ((children.length || hasMediaShape(value) || imageVariants(value, request.postUrl).length) &&
+              (!best || children.length > childMedia(best).length)) {
               best = value;
             }
           }
@@ -2817,7 +2829,7 @@
         }
         return best;
       }
-      async function fetchExactCarousel(request) {
+      async function fetchExactPost(request) {
         if (fetchedDocumentCount >= settings.maxDocuments || visitedDocuments.has(request.postUrl)) {
           documentLimitReached = true;
           return null;
@@ -2830,17 +2842,17 @@
           finalRoute.shortcode !== request.shortcode) {
           return null;
         }
-        const item = exactCarouselFromHtml(fetched.text, request);
+        const item = exactPostFromHtml(fetched.text, request);
         return item ? { item, url: fetched.url } : null;
       }
-      async function fetchCarousel(request) {
+      async function fetchPost(request) {
         let exact = null;
         if (request.structured) {
-          exact = await fetchExactCarousel(request);
+          exact = await fetchExactPost(request);
           if (exact && exactContainerIsComplete(exact.item)) return exact;
         }
         const fetched = await fetchInstagramJson(
-          request.endpoint, "profile-carousel", false, EXACT_FETCH_TIMEOUT_MS
+          request.endpoint, "profile-post", false, EXACT_FETCH_TIMEOUT_MS
         );
         const item = fetched && feedPageFrom(fetched.value).items.find((candidate) =>
           objectIdentifier(candidate) === request.shortcode ||
@@ -2850,7 +2862,7 @@
           exact = { item, url: fetched.url };
         }
         if (!request.structured && (!exact || !exactContainerIsComplete(exact.item))) {
-          const html = await fetchExactCarousel(request);
+          const html = await fetchExactPost(request);
           if (html && (!exact || childMedia(html.item).length > childMedia(exact.item).length)) {
             exact = html;
           }
@@ -2862,14 +2874,14 @@
       if (boundedRequests.length < requests.length) {
         documentLimitReached = true;
       }
-      const fetchedCarousels = await mapWithConcurrency(
+      const fetchedPosts = await mapWithConcurrency(
         boundedRequests,
-        fetchCarousel,
+        fetchPost,
         MAX_FETCH_CONCURRENCY
       );
       for (let index = 0; index < boundedRequests.length; index += 1) {
         const request = boundedRequests[index];
-        const fetched = fetchedCarousels[index];
+        const fetched = fetchedPosts[index];
         if (fetched) {
           addProfilePost(fetched.item, fetched.url, route.username);
         }
@@ -3102,7 +3114,7 @@
       processRuntimeData();
       const pk = await discoverProfilePk();
       await collectProfileFeed(pk);
-      await collectProfileGridCarousels();
+      await collectProfileGridPosts();
       processProfileGridDom();
       orderProfileCarouselRecords();
       if (settings.includeStories || settings.includeHighlights) {
