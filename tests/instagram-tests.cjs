@@ -232,11 +232,13 @@ function fakeDocument({
   anchors = [],
   metas = [],
   elements = [],
-  title = "Instagram fixture"
+  title = "Instagram fixture",
+  cookie = ""
 } = {}) {
   const documentRoot = fakeDomElement("html", { children: elements });
   return {
     title,
+    cookie,
     documentElement: documentRoot,
     body: documentRoot,
     querySelectorAll(selector) {
@@ -345,6 +347,9 @@ async function withPage(url, page, callback, fetchImpl) {
 async function scan(url, page, options = {}, fetchImpl) {
   return withPage(url, page, () => collectFromPage({
     includeRelated: false,
+    // Post-specific fixtures disable the independent reels traversal;
+    // account-wide fixtures below exercise both feeds.
+    includeProfileReels: false,
     maxItems: 1500,
     maxDocuments: 32,
     maxDocumentBytes: 4000000,
@@ -395,6 +400,138 @@ function videoNode(id, url, poster, width = 1080, height = 1920) {
 }
 
 async function run() {
+  // The account feed is independent of DOM visibility. Follow both timeline
+  // and reels cursors, retain every carousel slot, and merge reels shared by
+  // both feeds. The legacy endpoint can redirect to a non-JSON homepage.
+  {
+    const user = { pk: "42", username: "alice" };
+    const photo = (code) => ({ code, user, media_type: 1,
+      ...imageNode(code, `https://scontent.cdninstagram.com/${code}.jpg`) });
+    const reel = (code) => ({ code, user, media_type: 2,
+      ...videoNode(code, `https://scontent.cdninstagram.com/${code}.mp4`,
+        `https://scontent.cdninstagram.com/${code}.jpg`) });
+    const sharedReel = reel("SHAREDREEL");
+    const requests = [];
+    const result = await scan("https://www.instagram.com/alice/", {
+      cookie: "csrftoken=fixture-token; sessionid=do-not-copy",
+      scripts: [script({ data: { user } })]
+    }, { includeProfileReels: true }, async (url, init) => {
+      requests.push({ url, init });
+      if (new URL(url).pathname === "/api/v1/feed/user/42/") {
+        return response("https://www.instagram.com/", "<html>Home</html>");
+      }
+      if (new URL(url).pathname === `/api/v1/media/${instagramMediaIdFromShortcode("REELONLY2")}/info/`) {
+        return jsonResponse(url, { items: [reel("REELONLY2")] });
+      }
+      assert.equal(new URL(url).pathname, "/graphql/query/");
+      assert.equal(init.method, "POST");
+      assert.equal(init.credentials, "include");
+      assert.equal(init.redirect, "error");
+      assert.equal(init.headers["X-CSRFToken"], "fixture-token");
+      const form = new URLSearchParams(init.body);
+      const variables = JSON.parse(form.get("variables"));
+      let key, nodes, next;
+      if (variables.username === "alice") {
+        assert.equal(form.get("doc_id"), "7898261790222653");
+        key = "xdt_api__v1__feed__user_timeline_graphql_connection";
+        if (!variables.after) {
+          nodes = [{ code: "OFFSCREEN1", user, media_type: 8, carousel_media_count: 3,
+            carousel_media: [photo("slide1"), reel("slide2"), photo("slide3")] }, photo("SINGLE1")];
+          next = "POSTS-NEXT";
+        } else {
+          assert.equal(variables.after, "POSTS-NEXT");
+          nodes = [photo("OLDER1"), sharedReel];
+        }
+      } else {
+        assert.equal(form.get("doc_id"), "7845543455542541");
+        assert.equal(variables.data.target_user_id, "42");
+        key = "xdt_api__v1__clips__user__connection_v2";
+        if (!variables.after) {
+          nodes = [sharedReel, reel("REELONLY1")].map((media) => ({ media }));
+          next = "REELS-NEXT";
+        } else {
+          assert.equal(variables.after, "REELS-NEXT");
+          nodes = [{ media: { ...reel("REELONLY2"), user: { pk: "42" } } },
+            { media: { ...reel("OTHERUSER"), user: { username: "bob" } } }];
+        }
+      }
+      return jsonResponse(url, { data: { [key]: {
+        edges: nodes.map((node) => ({ node })),
+        page_info: { has_next_page: Boolean(next), end_cursor: next || null }
+      } } });
+    });
+    assert.deepEqual(result.images.map((item) => item.instagramCollections[0].id), [
+      "OFFSCREEN1", "OFFSCREEN1", "OFFSCREEN1", "SINGLE1", "OLDER1", "SHAREDREEL", "REELONLY1", "REELONLY2"
+    ]);
+    assert.deepEqual(result.images.slice(0, 3).map((item) => item.mediaType), ["image", "video", "image"]);
+    assert.deepEqual(result.profileCollection, { username: "alice", posts: 6, complete: true });
+    assert.equal(requests.length, 6, "Only an ownerless reel needs an exact ownership lookup");
+    assert.deepEqual(result.warnings, []);
+    assert.ok(!JSON.stringify(result).includes("fixture-token"));
+    assert.ok(!JSON.stringify(requests).includes("do-not-copy"));
+  }
+
+  // A nominally complete carousel can contain a placeholder with no source.
+  // Resolve its exact post even offscreen and prefer a complete HTML payload
+  // over an API payload with the same number of children but a missing photo.
+  for (const resolves of [true, false]) {
+    const complete = { code: "PARTIALS1", media_type: 8, user: { username: "alice" },
+      carousel_media_count: 3, carousel_media: [1, 2, 3].map((index) => ({
+        media_type: 1, ...imageNode(`part-${index}`, `https://scontent.cdninstagram.com/part-${index}.jpg`)
+      })) };
+    const partial = { ...complete, carousel_media: [complete.carousel_media[0],
+      { id: "part-2", media_type: 1 }, complete.carousel_media[2]] };
+    const requests = [];
+    const result = await scan("https://www.instagram.com/alice/", {
+      scripts: [script({ data: { user: { pk: "42", username: "alice" } } })]
+    }, {}, async (url) => {
+      const pathname = new URL(url).pathname;
+      requests.push(pathname);
+      if (pathname === "/api/v1/feed/user/42/") {
+        return jsonResponse(url, { items: [partial], more_available: false });
+      }
+      if (pathname.startsWith("/api/v1/media/")) return jsonResponse(url, { items: [partial] });
+      assert.equal(pathname, "/p/PARTIALS1/");
+      if (!resolves) return response(url, "", { ok: false });
+      return response(url, htmlDocument({ scripts: [{ value: {
+        partial: { shortcode_media: partial }, full: { shortcode_media: complete }
+      } }] }));
+    });
+    assert.equal(requests.length, 3);
+    assert.deepEqual(result.images.map((item) => item.url), (resolves ? [1, 2, 3] : [1, 3]).map((index) =>
+      `https://scontent.cdninstagram.com/part-${index}.jpg`));
+    assert.equal(result.profileCollection.complete, resolves);
+    if (resolves) assert.deepEqual(result.warnings, []);
+    else assert.ok(result.warnings.some((warning) => /could not resolve every slide/.test(warning)));
+  }
+
+  // Missing older pages, repeated cursors, and response errors must never
+  // look like a complete account scan. Keep the collected files and stop.
+  for (const failure of ["repeated-cursor", "request-failed", "document-limit", "graphql-error"]) {
+    let requests = 0;
+    let graphRequests = 0;
+    const result = await scan("https://www.instagram.com/alice/", {
+      scripts: [script({ data: { user: { pk: "42", username: "alice" } } })]
+    }, { maxDocuments: failure === "document-limit" ? 2 : 32 }, async (url, init) => {
+      requests += 1;
+      if (init.method !== "POST") return jsonResponse(url, {}, { ok: false });
+      graphRequests += 1;
+      if (failure === "request-failed" && graphRequests === 2) return jsonResponse(url, {}, { ok: false });
+      return jsonResponse(url, {
+        ...(failure === "graphql-error" ? { errors: [{ message: "temporarily unavailable" }] } : {}),
+        data: { xdt_api__v1__feed__user_timeline_graphql_connection: {
+          edges: [{ node: { code: "KEPT123", user: { username: "alice" }, media_type: 1,
+            ...imageNode("kept", "https://scontent.cdninstagram.com/kept.jpg") } }],
+          page_info: { has_next_page: true, end_cursor: "REPEATED" }
+        } }
+      });
+    });
+    assert.equal(result.images.length, 1, failure);
+    assert.equal(result.profileCollection.complete, false, failure);
+    assert.ok(result.warnings.some((warning) => /full post history could not be read/.test(warning)), failure);
+    assert.ok(requests <= (failure === "document-limit" ? 2 : 3), failure);
+  }
+
   // Unsupported Instagram pages fall back to the generic DOM collector, while
   // profile routes are owned by the Instagram adapter even when the feed is empty.
   {
@@ -449,6 +586,7 @@ async function run() {
     }]);
     assert.deepEqual(requests.map((url) => new URL(url).pathname), [
       "/api/v1/users/web_profile_info/",
+      "/graphql/query/",
       `/api/v1/media/${instagramMediaIdFromShortcode("VISIBLE1")}/info/`,
       "/p/VISIBLE1/"
     ]);
@@ -495,7 +633,7 @@ async function run() {
       "https://scontent.cdninstagram.com/grid-cover.jpg",
       "https://scontent.cdninstagram.com/grid-second.jpg"
     ]);
-    assert.equal(requests.length, 2);
+    assert.equal(requests.length, 3);
     assert.deepEqual(result.images.map((item) => item.identityKey), [
       `instagram:post:alice:${shortcode}:1`,
       `instagram:post:alice:${shortcode}:2`
@@ -555,7 +693,7 @@ async function run() {
     assert.equal(result.images.at(-1).url, "https://scontent.cdninstagram.com/mixed-reel.mp4");
     assert.equal(result.images.at(-1).mediaType, "video");
     assert.ok(result.images.every((item) => !item.url.includes("mixed-cover")));
-    assert.equal(requests.length, 22, "All 21 posts fit within the existing 32-document budget");
+    assert.equal(requests.length, 23, "All 21 posts fit within the existing 32-document budget");
   }
 
   // Exhausted network work must still retain every usable, unresolved grid
@@ -644,7 +782,7 @@ async function run() {
       "https://scontent.cdninstagram.com/html-reel.mp4"
     ]);
     assert.deepEqual(result.images.map((item) => item.mediaType), ["image", "video"]);
-    assert.equal(requests.length, 5);
+    assert.equal(requests.length, 6);
     assert.ok(requests.includes("/p/HTMLPHOTO/"));
     assert.ok(requests.includes("/reel/HTMLREEL1/"));
   }
@@ -822,7 +960,9 @@ async function run() {
     ]);
     assert.equal(result.images[6].mediaType, "video");
     assert.deepEqual(requests.map((url) => new URL(url).pathname), [
-      "/api/v1/feed/user/42/", "/p/RELAY2/"
+      "/api/v1/feed/user/42/",
+      `/api/v1/media/${instagramMediaIdFromShortcode("RELAY2")}/info/`,
+      "/p/RELAY2/"
     ]);
     assert.ok(!result.warnings.some((warning) => /could not resolve every slide/i.test(warning)));
   }

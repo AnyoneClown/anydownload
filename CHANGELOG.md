@@ -4,6 +4,14 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.21.8] - 2026-09-27
+
+### Fixed
+
+- Follow Instagram's account timeline and reels pagination so profile scans include posts and reels that have not been loaded or scrolled into view.
+- Verify every carousel slide has a downloadable source, resolve incomplete posts, and report incomplete account scans instead of declaring success.
+- Keep partial-scan warnings visible during automatic updates.
+
 ## [1.21.7] - 2026-09-27
 
 ### Fixed

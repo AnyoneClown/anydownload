@@ -4001,6 +4001,7 @@
       let usedFrameFallback = false;
       let instagramWarning = "";
       let instagramCollectionSucceeded = false;
+      let instagramProfileCollection = null;
       let preservedInstagramFallback = false;
       let fapFolderWarning = "";
       let fapFolderCollectionSucceeded = false;
@@ -4023,6 +4024,8 @@
       if (instagramPage) {
         if (settings.instagramCollections) {
           elements["page-label"].textContent = "Collecting Instagram stories and highlights…";
+        } else if (Instagram.canCollectRelated(tab.url)) {
+          elements["page-label"].textContent = "Collecting all profile posts, carousel slides, and reels…";
         }
         try {
           const instagramResults = await browser.scripting.executeScript({
@@ -4045,6 +4048,7 @@
           if (instagramResult && instagramResult.handled && Array.isArray(instagramResult.images)) {
             injectionResults = instagramResults;
             instagramCollectionSucceeded = Boolean(settings.instagramCollections);
+            instagramProfileCollection = instagramResult.profileCollection;
           } else if (settings.instagramCollections) {
             const detail = firstInstagramResult && firstInstagramResult.error
               ? ` (${firstInstagramResult.error})`
@@ -4338,7 +4342,11 @@
       const addedCount = preserveThisPage
         ? merged.images.filter((image) => !previousByIdentity.has(mediaIdentityKey(image))).length
         : 0;
-      if (settings.live && addedCount) {
+      if (merged.warnings.length) {
+        setNotice(merged.warnings.join(" "));
+      } else if (instagramProfileCollection && instagramProfileCollection.complete) {
+        setNotice("Collected the account’s full post and reels history, including carousel slides.", "success");
+      } else if (settings.live && addedCount) {
         setNotice(
           `Automatic live updates added ${addedCount.toLocaleString()} new media item${addedCount === 1 ? "" : "s"}. Keep scrolling to load more.`,
           "success"
@@ -4358,8 +4366,6 @@
           `Found ${merged.images.length.toLocaleString()} complete YouTube video file${merged.images.length === 1 ? "" : "s"} with audio.`,
           "success"
         );
-      } else if (merged.warnings.length) {
-        setNotice(merged.warnings.join(" "));
       } else if (!merged.images.length) {
         setNotice("No downloadable media is currently exposed on this page. Automatic live updates will keep watching for it.");
       }
