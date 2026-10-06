@@ -4,6 +4,12 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.21.10] - 2026-10-06
+
+### Fixed
+
+- Remove the Fapello **Scan all pages** button and allow ordinary page scans, live updates, same-site navigation, and saved collections to retain up to 5,000 media files on any website. Keep download batches capped at 1,500 and preserve existing byte limits and private-session separation.
+
 ## [1.21.9] - 2026-10-06
 
 ### Fixed

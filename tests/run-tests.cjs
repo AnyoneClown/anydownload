@@ -64,7 +64,7 @@ const trackingJs = fs.readFileSync(path.join(root, "tracking/tracking.js"), "utf
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.name, "AnyDownload — Page Media Downloader");
-assert.equal(manifest.version, "1.21.9");
+assert.equal(manifest.version, "1.21.10");
 assert.equal(manifest.action.default_title, "Download page media");
 assert.equal(Core.MAX_BATCH_TOTAL_URL_LENGTH, 2000000);
 assert.deepEqual(manifest.permissions.sort(), ["activeTab", "alarms", "downloads", "menus", "notifications", "scripting", "storage"]);
@@ -291,7 +291,7 @@ const popupFilters = popupHtml.slice(popupHtml.indexOf('<div id="smart-filter-pa
 for (const controlId of ["media-type-filter-select", "backgrounds-input", "clear-gallery-button"]) {
   assert.match(popupFilters, new RegExp(`id="${controlId}"`), `${controlId} must live in Filters`);
 }
-assert.doesNotMatch(popupHtml, /collect-gallery-button|scan-help|>Find more media</);
+assert.doesNotMatch(popupHtml, /collect-gallery-button|fapello-pages-button|scan-help|>Find more media<|>Scan all pages</);
 assert.match(popupHtml, /class="gallery-toolbar"[\s\S]*?id="refresh-media-button"[\s\S]*?id="stop-gallery-button"[\s\S]*?id="tracker-button"/);
 assert.doesNotMatch(popupHtml, /Collection settings|Saved website|>This page<|>Collect gallery</);
 assert.match(popupHtml, /id="media-type-filter-select"/);

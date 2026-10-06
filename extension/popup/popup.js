@@ -539,7 +539,7 @@
   }
 
   function accumulateLiveImages(previousImages, scannedImages, options) {
-    const settings = Object.assign({ maxImages: 1500, maxPayloadLength: 2000000 }, options || {});
+    const settings = Object.assign({ maxImages: 5000, maxPayloadLength: 2000000 }, options || {});
     const byIdentity = new Map();
     for (const image of [...(previousImages || []), ...(scannedImages || [])]) {
       if (image && typeof image.url === "string" && image.url) {
@@ -683,7 +683,7 @@
   const Tracker = globalThis.AnyDownloadTracker;
   const Immich = globalThis.ImageDownloaderImmich;
   const Integrations = globalThis.AnyDownloadIntegrations;
-  const MAX_DISCOVERED_IMAGES = Core.MAX_BATCH_SIZE;
+  const MAX_DISCOVERED_IMAGES = Gallery.MAX_ITEMS;
   const MAX_SCANNED_ELEMENTS = 10000;
   const MAX_RENDERED_ROWS = 350;
   const MAX_DIMENSION_PROBE_CONCURRENCY = 3;
@@ -880,7 +880,6 @@
       "clear-ignored-button",
       "clear-gallery-button",
       "refresh-media-button",
-      "fapello-pages-button",
       "stop-gallery-button",
       "gallery-status",
       "download-button",
@@ -3524,8 +3523,6 @@
     const collecting = Boolean(galleryCollection);
     elements["refresh-media-button"].hidden = collecting;
     elements["refresh-media-button"].disabled = state.busy || !galleryContext || !Number.isInteger(state.sourceTabId);
-    elements["fapello-pages-button"].hidden = collecting || !Gallery.fapelloProfileUrl(state.pageUrl);
-    elements["fapello-pages-button"].disabled = collecting || state.busy || !Number.isInteger(state.sourceTabId);
     elements["stop-gallery-button"].hidden = !collecting;
     elements["clear-gallery-button"].disabled = collecting || state.busy || !state.images.length;
     elements["gallery-undo"].hidden = !clearedGallery || clearedGallery.context !== galleryContext || clearedGallery.epoch !== galleryContext.epoch;
@@ -3646,7 +3643,7 @@
       context.sent.set(key, JSON.stringify(record));
     }
     state.images = accumulateLiveImages([], Array.from(current.values()), {
-      maxImages: Gallery.maxItemsForSite(state.siteKey)
+      maxImages: MAX_DISCOVERED_IMAGES
     }).images;
     markFilenamePreviewsDirty();
     renderImages();
@@ -3821,7 +3818,7 @@
     const current = () => !run.stopped && galleryCollection === run &&
       run.generation === sourcePageGeneration && run.tabId === state.sourceTabId;
     const fapelloProfile = Gallery.fapelloProfileUrl(run.url);
-    const maxItems = Gallery.maxItemsForSite(state.siteKey);
+    const maxItems = MAX_DISCOVERED_IMAGES;
     const limitReached = () => state.images.length >= maxItems ||
       state.images.reduce((total, image) => total + image.url.length + String(image.previewUrl || "").length, 0) >= Core.MAX_BATCH_TOTAL_URL_LENGTH ||
       Date.now() - run.startedAt >= Gallery.MAX_DURATION_MS;
@@ -4317,16 +4314,16 @@
           maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH
         });
         if (accumulated.trimmed) {
-          merged.warnings.push("Instagram collection results reached the 1,500-item or 2 MB safety limit.");
+          merged.warnings.push(`Instagram collection results reached the ${MAX_DISCOVERED_IMAGES.toLocaleString()}-item or 2 MB safety limit.`);
         }
         merged.images = accumulated.images;
       } else if (preserveThisPage) {
         const accumulated = accumulateLiveImages(previousImages, merged.images, {
-          maxImages: Gallery.maxItemsForSite(nextSiteKey),
+          maxImages: MAX_DISCOVERED_IMAGES,
           maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH
         });
         if (accumulated.trimmed) {
-          merged.warnings.push(`Automatic live updates reached the ${Gallery.maxItemsForSite(nextSiteKey).toLocaleString()}-item or 2 MB safety limit.`);
+          merged.warnings.push(`Automatic live updates reached the ${MAX_DISCOVERED_IMAGES.toLocaleString()}-item or 2 MB safety limit.`);
         }
         merged.images = accumulated.images;
       }
@@ -5545,7 +5542,6 @@
       });
     }
     elements["stop-gallery-button"].addEventListener("click", stopGalleryCollection);
-    elements["fapello-pages-button"].addEventListener("click", collectGallery);
     elements["refresh-media-button"].addEventListener("click", () => {
       return refreshMedia().catch((error) => setNotice(error.message || String(error), "error"));
     });

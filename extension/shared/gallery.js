@@ -14,7 +14,7 @@
   const MAX_SITE_BYTES = 3 * 1024 * 1024;
   const MAX_PAGES = 10;
   const MAX_FAPELLO_PAGES = 200;
-  const MAX_FAPELLO_ITEMS = 5000;
+  const MAX_ITEMS = 5000;
   const MAX_STEPS = 120;
   const MAX_DURATION_MS = 5 * 60 * 1000;
 
@@ -45,10 +45,6 @@
     } catch (_error) {
       return false;
     }
-  }
-
-  function maxItemsForSite(value) {
-    return isFapelloUrl(value) ? MAX_FAPELLO_ITEMS : Core.MAX_BATCH_SIZE;
   }
 
   function fapelloProfileUrl(value) {
@@ -160,11 +156,10 @@
       return null;
     }
     const records = new Map();
-    const maxItems = maxItemsForSite(siteKey);
     let bytes = 0;
     let urls = 0;
     let trimmed = false;
-    for (const raw of (Array.isArray(value.records) ? value.records : []).slice(0, maxItems * 2)) {
+    for (const raw of (Array.isArray(value.records) ? value.records : []).slice(0, MAX_ITEMS * 2)) {
       let record = normalizeRecord(raw, siteKey);
       if (!record) {
         continue;
@@ -177,7 +172,7 @@
       const addedBytes = byteLength(record) - (previous ? byteLength(previous) : 0);
       const addedUrls = record.url.length + record.previewUrl.length -
         (previous ? previous.url.length + previous.previewUrl.length : 0);
-      if ((!previous && records.size >= maxItems) ||
+      if ((!previous && records.size >= MAX_ITEMS) ||
         bytes + addedBytes > MAX_SITE_BYTES || urls + addedUrls > Core.MAX_BATCH_TOTAL_URL_LENGTH) {
         trimmed = true;
         continue;
@@ -214,7 +209,7 @@
       updatedAt: now,
       records: message.action === "clear" ? [] : [
         ...current.records,
-        ...(Array.isArray(message.records) ? message.records.slice(0, maxItemsForSite(current.siteKey)) : [])
+        ...(Array.isArray(message.records) ? message.records.slice(0, MAX_ITEMS) : [])
       ]
     });
     const remaining = (Array.isArray(sites) ? sites : []).filter((site) => site && site.siteKey !== gallery.siteKey)
@@ -316,8 +311,8 @@
   }
 
   return {
-    STORAGE_KEY, MAX_SITES, MAX_BYTES, MAX_PAGES, MAX_FAPELLO_PAGES, MAX_STEPS, MAX_DURATION_MS,
-    pageUrl, isFapelloUrl, maxItemsForSite, fapelloProfileUrl, fapelloNextPageUrl,
+    STORAGE_KEY, MAX_SITES, MAX_BYTES, MAX_ITEMS, MAX_PAGES, MAX_FAPELLO_PAGES, MAX_STEPS, MAX_DURATION_MS,
+    pageUrl, isFapelloUrl, fapelloProfileUrl, fapelloNextPageUrl,
     youtubeUrl, normalizeRecord, recordKey, normalizeSite, getSite, updateSites, scrollPage, fetchPage
   };
 });

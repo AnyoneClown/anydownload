@@ -30,9 +30,9 @@ const video = Gallery.normalizeRecord({
 assert.equal(video.url, "https://www.youtube.com/watch?v=abcdefghijk&anydownload_provider=youtube&anydownload_itag=18");
 assert.doesNotMatch(JSON.stringify(video), /googlevideo|secret/);
 assert.equal(Gallery.normalizeRecord({ ...photo("unknown-video"), url: "https://r1.googlevideo.com/videoplayback?secret=123" }, siteKey), null);
-const full = Gallery.updateSites([], { siteKey, epoch: 0, records: Array.from({ length: 1500 }, (_, i) => photo(String(i))) });
+const full = Gallery.updateSites([], { siteKey, epoch: 0, records: Array.from({ length: Gallery.MAX_ITEMS }, (_, i) => photo(String(i))) });
 const capped = Gallery.updateSites(full.sites, { siteKey, epoch: 0, records: [photo("overflow")] });
-assert.equal(capped.gallery.records.length, 1500);
+assert.equal(capped.gallery.records.length, Gallery.MAX_ITEMS);
 assert.equal(capped.gallery.trimmed, true);
 const fapelloSite = "https://ru.fapello.com";
 const fapelloRoot = `${fapelloSite}/olyashaa/`;
@@ -202,6 +202,9 @@ function popupHarness(stored = { local: [], session: [] }) {
           }
           if (func.name === "collectLiveGalleryFingerprint") {
             return [{ result: { fingerprint: "test", pageUrl: tab.url } }];
+          }
+          if (func.name === "collectImagesFromPage") {
+            assert.equal(args[0].maxImages, Gallery.MAX_ITEMS, "A page scan uses collection capacity, not download batch size");
           }
           if (scanWait) {
             const wait = scanWait;
@@ -524,6 +527,42 @@ async function checkFixedPageLimit() {
   assert.match(harness.elements.get("notice").textContent, /Stopped at the 10-page limit/);
 }
 
+async function checkAutomaticLargeCollection() {
+  for (const incognito of [false, true]) {
+    const harness = popupHarness();
+    harness.tab.incognito = incognito;
+    const images = Array.from({ length: 2738 }, (_, index) => photo(`large-${index}`));
+    harness.setImages(images.slice(0, 1530));
+    await harness.popup.scanPage();
+    assert.equal(harness.popup.state.images.length, 1530, "Ordinary page scans may exceed one download batch");
+    harness.popup.state.selected.delete(images[0].url);
+    harness.setImages(images.slice(1530));
+    await harness.popup.scanPage({ preserveSelection: true, live: true });
+    assert.equal(harness.popup.state.images.length, 2738, "Scrolling must accumulate past 1,530 without a scan button");
+    assert.equal(harness.popup.state.selected.size, 2737);
+    assert.equal(harness.popup.state.selected.has(images[0].url), false);
+    const extra = { ...photo("large-next"), pageUrl: `${siteKey}/page-2/` };
+    harness.navigate(extra.pageUrl);
+    harness.setImages([extra]);
+    await harness.popup.scanPage({ preserveSelection: true, live: true });
+    assert.equal(harness.popup.state.images.length, 2739, "Manual same-site pagination keeps the large collection");
+    assert.equal(harness.fetchedPages.length, 0);
+    assert.equal(harness.scrolls, 0);
+    const area = incognito ? "session" : "local";
+    assert.equal(Gallery.getSite(harness.stored[area], siteKey).records.length, 2739);
+    assert.equal(harness.stored[incognito ? "local" : "session"].length, 0);
+    const reopened = popupHarness(harness.stored);
+    reopened.tab.incognito = incognito;
+    reopened.tab.url = extra.pageUrl;
+    reopened.setImages([extra]);
+    await reopened.popup.scanPage();
+    assert.equal(reopened.popup.state.images.length, 2739);
+    assert.equal(reopened.popup.state.selected.has(images[0].url), false);
+    reopened.popup.handleGalleryStorageChanges({ [Gallery.STORAGE_KEY]: { newValue: harness.stored[area] } }, area);
+    assert.equal(reopened.popup.state.images.length, 2739, "Storage updates must not truncate a restored large collection");
+  }
+}
+
 async function checkFapelloPagination() {
   const pageUrl = number => number === 1 ? fapelloRoot : `${fapelloRoot}page-${number}/`;
   const pages = new Map();
@@ -541,10 +580,7 @@ async function checkFapelloPagination() {
     harness.tab.incognito = startingPage === 70;
     harness.setProfilePages(pages, pageUrl(startingPage));
     await harness.popup.scanPage();
-    assert.equal(harness.elements.get("fapello-pages-button").hidden, false);
-    assert.equal(harness.elements.get("fapello-pages-button").disabled, false);
-    harness.popup.wireEvents();
-    await harness.elements.get("fapello-pages-button").listeners.get("click")();
+    await harness.popup.collectGallery();
     assert.equal(harness.fetchedPages.length, 85);
     assert.equal(new Set(harness.fetchedPages).size, 85, "Each additional profile page is fetched only once");
     assert.equal(harness.fetchedPages.includes(pageUrl(startingPage)), false);
@@ -761,6 +797,7 @@ function checkScrolling() {
   await checkSelectionDuringScan();
   await checkSavedCollectionView();
   await checkFixedPageLimit();
+  await checkAutomaticLargeCollection();
   await checkFapelloPagination();
   await checkPhotoStory();
   await checkUndoAndFilteredScan();
