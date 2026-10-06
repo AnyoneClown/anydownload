@@ -880,6 +880,7 @@
       "clear-ignored-button",
       "clear-gallery-button",
       "refresh-media-button",
+      "fapello-pages-button",
       "stop-gallery-button",
       "gallery-status",
       "download-button",
@@ -2684,12 +2685,21 @@
       url: image.url,
       identityKey: normalizedMediaIdentity(image.identityKey)
     }));
-    const response = await browser.runtime.sendMessage({
-      type: "GET_MEDIA_DOWNLOAD_STATUS",
-      incognito: state.incognito,
-      pageUrl: requestedPageUrl,
-      items: requested.map(({ url, identityKey }) => ({ url, identityKey }))
-    });
+    const response = { ok: true, statuses: [] };
+    for (let offset = 0; offset < requested.length; offset += Core.MAX_BATCH_SIZE) {
+      const part = await browser.runtime.sendMessage({
+        type: "GET_MEDIA_DOWNLOAD_STATUS",
+        incognito: state.incognito,
+        pageUrl: requestedPageUrl,
+        items: requested.slice(offset, offset + Core.MAX_BATCH_SIZE).map(({ url, identityKey }) => ({ url, identityKey }))
+      });
+      if (generation !== downloadStatusGeneration || requestedPageUrl !== state.pageUrl) return false;
+      if (!part || !part.ok || !Array.isArray(part.statuses)) {
+        if (part && part.ok === false) throw new Error(part.error || "Firefox could not read completed-download status.");
+        return false;
+      }
+      response.statuses.push(...part.statuses);
+    }
     if (
       generation !== downloadStatusGeneration ||
       requestedPageUrl !== state.pageUrl ||
@@ -3514,6 +3524,8 @@
     const collecting = Boolean(galleryCollection);
     elements["refresh-media-button"].hidden = collecting;
     elements["refresh-media-button"].disabled = state.busy || !galleryContext || !Number.isInteger(state.sourceTabId);
+    elements["fapello-pages-button"].hidden = collecting || !Gallery.fapelloProfileUrl(state.pageUrl);
+    elements["fapello-pages-button"].disabled = collecting || state.busy || !Number.isInteger(state.sourceTabId);
     elements["stop-gallery-button"].hidden = !collecting;
     elements["clear-gallery-button"].disabled = collecting || state.busy || !state.images.length;
     elements["gallery-undo"].hidden = !clearedGallery || clearedGallery.context !== galleryContext || clearedGallery.epoch !== galleryContext.epoch;
@@ -3633,7 +3645,9 @@
       }
       context.sent.set(key, JSON.stringify(record));
     }
-    state.images = accumulateLiveImages([], Array.from(current.values())).images;
+    state.images = accumulateLiveImages([], Array.from(current.values()), {
+      maxImages: Gallery.maxItemsForSite(state.siteKey)
+    }).images;
     markFilenamePreviewsDirty();
     renderImages();
     refreshDownloadStatuses().catch(() => undefined);
@@ -3806,7 +3820,9 @@
     updateGalleryControls();
     const current = () => !run.stopped && galleryCollection === run &&
       run.generation === sourcePageGeneration && run.tabId === state.sourceTabId;
-    const limitReached = () => state.images.length >= MAX_DISCOVERED_IMAGES ||
+    const fapelloProfile = Gallery.fapelloProfileUrl(run.url);
+    const maxItems = Gallery.maxItemsForSite(state.siteKey);
+    const limitReached = () => state.images.length >= maxItems ||
       state.images.reduce((total, image) => total + image.url.length + String(image.previewUrl || "").length, 0) >= Core.MAX_BATCH_TOTAL_URL_LENGTH ||
       Date.now() - run.startedAt >= Gallery.MAX_DURATION_MS;
     let reason = "No more media or Next pages were exposed.";
@@ -3859,10 +3875,11 @@
         reason = "Scrolling stopped at the collection safety limit.";
       }
       const visited = new Set([Gallery.pageUrl(run.url)]);
-      let nextUrl = nextLinks.filter((value) => typeof value === "string" && value.trim()).map((value) => {
+      const sourceNextUrl = fapelloProfile ? Gallery.fapelloNextPageUrl(nextLinks, run.url) : nextLinks.filter((value) => typeof value === "string" && value.trim()).map((value) => {
         try { return Gallery.pageUrl(new URL(value, run.url).href); } catch (_error) { return ""; }
       }).find((url) => url && Core.siteKeyForUrl(url) === state.siteKey && !visited.has(url));
-      const maxPages = Gallery.MAX_PAGES;
+      let nextUrl = fapelloProfile && fapelloProfile !== Gallery.pageUrl(run.url) ? fapelloProfile : sourceNextUrl;
+      const maxPages = fapelloProfile ? Gallery.MAX_FAPELLO_PAGES : Gallery.MAX_PAGES;
       let fetchedBytes = 0;
       while (current() && nextUrl && run.pages < maxPages && !limitReached()) {
         visited.add(nextUrl);
@@ -3891,7 +3908,7 @@
         }, parsed);
         const merged = mergeScanResults([{ frameId: 0, result: scan }]);
         const previous = state.images;
-        const accumulated = accumulateLiveImages(previous, merged.images);
+        const accumulated = accumulateLiveImages(previous, merged.images, { maxImages: maxItems });
         state.images = accumulated.images;
         state.selected = reconcileGallerySelection(previous, true);
         run.pages += 1;
@@ -3906,7 +3923,11 @@
           reason = "The next page exposed no media in its HTML; collection stopped there.";
           break;
         }
-        nextUrl = Tracker.extractNextPageUrl(parsed, nextUrl);
+        nextUrl = fapelloProfile ? Gallery.fapelloNextPageUrl(
+          Array.from(parsed.querySelectorAll("a[href]")).slice(0, 1000).map((node) => node.getAttribute("href")),
+          nextUrl, base.href
+        ) : Tracker.extractNextPageUrl(parsed, nextUrl);
+        if (fapelloProfile && nextUrl === Gallery.pageUrl(run.url)) nextUrl = sourceNextUrl;
         if (visited.has(nextUrl)) {
           reason = "The Next link repeated an already collected page.";
           break;
@@ -3914,6 +3935,8 @@
       }
       if (nextUrl && run.pages >= maxPages) {
         reason = `Stopped at the ${maxPages}-page limit.`;
+      } else if (current() && nextUrl && limitReached()) {
+        reason = "The collection reached its item, URL, or time limit.";
       }
     } catch (error) {
       reason = error.message || String(error);
@@ -4299,11 +4322,11 @@
         merged.images = accumulated.images;
       } else if (preserveThisPage) {
         const accumulated = accumulateLiveImages(previousImages, merged.images, {
-          maxImages: MAX_DISCOVERED_IMAGES,
+          maxImages: Gallery.maxItemsForSite(nextSiteKey),
           maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH
         });
         if (accumulated.trimmed) {
-          merged.warnings.push("Automatic live updates reached the 1,500-item or 2 MB safety limit.");
+          merged.warnings.push(`Automatic live updates reached the ${Gallery.maxItemsForSite(nextSiteKey).toLocaleString()}-item or 2 MB safety limit.`);
         }
         merged.images = accumulated.images;
       }
@@ -4514,19 +4537,37 @@
       }
       state.hasStoredFolder = true;
       const downloadItems = renderedDownloadItems(images, template.value);
-      const result = await browser.runtime.sendMessage({
-        type: "DOWNLOAD_BATCH",
-        folder: folder.value,
-        saveAs: elements["ask-single-input"].checked && images.length === 1,
-        incognito: state.incognito,
-        pageTitle: state.pageTitle,
-        pageUrl: state.pageUrl,
-        items: downloadItems
-      });
-
-      if (!result || !result.ok) {
-        const firstError = result && result.errors && result.errors[0] && result.errors[0].error;
-        throw new Error((result && result.error) || firstError || "Firefox did not start the downloads.");
+      const result = { total: images.length, failed: 0, folder: folder.value, errors: [] };
+      for (let offset = 0; offset < downloadItems.length; offset += Core.MAX_BATCH_SIZE) {
+        const items = downloadItems.slice(offset, offset + Core.MAX_BATCH_SIZE);
+        const part = await browser.runtime.sendMessage({
+          type: "DOWNLOAD_BATCH",
+          folder: folder.value,
+          saveAs: elements["ask-single-input"].checked && images.length === 1,
+          incognito: state.incognito,
+          pageTitle: state.pageTitle,
+          pageUrl: state.pageUrl,
+          items
+        });
+        if (!part || !part.ok) {
+          const error = part && (part.error || part.errors?.[0]?.error) || "Firefox did not start the downloads.";
+          if (!offset) throw new Error(error);
+          result.failed += downloadItems.length - offset;
+          result.errors.push({ index: offset, error });
+          break;
+        }
+        const countKey = Number.isFinite(Number(part.queued)) ? "queued" : "started";
+        result[countKey] = (result[countKey] || 0) + (Number(part[countKey]) || 0);
+        result.failed += Number(part.failed) || 0;
+        result.errors.push(...(part.errors || []).slice(0, 10).map((error) => ({ ...error, index: offset + error.index })));
+        const acceptedIndexes = Array.isArray(part.acceptedIndexes) ? part.acceptedIndexes : items.map((_item, index) => index);
+        for (const index of acceptedIndexes) {
+          if (!Number.isInteger(index) || index < 0 || index >= items.length) continue;
+          const image = images[offset + index];
+          state.selected.delete(image.url);
+          if (image.downloadFingerprint) state.explicitRedownloads.delete(image.downloadFingerprint);
+          image.downloadStatus = "queued";
+        }
       }
 
       const queueNotice = downloadBatchNotice(result);
@@ -4538,20 +4579,6 @@
           ? `Started ${result.started.toLocaleString()} of ${result.total.toLocaleString()} downloads. ${result.failed.toLocaleString()} could not be started.${firstError}`
           : `Started ${result.started.toLocaleString()} download${result.started === 1 ? "" : "s"} in Downloads/${result.folder}.`;
         setNotice(message, result.failed ? "error" : "success");
-      }
-      const acceptedIndexes = Array.isArray(result.acceptedIndexes)
-        ? result.acceptedIndexes
-        : images.map((_image, index) => index);
-      for (const index of acceptedIndexes) {
-        const image = images[index];
-        if (!image) {
-          continue;
-        }
-        state.selected.delete(image.url);
-        if (image.downloadFingerprint) {
-          state.explicitRedownloads.delete(image.downloadFingerprint);
-        }
-        image.downloadStatus = "queued";
       }
       await refreshDownloadStatuses({ render: false }).catch(() => undefined);
       refreshQueueBadge();
@@ -5518,6 +5545,7 @@
       });
     }
     elements["stop-gallery-button"].addEventListener("click", stopGalleryCollection);
+    elements["fapello-pages-button"].addEventListener("click", collectGallery);
     elements["refresh-media-button"].addEventListener("click", () => {
       return refreshMedia().catch((error) => setNotice(error.message || String(error), "error"));
     });

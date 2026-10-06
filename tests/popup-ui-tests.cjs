@@ -580,6 +580,58 @@ for (const embedded of [false, true]) {
   await ui.requestDownloads(ui.selectedDownloadableImages());
   assert.deepEqual(Array.from(downloadMessages.at(-1).items, item => item.url), [first.url, second.url],
     "Downloads must enqueue selected files hidden by any view filter");
+
+  const originalSendMessage = context.browser.runtime.sendMessage;
+  const previousPageUrl = ui.state.pageUrl;
+  const statusRequests = [];
+  let rejectLaterBatch = false;
+  let requestedBatches = 0;
+  context.browser.runtime.sendMessage = async message => {
+    if (message.type === "GET_MEDIA_DOWNLOAD_STATUS") {
+      statusRequests.push(message);
+      assert.ok(message.items.length <= Core.MAX_BATCH_SIZE);
+    }
+    if (message.type === "DOWNLOAD_BATCH") {
+      requestedBatches += 1;
+      assert.ok(message.items.length <= Core.MAX_BATCH_SIZE);
+      if (rejectLaterBatch && requestedBatches > 1) return { ok: false, error: "Queue capacity reached." };
+    }
+    return originalSendMessage(message);
+  };
+  const largeSelection = Array.from({ length: 2738 }, (_, index) => ({ ...first,
+    url: `https://cdn.fapello.com/large-${index}.jpg`, pageUrl: "https://ru.fapello.com/olyashaa/",
+    downloadStatus: "new", downloadFingerprint: "", filename: "photo.jpg"
+  }));
+  ui.resetMediaFilters();
+  ui.state.pageUrl = "https://ru.fapello.com/olyashaa/";
+  ui.state.images = largeSelection;
+  ui.state.selected.clear();
+  for (const image of largeSelection) ui.state.selected.add(image.url);
+  get("filename-template-input").value = "{index}-{filename}";
+  const beforeLargeDownload = downloadMessages.length;
+  await ui.requestDownloads(largeSelection);
+  const largeBatches = downloadMessages.slice(beforeLargeDownload);
+  assert.deepEqual(largeBatches.map(message => message.items.length), [1500, 1238]);
+  assert.equal(new Set(largeBatches.flatMap(message => Array.from(message.items, item => item.filename))).size, 2738,
+    "Filename indices and duplicate resolution continue across batch boundaries");
+  assert.equal(ui.state.selected.size, 0);
+  assert.deepEqual(statusRequests.map(message => message.items.length), [1500, 1238]);
+  assert.match(get("notice").textContent, /Added 2,738 downloads/);
+
+  requestedBatches = 0;
+  rejectLaterBatch = true;
+  for (const image of largeSelection) image.downloadStatus = "new";
+  ui.state.selected.clear();
+  for (const image of largeSelection) ui.state.selected.add(image.url);
+  await ui.requestDownloads(largeSelection);
+  assert.deepEqual(Array.from(ui.state.selected), largeSelection.slice(1500).map(item => item.url),
+    "A later batch failure keeps only unaccepted items selected for retry");
+  assert.match(get("notice").textContent, /Added 1,500 of 2,738 downloads/);
+  context.browser.runtime.sendMessage = originalSendMessage;
+  ui.state.pageUrl = previousPageUrl;
+  ui.state.images = [first, second];
+  ui.state.selected.clear();
+  get("filename-template-input").value = Templates.DEFAULT_TEMPLATE;
   ui.openGalleryPreview(first);
   get("preview-download-button").listeners.click();
   await new Promise(setImmediate);

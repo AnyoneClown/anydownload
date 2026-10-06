@@ -13,6 +13,8 @@
   const MAX_BYTES = 4 * 1024 * 1024;
   const MAX_SITE_BYTES = 3 * 1024 * 1024;
   const MAX_PAGES = 10;
+  const MAX_FAPELLO_PAGES = 200;
+  const MAX_FAPELLO_ITEMS = 5000;
   const MAX_STEPS = 120;
   const MAX_DURATION_MS = 5 * 60 * 1000;
 
@@ -35,6 +37,48 @@
       return "";
     }
     return result.value.startsWith("data:") ? result.value : pageUrl(result.value);
+  }
+
+  function isFapelloUrl(value) {
+    try {
+      return /(^|\.)fapello\.(?:com|su)$/i.test(new URL(pageUrl(value)).hostname);
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function maxItemsForSite(value) {
+    return isFapelloUrl(value) ? MAX_FAPELLO_ITEMS : Core.MAX_BATCH_SIZE;
+  }
+
+  function fapelloProfileUrl(value) {
+    if (!isFapelloUrl(value)) return "";
+    const url = new URL(pageUrl(value));
+    const match = url.pathname.match(/^\/([a-z0-9_-]{1,100})(?:\/page-[1-9]\d{0,5})?\/$/i);
+    if (!match || url.search || /^(?:hot|new|videos|posts|tags|search_v2|trending|random|login|signup|upload|welcome)$/i.test(match[1])) {
+      return "";
+    }
+    return `${url.origin}/${match[1]}/`;
+  }
+
+  // Fapello's localized Next button has neither rel=next nor a next class.
+  // Only follow an exposed consecutive page belonging to this exact profile.
+  function fapelloNextPageUrl(links, currentUrl, baseUrl = currentUrl) {
+    const profileUrl = fapelloProfileUrl(currentUrl);
+    if (!profileUrl) return "";
+    const current = new URL(currentUrl);
+    const match = current.pathname.match(/\/page-(\d+)\/$/);
+    const nextUrl = `${profileUrl}page-${(match ? Number(match[1]) : 1) + 1}/`;
+    for (const href of (Array.isArray(links) ? links : []).slice(0, 1000)) {
+      try {
+        if (typeof href !== "string" || !href.trim()) continue;
+        const candidate = new URL(href, baseUrl);
+        if (!candidate.hash && pageUrl(candidate.href) === nextUrl) return nextUrl;
+      } catch (_error) {
+        // Ignore malformed links and bases.
+      }
+    }
+    return "";
   }
 
   function youtubeUrl(image) {
@@ -116,10 +160,11 @@
       return null;
     }
     const records = new Map();
+    const maxItems = maxItemsForSite(siteKey);
     let bytes = 0;
     let urls = 0;
     let trimmed = false;
-    for (const raw of (Array.isArray(value.records) ? value.records : []).slice(0, Core.MAX_BATCH_SIZE * 2)) {
+    for (const raw of (Array.isArray(value.records) ? value.records : []).slice(0, maxItems * 2)) {
       let record = normalizeRecord(raw, siteKey);
       if (!record) {
         continue;
@@ -132,7 +177,7 @@
       const addedBytes = byteLength(record) - (previous ? byteLength(previous) : 0);
       const addedUrls = record.url.length + record.previewUrl.length -
         (previous ? previous.url.length + previous.previewUrl.length : 0);
-      if ((!previous && records.size >= Core.MAX_BATCH_SIZE) ||
+      if ((!previous && records.size >= maxItems) ||
         bytes + addedBytes > MAX_SITE_BYTES || urls + addedUrls > Core.MAX_BATCH_TOTAL_URL_LENGTH) {
         trimmed = true;
         continue;
@@ -169,7 +214,7 @@
       updatedAt: now,
       records: message.action === "clear" ? [] : [
         ...current.records,
-        ...(Array.isArray(message.records) ? message.records.slice(0, Core.MAX_BATCH_SIZE) : [])
+        ...(Array.isArray(message.records) ? message.records.slice(0, maxItemsForSite(current.siteKey)) : [])
       ]
     });
     const remaining = (Array.isArray(sites) ? sites : []).filter((site) => site && site.siteKey !== gallery.siteKey)
@@ -207,9 +252,10 @@
     if (more) {
       more.click();
     }
-    const nextLinks = Array.from(document.querySelectorAll(
+    const fapello = /(^|\.)fapello\.(?:com|su)$/i.test(location.hostname || new URL(location.href).hostname);
+    const nextLinks = Array.from(document.querySelectorAll(fapello ? "a[href]" :
       "a[rel~='next'],link[rel~='next'],a.next,.pagination a.next,.pager a.next,a[aria-label*='next' i]"
-    )).slice(0, 30).map((node) => node.href || node.getAttribute("href"));
+    )).slice(0, fapello ? 1000 : 30).map((node) => node.href || node.getAttribute("href"));
     return {
       top: root.scrollTop, height,
       bottom, clickedMore: Boolean(more),
@@ -270,7 +316,8 @@
   }
 
   return {
-    STORAGE_KEY, MAX_SITES, MAX_BYTES, MAX_PAGES, MAX_STEPS, MAX_DURATION_MS,
-    pageUrl, youtubeUrl, normalizeRecord, recordKey, normalizeSite, getSite, updateSites, scrollPage, fetchPage
+    STORAGE_KEY, MAX_SITES, MAX_BYTES, MAX_PAGES, MAX_FAPELLO_PAGES, MAX_STEPS, MAX_DURATION_MS,
+    pageUrl, isFapelloUrl, maxItemsForSite, fapelloProfileUrl, fapelloNextPageUrl,
+    youtubeUrl, normalizeRecord, recordKey, normalizeSite, getSite, updateSites, scrollPage, fetchPage
   };
 });

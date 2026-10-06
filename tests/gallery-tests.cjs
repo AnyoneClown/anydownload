@@ -34,6 +34,23 @@ const full = Gallery.updateSites([], { siteKey, epoch: 0, records: Array.from({ 
 const capped = Gallery.updateSites(full.sites, { siteKey, epoch: 0, records: [photo("overflow")] });
 assert.equal(capped.gallery.records.length, 1500);
 assert.equal(capped.gallery.trimmed, true);
+const fapelloSite = "https://ru.fapello.com";
+const fapelloRoot = `${fapelloSite}/olyashaa/`;
+assert.equal(Gallery.fapelloProfileUrl(`${fapelloRoot}page-2/`), fapelloRoot);
+for (const url of [`${fapelloRoot}2716/`, `${fapelloSite}/videos/`, "https://fapello.com.evil.test/olyashaa/",
+  "https://user:pass@fapello.com/olyashaa/", `${fapelloRoot}?other=1`]) {
+  assert.equal(Gallery.fapelloProfileUrl(url), "", url);
+}
+assert.equal(Gallery.fapelloNextPageUrl([`${fapelloRoot}page-2/`], fapelloRoot), `${fapelloRoot}page-2/`);
+assert.equal(Gallery.fapelloNextPageUrl(["page-3/"], `${fapelloRoot}page-2/`, fapelloRoot), `${fapelloRoot}page-3/`);
+assert.equal(Gallery.fapelloNextPageUrl([`${fapelloRoot}page-1/`, `${fapelloRoot}page-4/`,
+  `${fapelloSite}/other/page-3/`, "https://fapello.com/olyashaa/page-3/", `${fapelloRoot}page-3/#fragment`,
+  `https://user:pass@ru.fapello.com/olyashaa/page-3/`, "javascript:alert(1)"], `${fapelloRoot}page-2/`), "");
+const largeFapello = Gallery.updateSites([], { siteKey: fapelloSite, epoch: 0,
+  records: Array.from({ length: 2738 }, (_, i) => ({ ...photo(String(i)), pageUrl: fapelloRoot })) });
+assert.equal(largeFapello.gallery.records.length, 2738, "Fapello galleries must survive the former 1,500-item cap");
+assert.equal(largeFapello.gallery.trimmed, false);
+assert.equal(Gallery.normalizeSite(largeFapello.gallery).records.length, 2738);
 const cleared = Gallery.updateSites(saved.sites, { siteKey, action: "clear" });
 assert.equal(Gallery.updateSites(cleared.sites, { siteKey, epoch: 0, records: [photo("stale")] }).stale, true);
 let sites = [];
@@ -83,6 +100,7 @@ function popupHarness(stored = { local: [], session: [] }) {
   let scrolls = 0;
   const fetchedPages = [];
   let continuePagination = false;
+  let profilePages = null;
   let sourceImages = [photo("one")];
   let scanWait = null;
   let scanStarted = null;
@@ -125,6 +143,10 @@ function popupHarness(stored = { local: [], session: [] }) {
               return { getAttribute() { return `${siteKey}/page${Number(new URL(html).pathname.slice(5)) + 1}`; } };
             }
             return null;
+          },
+          querySelectorAll(selector) {
+            assert.equal(selector, "a[href]");
+            return (profilePages?.get(html)?.links || []).map(href => ({ getAttribute() { return href; } }));
           }
         };
       }
@@ -152,6 +174,7 @@ function popupHarness(stored = { local: [], session: [] }) {
             return { ok: true, gallery: result.gallery, stale: result.stale };
           }
           if (message.type === "GET_MEDIA_DOWNLOAD_STATUS") {
+            assert.ok(message.items.length <= Core.MAX_BATCH_SIZE, "Status requests must be batched");
             if (statusWait) {
               const wait = statusWait;
               statusWait = null;
@@ -167,6 +190,9 @@ function popupHarness(stored = { local: [], session: [] }) {
         async executeScript({ func, args }) {
           if (func.name === "scrollPage") {
             scrolls += 1;
+            if (profilePages) {
+              return [{ result: { top: 1000, height: 1600, bottom: true, nextLinks: profilePages.get(tab.url).links } }];
+            }
             sourceImages = [photo("two")]; // A virtualized gallery removes the first image.
             return [{ result: { top: 1000, height: 1600, bottom: true, nextLinks: ["/page2"] } }];
           }
@@ -196,7 +222,8 @@ function popupHarness(stored = { local: [], session: [] }) {
   }
   context.ImageDownloaderCollector = function collectImagesFromPage(options, parsed) {
     assert.ok(parsed);
-    return { pageUrl: options.pageUrl, pageTitle: "page two", images: [photo("three")], warnings: [] };
+    return { pageUrl: options.pageUrl, pageTitle: "page two",
+      images: profilePages?.get(options.pageUrl)?.images || [photo("three")], warnings: [] };
   };
   const source = fs.readFileSync(`${__dirname}/../extension/popup/popup.js`, "utf8");
   vm.runInContext(source.replace('  document.addEventListener("DOMContentLoaded",', `
@@ -216,6 +243,11 @@ function popupHarness(stored = { local: [], session: [] }) {
   return {
     popup, tab, stored, elements, fetchedPages,
     enableNextPages() { continuePagination = true; },
+    setProfilePages(pages, sourceUrl) {
+      profilePages = pages;
+      tab.url = sourceUrl;
+      sourceImages = pages.get(sourceUrl).images;
+    },
     setImages(images) { sourceImages = images; },
     failClear() { clearError = true; },
     failScan() { scanError = true; },
@@ -492,6 +524,45 @@ async function checkFixedPageLimit() {
   assert.match(harness.elements.get("notice").textContent, /Stopped at the 10-page limit/);
 }
 
+async function checkFapelloPagination() {
+  const pageUrl = number => number === 1 ? fapelloRoot : `${fapelloRoot}page-${number}/`;
+  const pages = new Map();
+  for (let number = 1; number <= 86; number += 1) {
+    pages.set(pageUrl(number), {
+      // Mirrors Fapello's plain localized <a href=".../page-N/"> button.
+      links: [`${fapelloSite}/other/page-${number + 1}/`, ...(number < 86 ? [pageUrl(number + 1)] : [])],
+      images: Array.from({ length: number === 86 ? 18 : 32 }, (_, index) => ({
+        ...photo(`fapello-${number}-${index}`), pageUrl: pageUrl(number)
+      }))
+    });
+  }
+  for (const startingPage of [1, 2, 70]) {
+    const harness = popupHarness();
+    harness.tab.incognito = startingPage === 70;
+    harness.setProfilePages(pages, pageUrl(startingPage));
+    await harness.popup.scanPage();
+    assert.equal(harness.elements.get("fapello-pages-button").hidden, false);
+    assert.equal(harness.elements.get("fapello-pages-button").disabled, false);
+    harness.popup.wireEvents();
+    await harness.elements.get("fapello-pages-button").listeners.get("click")();
+    assert.equal(harness.fetchedPages.length, 85);
+    assert.equal(new Set(harness.fetchedPages).size, 85, "Each additional profile page is fetched only once");
+    assert.equal(harness.fetchedPages.includes(pageUrl(startingPage)), false);
+    assert.equal(harness.popup.state.images.length, 2738, "Every exposed profile page must contribute media");
+    assert.equal(harness.popup.state.selected.size, 2738);
+    assert.match(harness.elements.get("notice").textContent, /2,738 media from 86 pages/);
+    assert.doesNotMatch(harness.elements.get("notice").textContent, /limit|repeated/);
+    const area = harness.tab.incognito ? "session" : "local";
+    assert.equal(Gallery.getSite(harness.stored[area], fapelloSite).records.length, 2738);
+    assert.equal(harness.stored[harness.tab.incognito ? "local" : "session"].length, 0);
+    const reopened = popupHarness(harness.stored);
+    reopened.tab.incognito = harness.tab.incognito;
+    reopened.setProfilePages(pages, pageUrl(startingPage));
+    await reopened.popup.scanPage();
+    assert.equal(reopened.popup.state.images.length, 2738, "Live rescans and restores must retain the entire collection");
+  }
+}
+
 async function checkPhotoStory() {
   const still = { ...photo("story-photo"), identityKey: "instagram:story:alice:alice:102",
     sourceProvider: "instagram", mediaType: "image", originalMediaType: 1,
@@ -634,6 +705,7 @@ function checkScrolling() {
     getClientRects() { return visible ? [{}] : []; }, click() { clicks += 1; }
   };
   const scroll = vm.runInNewContext(`(${Gallery.scrollPage.toString()})`, {
+    URL,
     location: { href: `${siteKey}/one` }, window: { innerHeight: 600 },
     document: { scrollingElement: root, querySelectorAll(selector) {
       if (!selector.startsWith("button")) return [nextLink];
@@ -689,6 +761,7 @@ function checkScrolling() {
   await checkSelectionDuringScan();
   await checkSavedCollectionView();
   await checkFixedPageLimit();
+  await checkFapelloPagination();
   await checkPhotoStory();
   await checkUndoAndFilteredScan();
   await checkFetch();

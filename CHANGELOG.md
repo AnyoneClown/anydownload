@@ -4,6 +4,13 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.21.9] - 2026-10-06
+
+### Fixed
+
+- Add **Scan all pages** on Fapello profiles to collect from their first page even when started on `page-2`, following localized pagination links within the same profile. Allow up to 200 pages and 5,000 saved Fapello items while retaining byte and time limits.
+- Queue large selections in batches of 1,500, retain up to 5,000 queue tasks, and query download status in bounded batches so profiles larger than 1,500 items can be downloaded.
+
 ## [1.21.8] - 2026-09-27
 
 ### Fixed

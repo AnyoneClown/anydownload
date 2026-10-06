@@ -39,7 +39,7 @@ function enqueue(state, count, options) {
 
 assert.equal(Queue.SCHEMA_VERSION, 1);
 assert.equal(Queue.MAX_BATCH_SIZE, 1500);
-assert.equal(Queue.MAX_STORED_TASKS, 1500);
+assert.equal(Queue.MAX_STORED_TASKS, 5000);
 assert.ok(Object.isFrozen(Queue.TASK_STATUSES));
 assert.deepEqual(Queue.TASK_STATUSES, [
   "queued",
@@ -739,13 +739,20 @@ assert.equal(sixHundred.accepted, 600, "Large galleries above 500 items remain s
 assert.equal(sixHundred.state.jobs[0].tasks.length, 600);
 const overLimit = enqueue(Queue.emptyState(BASE_TIME), 1600);
 assert.equal(overLimit.accepted, Queue.MAX_BATCH_SIZE);
-assert.equal(overLimit.state.jobs[0].tasks.length, Queue.MAX_STORED_TASKS);
+assert.equal(overLimit.state.jobs[0].tasks.length, Queue.MAX_BATCH_SIZE);
 assert.equal(overLimit.rejected[overLimit.rejected.length - 1].count, 100);
+for (let offset = Queue.MAX_BATCH_SIZE; offset < Queue.MAX_STORED_TASKS; offset += Queue.MAX_BATCH_SIZE) {
+  const count = Math.min(Queue.MAX_BATCH_SIZE, Queue.MAX_STORED_TASKS - offset);
+  const result = enqueue(overLimit.state, count, { idFactory: (kind, index) => `${kind}-capacity-${offset}-${index}` });
+  assert.equal(result.accepted, count, "Multiple bounded batches may fill the larger durable queue");
+  overLimit.state = result.state;
+}
+assert.equal(Queue.hydrate(overLimit.state).jobs.reduce((count, job) => count + job.tasks.length, 0), Queue.MAX_STORED_TASKS);
 const noCapacity = enqueue(overLimit.state, 1);
 assert.equal(noCapacity.accepted, 0);
 assert.match(noCapacity.rejected[0].error, /capacity/i);
 
-const allTaskIds = overLimit.state.jobs[0].tasks.map((task) => task.id);
+const allTaskIds = overLimit.state.jobs.flatMap(job => job.tasks.map((task) => task.id));
 const bulkPaused = Queue.setTasksPaused(overLimit.state, allTaskIds, true, {
   now: BASE_TIME + 1
 });

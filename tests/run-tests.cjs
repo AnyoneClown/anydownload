@@ -64,7 +64,7 @@ const trackingJs = fs.readFileSync(path.join(root, "tracking/tracking.js"), "utf
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.name, "AnyDownload — Page Media Downloader");
-assert.equal(manifest.version, "1.21.8");
+assert.equal(manifest.version, "1.21.9");
 assert.equal(manifest.action.default_title, "Download page media");
 assert.equal(Core.MAX_BATCH_TOTAL_URL_LENGTH, 2000000);
 assert.deepEqual(manifest.permissions.sort(), ["activeTab", "alarms", "downloads", "menus", "notifications", "scripting", "storage"]);
@@ -397,7 +397,7 @@ assert.match(popupJs, /archive\/archive\.html\?job=\$\{encodeURIComponent\(jobId
 assert.match(popupJs, /await browser\.storage\.session\.set\(\{/);
 assert.match(popupJs, /await browser\.tabs\.create\(createProperties\)/);
 assert.match(popupJs, /const downloadItems = renderedDownloadItems\(images, template\.value\)/);
-assert.match(popupJs, /items:\s*downloadItems/);
+assert.match(popupJs, /downloadItems\.slice\(offset, offset \+ Core\.MAX_BATCH_SIZE\)/);
 assert.match(popupJs, /const archiveItems = renderedDownloadItems\(images, templateValue\)/);
 assert.match(popupJs, /items:\s*archiveItems/);
 assert.match(popupJs, /collectLiveGalleryFingerprint/);
