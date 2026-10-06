@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AnyDownload — Page Media Downloader",
-  "version": "1.21.10",
+  "version": "1.21.11",
   "description": "Download and track page media, Instagram collections, and basic progressive YouTube videos with safe bulk queues.",
   "permissions": [
     "activeTab",

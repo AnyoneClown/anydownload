@@ -453,6 +453,70 @@ function urls(result) {
   assert.equal(invalidHintResult.images[0].height, 0);
 }
 
+// Fapello page-2 appends thousands of four-element cards while scrolling. Its
+// last photos (including the blue outfit) sit beyond the general DOM budget.
+{
+  const cards = [];
+  for (let id = 2706; id >= 1; id -= 1) {
+    const number = String(id).padStart(4, "0");
+    const folder = Math.ceil(id / 1000) * 1000;
+    const thumbnail = `https://fapello.com/content/o/l/olyashaa/${folder}/olyashaa_${number}_300px.jpg`;
+    cards.push(element("div", {}, {}, [
+      element("a", { href: `https://ru.fapello.com/olyashaa/${id}/` }, {}, [
+        element("div", {}, {}, [element("img", { src: thumbnail })])
+      ])
+    ]));
+  }
+  const result = scan(cards, { maxImages: 5000 }, "https://ru.fapello.com/olyashaa/page-2/");
+  assert.equal(result.images.length, 2706, "markup wrappers must not hide the end of a loaded gallery");
+  assert.equal(result.images[0].url, "https://fapello.com/content/o/l/olyashaa/3000/olyashaa_2706.jpg");
+  assert.equal(result.images.at(-1).url, "https://fapello.com/content/o/l/olyashaa/1000/olyashaa_0001.jpg");
+  assert.equal(result.images.at(-1).previewUrl, "https://fapello.com/content/o/l/olyashaa/1000/olyashaa_0001_300px.jpg");
+  assert(result.warnings.some((warning) => /Backgrounds, links and embedded frames/.test(warning)));
+}
+
+// Direct media has its own bounded pass, without expanding computed-style work
+// or collecting the same image twice. Other media types share that pass.
+{
+  const firstImage = element("img", { src: "/first.jpg" });
+  const padding = Array.from({ length: 100 }, () => element("div"));
+  const shadow = element("shadow-root", {}, {}, [element("img", { src: "/shadow-tail.jpg" })]);
+  const host = element("div", {}, { shadowRoot: shadow });
+  const lastMedia = [
+    element("img", { src: "/tail.jpg" }),
+    element("video", { src: "/tail.mp4" }),
+    element("image", { href: "/tail.svg" }, { namespaceURI: "http://www.w3.org/2000/svg" }),
+    element("input", { type: "image", src: "/tail-input.png" })
+  ];
+  withFakePage([firstImage, host, ...padding, ...lastMedia], (document) => {
+    let styleReads = 0;
+    let walkerReads = 0;
+    const createTreeWalker = document.createTreeWalker.bind(document);
+    document.createTreeWalker = (...args) => {
+      const walker = createTreeWalker(...args);
+      return { nextNode() { walkerReads += 1; return walker.nextNode(); } };
+    };
+    globalThis.getComputedStyle = () => { styleReads += 1; return {}; };
+    const result = collectImagesFromPage({ maxImages: 5000, maxElements: 20 });
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://gallery.test/first.jpg",
+      "https://gallery.test/tail.jpg",
+      "https://gallery.test/tail.mp4",
+      "https://gallery.test/tail.svg",
+      "https://gallery.test/tail-input.png",
+      "https://gallery.test/shadow-tail.jpg"
+    ]);
+    assert.equal(styleReads, 20, "supplemental direct media must not expand the style budget");
+    assert.equal(walkerReads, 21, "general traversal must still stop at its original budget");
+  });
+
+  const limited = scan(Array.from({ length: 5 }, (_unused, index) =>
+    element("img", { src: `/bounded-${index}.jpg` })
+  ), { maxElements: 3 });
+  assert.equal(limited.images.length, 3, "the direct-media pass must also have a finite budget");
+  assert(limited.warnings.some((warning) => /first 3 direct media elements/.test(warning)));
+}
+
 // Known gallery/CDN wrappers are upgraded only on their narrowly matched hosts
 // and paths. The displayed resource remains available as the cheap popup preview.
 {

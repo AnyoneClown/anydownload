@@ -958,11 +958,46 @@
       }
     }
     if (elementLimitReached) {
-      warnings.push(`Only the first ${settings.maxElements.toLocaleString()} page elements were scanned.`);
+      warnings.push(`Backgrounds, links and embedded frames were limited to the first ${settings.maxElements.toLocaleString()} page elements.`);
+    }
+
+    // Long galleries can have many wrappers per image. Keep the general DOM
+    // and computed-style budget, but also inspect a bounded set of direct media
+    // beyond that prefix so newly loaded photos are still discoverable.
+    const generalElementCount = allElements.length;
+    if (!targetMedia) {
+      const visitedElements = new Set(allElements);
+      let mediaElementCount = 0;
+      let mediaElementLimitReached = false;
+      for (const root of roots) {
+        try {
+          const mediaElements = root.querySelectorAll("img, video, image, input[type='image']");
+          for (const element of mediaElements) {
+            if (mediaElementCount >= settings.maxElements) {
+              mediaElementLimitReached = true;
+              break;
+            }
+            mediaElementCount += 1;
+            if (!visitedElements.has(element)) {
+              visitedElements.add(element);
+              allElements.push(element);
+            }
+          }
+        } catch (_error) {
+          // Detached or browser-owned roots may no longer expose selectors.
+        }
+        if (mediaElementLimitReached) {
+          break;
+        }
+      }
+      if (mediaElementLimitReached) {
+        warnings.push(`Only the first ${settings.maxElements.toLocaleString()} direct media elements were scanned.`);
+      }
     }
 
     let embeddedFrameCount = 0;
-    for (const element of allElements) {
+    for (let elementIndex = 0; elementIndex < allElements.length; elementIndex += 1) {
+      const element = allElements[elementIndex];
       const tagName = String(element.localName || "").toLowerCase();
       if (tagName === "iframe" || tagName === "frame") {
         embeddedFrameCount += 1;
@@ -1043,7 +1078,10 @@
         }
       }
 
-      if (settings.includeBackgrounds && !telegramPage && !truncated && !payloadLimitReached) {
+      if (
+        elementIndex < generalElementCount && settings.includeBackgrounds &&
+        !telegramPage && !truncated && !payloadLimitReached
+      ) {
         try {
           const style = sourceDocument ? element.style : getComputedStyle(element);
           const values = [

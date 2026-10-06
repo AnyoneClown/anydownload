@@ -4,6 +4,12 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.21.11] - 2026-10-06
+
+### Fixed
+
+- Collect loaded images and direct videos beyond the general 10,000-element scan limit so the end of long galleries, including Fapello `page-2`, remains discoverable. Bound the additional media pass separately and retain existing limits for CSS scanning, collected files, and URL data.
+
 ## [1.21.10] - 2026-10-06
 
 ### Fixed
