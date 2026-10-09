@@ -22,27 +22,29 @@
           <button id="tracking-dashboard-button" class="nav-link" type="button" title="Background trackers" aria-label="Open background trackers">
             <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r="2"/></svg><span>Trackers</span>
           </button>
-          <button id="sync-button" class="nav-link" type="button" disabled><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="6" r="3"/><path d="M4 17v-2a6 6 0 0 1 12 0v2"/></svg><span>Account</span></button>
-          <button id="integrations-button" class="nav-link" type="button" disabled><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M7 2v4m6-4v4M5 6h10v3a5 5 0 0 1-10 0V6Zm5 8v4"/></svg><span>Integrations</span></button>
         </nav>
+        <button id="workspace-settings-button" class="icon-button workspace-settings-button" type="button" popovertarget="workspace-settings-panel" aria-expanded="false" aria-controls="workspace-settings-panel" aria-label="Settings" title="Account and integrations"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M3 5h14M3 15h14M7 2v6m6 4v6"/></svg></button>
       </header>
 
       <div id="media-workspace" class="media-workspace">
       <section class="controls" aria-label="Media controls">
         <div class="collection-heading">
           <div class="context-copy">
-            <p class="eyebrow">Media collection</p>
             <h2 id="page-label">Scanning the current page…</h2>
             <p id="gallery-status" class="field-help" role="status" aria-live="polite">Your collection will appear here.</p>
             <a id="editor-source-link" class="text-button" target="_blank" rel="noopener noreferrer" hidden>Open source page</a>
           </div>
           <div class="gallery-toolbar">
-            <button id="refresh-media-button" class="secondary-button" type="button" title="Clear this website's remembered media and scan the current page again" disabled>Refresh media</button>
             <button id="stop-gallery-button" class="secondary-button" type="button" hidden>Stop scanning</button>
-            <button id="tracker-button" class="secondary-button tracker-button" type="button" popovertarget="tracker-panel" aria-expanded="false" aria-controls="tracker-panel" disabled>Track page</button>
+            <button id="collection-actions-button" class="icon-button" type="button" popovertarget="collection-actions-panel" aria-expanded="false" aria-controls="collection-actions-panel" aria-label="Page actions" title="Page actions"><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="4" cy="10" r="1"/><circle cx="10" cy="10" r="1"/><circle cx="16" cy="10" r="1"/></svg></button>
           </div>
         </div>
         <div class="search-toolbar">
+          <div class="media-type-tabs" role="group" aria-label="Media type">
+            <button id="media-type-any-button" type="button" aria-pressed="true">All</button>
+            <button id="media-type-image-button" type="button" aria-pressed="false">Images</button>
+            <button id="media-type-video-button" type="button" aria-pressed="false">Videos</button>
+          </div>
           <label class="search-box">
             <span class="visually-hidden">Filter media</span>
             <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg>
@@ -52,7 +54,7 @@
         </div>
         <div id="smart-filter-panel" class="smart-filter-panel settings-popover" popover aria-labelledby="filter-heading">
           <div class="popover-heading"><h2 id="filter-heading">Filter your collection</h2><button class="icon-button" type="button" popovertarget="smart-filter-panel" popovertargetaction="hide" aria-label="Close filters">×</button></div>
-          <label class="compact-field media-type-field">
+          <label class="compact-field media-type-field" hidden>
             <span>Media type</span>
             <select id="media-type-filter-select">
               <option value="any">All media</option>
@@ -95,7 +97,6 @@
             <label class="compact-field"><span>Minimum width</span><input id="min-width-input" type="number" min="0" max="1000000" step="1" value="0" inputmode="numeric"></label>
             <label class="compact-field"><span>Minimum height</span><input id="min-height-input" type="number" min="0" max="1000000" step="1" value="0" inputmode="numeric"></label>
             <label class="compact-field"><span>Orientation</span><select id="orientation-filter-select"><option value="any">Any orientation</option><option value="landscape">Landscape</option><option value="portrait">Portrait</option><option value="square">Square</option></select></label>
-            <label class="compact-field"><span>Sort by</span><select id="sort-select"><option value="page">Page order</option><option value="name">Filename</option><option value="resolution">Largest resolution</option></select></label>
           </div>
           <p class="field-help dimension-filter-help">Size and orientation filters show media with known dimensions. Clear these filters to inspect unknown sizes.</p>
           <div class="filter-view-options">
@@ -104,17 +105,15 @@
             <button id="downloaded-button" class="text-button downloaded-view-button" type="button" aria-pressed="false" disabled>Hide downloaded (0)</button>
           </div>
           <button id="reset-filters-button" class="text-button" type="button">Reset</button>
-          <label class="option-row scan-backgrounds" title="Include CSS background images on the next scan">
-            <input id="backgrounds-input" type="checkbox" checked><span>Include background images on the next scan</span>
-          </label>
-          <button id="clear-gallery-button" class="text-button danger-button" type="button" title="Clear saved media and selections for this website. Downloaded files and history are kept. Undo is available until you leave this website or close the manager." disabled>Clear saved media for this website</button>
         </div>
+        <div id="active-filter-chips" class="active-filter-chips" role="group" aria-label="Active filters" hidden></div>
         <div class="summary-row">
           <strong id="summary-label" role="status" aria-live="polite">0 media files</strong>
           <div id="selection-actions" class="selection-actions">
             <button id="select-all-button" class="text-button" type="button">Select all</button>
             <button id="select-none-button" class="text-button" type="button">Deselect</button>
           </div>
+            <label class="compact-field sort-field"><span>Sort by</span><select id="sort-select"><option value="page">Page order</option><option value="name">Filename</option><option value="resolution">Largest resolution</option></select></label>
           <div class="view-switch" role="group" aria-label="Media layout">
             <button id="grid-view-button" class="icon-button" type="button" aria-label="Grid view" aria-pressed="true" title="Grid view"><svg aria-hidden="true" viewBox="0 0 20 20"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="12" y="3" width="5" height="5" rx="1"/><rect x="3" y="12" width="5" height="5" rx="1"/><rect x="12" y="12" width="5" height="5" rx="1"/></svg></button>
             <button id="list-view-button" class="icon-button" type="button" aria-label="List view" aria-pressed="false" title="List view"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M7 5h10M7 10h10M7 15h10M3 5h.01M3 10h.01M3 15h.01"/></svg></button>
@@ -143,14 +142,40 @@
         </div>
         <p id="selection-warning" class="selection-warning" role="status" hidden></p>
         <div class="action-buttons">
-          <button id="upload-button" class="secondary-button" type="button" disabled>Upload selected</button>
-          <button id="archive-footer-button" class="secondary-button" type="button" disabled>Download ZIP</button>
           <button id="download-button" class="primary-button" type="button" disabled>Download selected</button>
+          <button id="download-options-button" class="primary-button icon-button download-options-button" type="button" popovertarget="download-options-panel" aria-expanded="false" aria-controls="download-options-panel" aria-label="More download options" disabled><svg aria-hidden="true" viewBox="0 0 20 20"><path d="m5 7 5 5 5-5"/></svg></button>
         </div>
       </footer>
       </div>
       <iframe id="workspace-frame" class="workspace-frame" title="Workspace" hidden></iframe>
     </div>
+
+    <section id="workspace-settings-panel" class="settings-popover workspace-settings-panel" popover aria-labelledby="workspace-settings-heading">
+      <div class="popover-heading"><h2 id="workspace-settings-heading">Settings</h2><button class="icon-button" type="button" popovertarget="workspace-settings-panel" popovertargetaction="hide" aria-label="Close settings">×</button></div>
+          <button id="sync-button" class="nav-link" type="button" disabled><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="6" r="3"/><path d="M4 17v-2a6 6 0 0 1 12 0v2"/></svg><span>Account</span></button>
+          <button id="integrations-button" class="nav-link" type="button" disabled><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M7 2v4m6-4v4M5 6h10v3a5 5 0 0 1-10 0V6Zm5 8v4"/></svg><span>Integrations</span></button>
+    </section>
+    <section id="collection-actions-panel" class="settings-popover collection-actions-panel" popover aria-labelledby="collection-actions-heading">
+      <div class="popover-heading"><h2 id="collection-actions-heading">Page actions</h2><button class="icon-button" type="button" popovertarget="collection-actions-panel" popovertargetaction="hide" aria-label="Close page actions">×</button></div>
+      <button id="tracker-button" class="secondary-button tracker-button" type="button" popovertarget="tracker-panel" aria-expanded="false" aria-controls="tracker-panel" disabled>Track page</button>
+      <button id="refresh-media-button" class="secondary-button" type="button" title="Clear this website's remembered media and selections, then scan the current page again. Downloaded files and history are kept." disabled>Clear collection and rescan…</button>
+          <label class="option-row scan-backgrounds" title="Include CSS background images on the next scan">
+            <input id="backgrounds-input" type="checkbox" checked><span>Include background images on the next scan</span>
+          </label>
+          <button id="clear-gallery-button" class="text-button danger-button" type="button" title="Clear saved media and selections for this website. Downloaded files and history are kept. Undo is available until you leave this website or close the manager." disabled>Clear saved media for this website</button>
+    </section>
+    <section id="download-options-panel" class="settings-popover download-options-panel" popover aria-labelledby="download-options-heading">
+      <div class="popover-heading"><h2 id="download-options-heading">Download selected</h2><button class="icon-button" type="button" popovertarget="download-options-panel" popovertargetaction="hide" aria-label="Close download options">×</button></div>
+      <button id="archive-footer-button" class="secondary-button" type="button" aria-describedby="archive-selection-help" disabled>Download ZIP</button>
+      <p id="archive-selection-help" class="field-help" hidden>ZIP supports images only. Choose Images, then Select matches only.</p>
+      <button id="upload-button" class="secondary-button" type="button" disabled>Upload selected</button>
+    </section>
+    <section id="media-actions-panel" class="settings-popover media-actions-panel" popover aria-labelledby="media-actions-heading">
+      <div class="popover-heading"><h2 id="media-actions-heading">Media actions</h2><button class="icon-button" type="button" popovertarget="media-actions-panel" popovertargetaction="hide" aria-label="Close media actions">×</button></div>
+      <button id="media-action-preview-button" class="secondary-button" type="button">Preview</button>
+      <button id="media-action-download-button" class="secondary-button" type="button">Download file</button>
+      <button id="media-action-ignore-button" class="secondary-button" type="button">Ignore on this website</button>
+    </section>
 
     <section id="download-settings-panel" class="folder-panel settings-popover" popover aria-labelledby="download-settings-heading">
       <div class="popover-heading"><h2 id="download-settings-heading">Download settings</h2><button class="icon-button" type="button" popovertarget="download-settings-panel" popovertargetaction="hide" aria-label="Close download settings">×</button></div>

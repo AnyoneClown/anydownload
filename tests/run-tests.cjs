@@ -64,7 +64,7 @@ const trackingJs = fs.readFileSync(path.join(root, "tracking/tracking.js"), "utf
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.name, "AnyDownload — Page Media Downloader");
-assert.equal(manifest.version, "1.21.11");
+assert.equal(manifest.version, "1.22.0");
 assert.equal(manifest.action.default_title, "Download page media");
 assert.equal(Core.MAX_BATCH_TOTAL_URL_LENGTH, 2000000);
 assert.deepEqual(manifest.permissions.sort(), ["activeTab", "alarms", "downloads", "menus", "notifications", "scripting", "storage"]);
@@ -164,14 +164,16 @@ for (const [selector, area] of [
     `${selector} must remain pinned to the ${area} grid area`
   );
 }
-assert.match(popupCss, /\.app-shell\s*\{[^}]*grid-template-columns:\s*156px minmax\(0,\s*1fr\);/s);
-assert.match(popupCss, /\.app-shell\s*\{[^}]*grid-template-areas:\s*"header workspace";/s);
+assert.match(popupCss, /\.app-shell\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s);
+assert.match(popupCss, /\.app-shell\s*\{[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\);/s);
+assert.match(popupCss, /\.app-shell\s*\{[^}]*grid-template-areas:\s*"header"\s*"workspace";/s);
 assert.match(popupCss, /\.app-shell\s*>\s*\*\s*\{[^}]*min-width:\s*0;/s);
 assert.match(popupCss, /html\.responsive-surface,\s*html\.responsive-surface body\s*\{[^}]*width:\s*100%;[^}]*height:\s*100%;/s);
 assert.match(popupCss, /html\.responsive-surface \.app-shell\s*\{[^}]*height:\s*100dvh;/s);
 assert.match(popupCss, /\.image-list\s*\{[^}]*overflow-x:\s*hidden;/s);
 assert.match(popupCss, /\.action-bar\s*\{[^}]*min-width:\s*0;/s);
-for (const panel of ["download-settings-panel", "tracker-panel", "smart-filter-panel"]) {
+for (const panel of ["download-settings-panel", "tracker-panel", "smart-filter-panel",
+  "workspace-settings-panel", "collection-actions-panel", "download-options-panel"]) {
   assert.match(popupHtml, new RegExp(`id="${panel}"[^>]*popover`));
   assert.match(popupHtml, new RegExp(`popovertarget="${panel}"`));
 }
@@ -184,14 +186,20 @@ assert.match(popupHtml, /id="history-button"[^>]*title="Download queue and stati
 assert.match(popupHtml, /id="queue-badge"[^>]*hidden/);
 assert.match(popupHtml, /id="tracking-dashboard-button"[^>]*title="Background trackers"/);
 const popupWorkspaceNav = popupHtml.match(/<nav\b[^>]*class="workspace-nav"[^>]*>([\s\S]*?)<\/nav>/)?.[1] || "";
-for (const controlId of ["history-button", "tracking-dashboard-button", "sync-button", "integrations-button"]) {
-  assert.match(popupWorkspaceNav, new RegExp(`id="${controlId}"[^>]*class="nav-link"`), `${controlId} must be in the main navigation`);
+for (const controlId of ["media-button", "history-button", "tracking-dashboard-button"]) {
+  assert.match(popupWorkspaceNav, new RegExp(`id="${controlId}"[^>]*class="nav-link(?: [^"]*)?"`), `${controlId} must be in the main navigation`);
 }
+const popupPanel = id => popupHtml.match(new RegExp(`<section\\b[^>]*id="${id}"[^>]*>([\\s\\S]*?)</section>`))?.[1] || "";
+for (const controlId of ["sync-button", "integrations-button"]) {
+  assert.doesNotMatch(popupWorkspaceNav, new RegExp(`id="${controlId}"`), `${controlId} belongs in workspace settings`);
+  assert.match(popupPanel("workspace-settings-panel"), new RegExp(`id="${controlId}"`));
+}
+assert.match(popupHtml, /id="workspace-settings-button"[^>]*popovertarget="workspace-settings-panel"/);
 assert.match(popupHtml, /<iframe\b[^>]*id="workspace-frame"[^>]*title="[^"]+"[^>]*hidden/);
 assert.match(trackingHtml, /data-source-link href="\.\.\/integrations\/integrations\.html"/,
   "The standalone Trackers dashboard must also offer Integrations");
 for (const controlId of ["media-button", "history-button", "tracking-dashboard-button", "sync-button", "integrations-button"]) {
-  const button = popupWorkspaceNav.match(new RegExp(`<button\\b[^>]*id="${controlId}"[^>]*>[\\s\\S]*?</button>`))?.[0] || "";
+  const button = popupHtml.match(new RegExp(`<button\\b[^>]*id="${controlId}"[^>]*>[\\s\\S]*?</button>`))?.[0] || "";
   assert.match(button, /<svg[^>]*aria-hidden="true"/,
     `${controlId} must keep its navigation icon`);
 }
@@ -226,8 +234,19 @@ assert.match(popupHtml, /id="downloaded-button"[^>]*aria-pressed="false"/);
 assert.match(popupHtml, /src="\.\.\/shared\/collector\.js"/);
 assert.match(popupHtml, /src="\.\.\/shared\/youtube\.js"/);
 assert.match(popupHtml, /src="\.\.\/shared\/filters\.js"/);
-assert.match(popupHtml, /id="archive-footer-button"[^>]*disabled>Download ZIP<\/button>/);
+assert.match(popupHtml, /id="archive-footer-button"[^>]*disabled/);
 assert.match(popupHtml, /id="download-button"[^>]*disabled>Download selected<\/button>/);
+assert.match(popupHtml, /id="download-options-button"[^>]*popovertarget="download-options-panel"/);
+assert.match(popupHtml, /id="archive-selection-help"/);
+const popupFooter = popupHtml.match(/<footer\b[^>]*class="action-bar"[^>]*>([\s\S]*?)<\/footer>/)?.[1] || "";
+for (const controlId of ["archive-footer-button", "upload-button"]) {
+  assert.match(popupPanel("download-options-panel"), new RegExp(`id="${controlId}"`));
+  assert.doesNotMatch(popupFooter, new RegExp(`id="${controlId}"`), "Secondary download actions belong in their menu");
+}
+assert.match(popupHtml, /id="media-actions-panel"[^>]*popover/);
+for (const action of ["preview", "download", "ignore"]) {
+  assert.match(popupHtml, new RegExp(`id="media-action-${action}-button"`));
+}
 for (const removedTopActionId of ["bulk-download-button", "archive-download-button"]) {
   assert.doesNotMatch(
     popupHtml,
@@ -288,11 +307,21 @@ assert.match(
   "Photos only must live inside the Filters popover"
 );
 const popupFilters = popupHtml.slice(popupHtml.indexOf('<div id="smart-filter-panel"'), popupHtml.indexOf('<div class="summary-row"'));
-for (const controlId of ["media-type-filter-select", "backgrounds-input", "clear-gallery-button"]) {
-  assert.match(popupFilters, new RegExp(`id="${controlId}"`), `${controlId} must live in Filters`);
+for (const controlId of ["backgrounds-input", "clear-gallery-button"]) {
+  assert.doesNotMatch(popupFilters, new RegExp(`id="${controlId}"`), `${controlId} belongs in collection actions, not view filters`);
 }
+for (const controlId of ["refresh-media-button", "tracker-button", "backgrounds-input", "clear-gallery-button"]) {
+  assert.match(popupPanel("collection-actions-panel"), new RegExp(`id="${controlId}"`));
+}
+for (const mediaType of ["any", "image", "video"]) {
+  const button = popupHtml.match(new RegExp(`<button\\b[^>]*id="media-type-${mediaType}-button"[^>]*>`))?.[0] || "";
+  assert.match(button, new RegExp(`aria-pressed="${mediaType === "any"}"`));
+  assert.doesNotMatch(button, /\bhidden\b/, "Frequently used media-type filters must be visible");
+}
+assert.match(popupHtml, /id="active-filter-chips"/);
 assert.doesNotMatch(popupHtml, /collect-gallery-button|fapello-pages-button|scan-help|>Find more media<|>Scan all pages</);
-assert.match(popupHtml, /class="gallery-toolbar"[\s\S]*?id="refresh-media-button"[\s\S]*?id="stop-gallery-button"[\s\S]*?id="tracker-button"/);
+assert.match(popupHtml, /id="refresh-media-button"[^>]*>[^<]*Clear collection and rescan/);
+assert.match(popupHtml, /id="stop-gallery-button"/);
 assert.doesNotMatch(popupHtml, /Collection settings|Saved website|>This page<|>Collect gallery</);
 assert.match(popupHtml, /id="media-type-filter-select"/);
 for (const format of ["mp4", "webm", "ogv", "mov", "m4v", "mkv"]) {
@@ -301,7 +330,7 @@ for (const format of ["mp4", "webm", "ogv", "mov", "m4v", "mkv"]) {
 assert.match(popupHtml, /id="format-filter-select"/);
 assert.match(popupHtml, /id="reset-filters-button"/);
 for (const id of ["min-width-input", "min-height-input", "orientation-filter-select", "sort-select"]) {
-  assert.ok(popupHtml.includes(`id="${id}"`), `${id} must be available in the Filters panel`);
+  assert.ok(popupHtml.includes(`id="${id}"`), `${id} must remain available in media controls`);
 }
 assert.match(popupJs, /browser\.tabs\.create\(createProperties\)/);
 assert.match(popupJs, /browser\.storage\.session\.set\(\{ \[key\]: payload \}\)/);
@@ -372,7 +401,7 @@ assert.match(
 );
 assert.match(popupJs, /type:\s*"GET_DOWNLOAD_DASHBOARD"/);
 assert.match(popupJs, /summaryOnly:\s*true/);
-assert.match(popupJs, /elements\["archive-footer-button"\]\.addEventListener\("click", downloadSelectedArchive\)/);
+assert.match(popupJs, /elements\["archive-footer-button"\]\.addEventListener\("click",/);
 assert.match(popupJs, /elements\["download-button"\]\.addEventListener\("click", downloadSelectedImages\)/);
 assert.match(popupJs, /function hostPermissionPatternsForImages\(images\)/);
 assert.match(popupJs, /browser\.permissions\.request\(\{ origins \}\)/);

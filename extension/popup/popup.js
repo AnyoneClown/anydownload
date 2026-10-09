@@ -828,6 +828,9 @@
   let telegramPreviewQueue = Promise.resolve();
   let previewIndex = 0;
   let previewOpener = null;
+  let mediaActionTarget = null;
+  let mediaActionsOpener = null;
+  let activeFilterChipSignature = "";
 
   function markFilenamePreviewsDirty() {
     filenamePreviewsDirty = true;
@@ -859,6 +862,12 @@
   function cacheElements() {
     const ids = [
       "media-workspace", "workspace-frame", "media-button",
+      "workspace-settings-button", "workspace-settings-panel",
+      "collection-actions-button", "collection-actions-panel",
+      "download-options-button", "download-options-panel", "archive-selection-help",
+      "media-actions-panel", "media-actions-heading",
+      "media-action-preview-button", "media-action-download-button", "media-action-ignore-button",
+      "media-type-any-button", "media-type-image-button", "media-type-video-button", "active-filter-chips",
       "gallery-undo", "undo-clear-button",
       "editor-source-link",
       "gallery-pagination", "previous-page-button", "next-page-button", "pagination-label",
@@ -1562,6 +1571,10 @@
             : `Select ${filename}`
         );
         record.previewButton.setAttribute("aria-label", `Preview ${filename}`);
+        if (record.moreButton) {
+          record.moreButton.title = `Actions for ${filename}`;
+          record.moreButton.setAttribute("aria-label", `Actions for ${filename}`);
+        }
       }
       if (!records.size) {
         renderedNameNodes.delete(url);
@@ -1596,6 +1609,7 @@
       if (requestId) url.searchParams.set("request", requestId);
       if (jobId) url.searchParams.set("job", jobId);
     }
+    closeMediaActions();
     url.searchParams.set("embedded", "1");
     if (Number.isInteger(state.sourceTabId)) url.searchParams.set("sourceTabId", state.sourceTabId);
     if (trackerId) url.searchParams.set("editTrackerId", trackerId);
@@ -1615,7 +1629,9 @@
       if (key === navigationView) elements[id].setAttribute("aria-current", "page");
       else elements[id].removeAttribute("aria-current");
     }
-    for (const id of ["smart-filter-panel", "download-settings-panel", "tracker-panel"]) {
+    elements["workspace-settings-button"].classList.toggle("current", ["sync", "integrations"].includes(navigationView));
+    for (const id of ["smart-filter-panel", "download-settings-panel", "tracker-panel",
+      "workspace-settings-panel", "collection-actions-panel", "download-options-panel", "media-actions-panel"]) {
       if (elements[id].matches(":popover-open")) elements[id].hidePopover();
     }
   }
@@ -2163,14 +2179,14 @@
     return `${Date.now().toString(36)}-${random[0].toString(36)}-${random[1].toString(36)}`;
   }
 
-  function openGalleryPreview(image) {
+  function openGalleryPreview(image, opener = document.activeElement) {
     previewItems = filteredImages().map(mediaIdentityKey);
     previewIndex = previewItems.indexOf(mediaIdentityKey(image));
     if (previewIndex < 0) {
       previewItems = [mediaIdentityKey(image)];
       previewIndex = 0;
     }
-    previewOpener = document.activeElement;
+    previewOpener = opener;
     updateGalleryPreview();
     elements["media-preview-dialog"].showModal();
   }
@@ -2556,7 +2572,6 @@
   function smartFilterCount(filters) {
     const normalized = Filters.normalizeFilters(filters);
     return Number(normalized.photosOnly) +
-      Number(normalized.mediaType !== "any") +
       Number(normalized.format !== "any") + Number(normalized.minWidth > 0) +
       Number(normalized.minHeight > 0) + Number(normalized.orientation && normalized.orientation !== "any");
   }
@@ -2567,6 +2582,67 @@
     const button = elements["smart-filters-button"];
     button.textContent = count ? `Filters (${count})` : "Filters";
     button.classList.toggle("active", count > 0 || elements["smart-filter-panel"].matches(":popover-open"));
+  }
+
+  function updateMediaTypeTabs() {
+    const counts = { any: 0, image: 0, video: 0 };
+    for (const image of state.images) {
+      if (isImageIgnored(image)) continue;
+      counts.any += 1;
+      counts[mediaTypeFor(image)] += 1;
+    }
+    for (const [type, label] of [["any", "All"], ["image", "Images"], ["video", "Videos"]]) {
+      const button = elements[`media-type-${type}-button`];
+      button.textContent = `${label} (${counts[type].toLocaleString()})`;
+      button.setAttribute("aria-pressed", String(state.smartFilters.mediaType === type));
+    }
+  }
+
+  function renderActiveFilterChips() {
+    const filters = state.smartFilters;
+    const chips = [];
+    if (filters.photosOnly) chips.push(["photosOnly", "Photos only"]);
+    if (filters.format !== "any") chips.push(["format", filters.format.toUpperCase()]);
+    if (filters.minWidth) chips.push(["minWidth", `Width ≥ ${filters.minWidth.toLocaleString()} px`]);
+    if (filters.minHeight) chips.push(["minHeight", `Height ≥ ${filters.minHeight.toLocaleString()} px`]);
+    if (filters.orientation !== "any") chips.push(["orientation", filters.orientation]);
+    if (state.instagramCollectionFilter !== "all") {
+      const option = Array.from(elements["instagram-collection-filter-select"].options)
+        .find((item) => item.value === state.instagramCollectionFilter);
+      chips.push(["instagramCollection", option?.textContent || "Instagram collection"]);
+    }
+    if (state.hideDownloaded) chips.push(["hideDownloaded", "Not downloaded"]);
+    if (state.showIgnored) chips.push(["showIgnored", "Ignored"]);
+    const container = elements["active-filter-chips"];
+    container.hidden = chips.length === 0 || state.showSelected;
+    const signature = JSON.stringify(chips);
+    if (signature === activeFilterChipSignature) return;
+    activeFilterChipSignature = signature;
+    container.replaceChildren(...chips.map(([key, label]) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "text-button filter-chip";
+      button.dataset.filterKey = key;
+      button.textContent = `${label} ×`;
+      button.setAttribute("aria-label", `Remove filter: ${label}`);
+      button.addEventListener("click", () => {
+        state.showSelected = false;
+        if (key === "instagramCollection") {
+          state.instagramCollectionFilter = "all";
+          elements["instagram-collection-filter-select"].value = "all";
+          updateSmartFilterButton();
+          resetGalleryPage();
+        } else if (key === "hideDownloaded" || key === "showIgnored") {
+          state[key] = false;
+          resetGalleryPage();
+        } else {
+          applySmartFiltersToControls({ ...state.smartFilters, [key]: Filters.DEFAULT_FILTERS[key] });
+          handleSmartFilterChange();
+        }
+        elements["smart-filters-button"].focus({ preventScroll: true });
+      });
+      return button;
+    }));
   }
 
   function imageMatchesSmartFilters(image) {
@@ -3040,6 +3116,9 @@
 
   function updateSummary(visibleImages) {
     updateGalleryControls();
+    updateMediaTypeTabs();
+    renderActiveFilterChips();
+    updateMediaActions();
     elements["page-label"].title = elements["page-label"].textContent;
     scheduleGallerySave();
     const total = state.images.length;
@@ -3116,8 +3195,7 @@
           : downloadedCount
             ? `${downloadedCount.toLocaleString()} previously downloaded · check one to download again`
             : "Choose files to download";
-    const warning = [hiddenSelected ? `Download includes ${hiddenSelected} files hidden by your filters. Review selected before downloading.` : "",
-      selectedHasVideo ? "ZIP supports images only. Choose Images, then Select matches only." : ""].filter(Boolean).join(" ");
+    const warning = hiddenSelected ? `Download includes ${hiddenSelected} files hidden by your filters. Review selected before downloading.` : "";
     elements["selection-warning"].textContent = warning;
     elements["selection-warning"].hidden = state.showIgnored || !warning;
     elements["download-button"].textContent = selected === 1
@@ -3129,6 +3207,9 @@
       ? `Download settings · Downloads/${folder.value}`
       : `Fix destination folder: ${folder.error}`;
     elements["download-button"].disabled = state.busy || Boolean(galleryCollection) || selected === 0 || !folder.ok || !template.ok;
+    elements["download-options-button"].hidden = state.showIgnored;
+    elements["download-options-button"].disabled = state.busy || Boolean(galleryCollection) || selected === 0;
+    elements["archive-selection-help"].hidden = !selectedHasVideo;
     elements["archive-footer-button"].disabled = state.busy || Boolean(galleryCollection) || selected === 0 ||
       selectedHasVideo || !folder.ok || !template.ok;
     elements["archive-footer-button"].title = selectedHasVideo
@@ -3147,6 +3228,54 @@
       if (image) updatePreviewSelection(image);
       else elements["media-preview-dialog"].close();
     }
+  }
+
+  function hidePanel(id) {
+    const panel = elements[id];
+    if (panel.matches(":popover-open")) panel.hidePopover();
+  }
+
+  function currentMediaActionImage() {
+    if (!mediaActionTarget || mediaActionTarget.generation !== sourcePageGeneration ||
+      mediaActionTarget.incognito !== state.incognito || mediaActionTarget.sourceTabId !== state.sourceTabId) return null;
+    return state.images.find((image) => mediaIdentityKey(image) === mediaActionTarget.identity) || null;
+  }
+
+  function closeMediaActions() {
+    hidePanel("media-actions-panel");
+    mediaActionTarget = null;
+    if (mediaActionsOpener) mediaActionsOpener.setAttribute("aria-expanded", "false");
+  }
+
+  function updateMediaActions() {
+    if (!mediaActionTarget) return;
+    const image = currentMediaActionImage();
+    if (!image) {
+      closeMediaActions();
+      return;
+    }
+    const ignored = isImageIgnored(image);
+    const status = downloadStatusFor(image);
+    elements["media-actions-heading"].textContent = friendlyFilename(image);
+    elements["media-action-preview-button"].disabled = state.busy;
+    elements["media-action-download-button"].hidden = ignored;
+    elements["media-action-download-button"].disabled = state.busy || Boolean(galleryCollection) || status === "queued";
+    elements["media-action-download-button"].textContent = status === "downloaded" ? "Download again"
+      : status === "queued" ? "Already queued" : status === "failed" ? "Retry download" : "Download file";
+    elements["media-action-ignore-button"].disabled = state.busy;
+    elements["media-action-ignore-button"].textContent = ignored ? "Restore media" : "Ignore on this website";
+  }
+
+  function openMediaActions(image, opener) {
+    if (mediaActionsOpener) mediaActionsOpener.setAttribute("aria-expanded", "false");
+    mediaActionTarget = { identity: mediaIdentityKey(image), generation: sourcePageGeneration,
+      incognito: state.incognito, sourceTabId: state.sourceTabId };
+    mediaActionsOpener = opener;
+    updateMediaActions();
+    if (!mediaActionTarget) return;
+    elements["media-actions-panel"].showPopover();
+    opener.setAttribute("aria-expanded", "true");
+    elements["media-action-preview-button"].focus();
   }
 
   function makeImageRow(image) {
@@ -3275,44 +3404,22 @@
 
     const actions = document.createElement("div");
     actions.className = "row-actions";
-    actions.appendChild(previewButton);
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "row-action-button row-more-button";
+    more.textContent = "More";
+    more.title = `Actions for ${initialFilename}`;
+    more.setAttribute("aria-label", `Actions for ${initialFilename}`);
+    more.setAttribute("aria-expanded", "false");
+    more.setAttribute("aria-controls", "media-actions-panel");
+    more.addEventListener("click", () => openMediaActions(image, more));
+    for (const record of nameRecords) {
+      if (record.checkbox === checkbox) record.moreButton = more;
+    }
+    actions.append(previewButton, more);
     if (ignored) {
-      const restore = document.createElement("button");
-      restore.type = "button";
-      restore.className = "row-action-button restore";
-      restore.textContent = "Restore";
-      restore.title = "Stop ignoring this media item";
-      restore.disabled = state.busy;
-      restore.addEventListener("click", () => restoreImage(image));
-      actions.appendChild(restore);
       row.append(thumbnailFrame, copy, actions);
     } else {
-      const ignore = document.createElement("button");
-      ignore.type = "button";
-      ignore.className = "row-action-button ignore";
-      ignore.textContent = "Ignore";
-      ignore.title = "Hide this media item on this website";
-      ignore.disabled = state.busy;
-      ignore.addEventListener("click", () => ignoreImage(image));
-
-      const download = document.createElement("button");
-      download.type = "button";
-      download.className = "row-action-button download";
-      download.textContent = downloadStatus === "downloaded"
-        ? "Again"
-        : downloadStatus === "queued"
-          ? "Queued"
-          : downloadStatus === "failed"
-            ? "Retry"
-            : "Save";
-      download.title = downloadStatus === "downloaded"
-        ? `Download this ${video ? "video" : "image"} again`
-        : `Download only this ${video ? "video" : "image"}`;
-      download.disabled = state.busy || Boolean(galleryCollection) || downloadStatus === "queued";
-      download.addEventListener("click", () => requestDownloads([image], {
-        allowRedownload: downloadStatus === "downloaded"
-      }));
-      actions.append(ignore, download);
       row.append(checkbox, thumbnailFrame, copy, actions);
       row.addEventListener("click", (event) => {
         if (!checkbox.disabled && !event.target.closest("button, input")) {
@@ -5479,6 +5586,45 @@
   }
 
   function wireEvents() {
+    for (const type of ["any", "image", "video"]) {
+      elements[`media-type-${type}-button`].addEventListener("click", () => {
+        elements["media-type-filter-select"].value = type;
+        state.showIgnored = false;
+        handleSmartFilterChange();
+      });
+    }
+    for (const [panel, trigger] of [
+      ["workspace-settings-panel", "workspace-settings-button"],
+      ["collection-actions-panel", "collection-actions-button"],
+      ["download-options-panel", "download-options-button"]
+    ]) {
+      elements[panel].addEventListener("toggle", () => {
+        elements[trigger].setAttribute("aria-expanded", String(elements[panel].matches(":popover-open")));
+      });
+    }
+    elements["media-actions-panel"].addEventListener("toggle", () => {
+      const open = elements["media-actions-panel"].matches(":popover-open");
+      if (mediaActionsOpener) mediaActionsOpener.setAttribute("aria-expanded", String(open));
+      if (!open) mediaActionTarget = null;
+    });
+    elements["media-action-preview-button"].addEventListener("click", () => {
+      const image = currentMediaActionImage();
+      const opener = mediaActionsOpener;
+      closeMediaActions();
+      if (image && !state.busy) openGalleryPreview(image, opener);
+    });
+    elements["media-action-download-button"].addEventListener("click", () => {
+      const image = currentMediaActionImage();
+      closeMediaActions();
+      if (image && !state.busy && !galleryCollection && !isImageIgnored(image) && downloadStatusFor(image) !== "queued") {
+        return requestDownloads([image], { allowRedownload: downloadStatusFor(image) === "downloaded" });
+      }
+    });
+    elements["media-action-ignore-button"].addEventListener("click", () => {
+      const image = currentMediaActionImage();
+      closeMediaActions();
+      if (image && !state.busy) return isImageIgnored(image) ? restoreImage(image) : ignoreImage(image);
+    });
     elements["sort-select"].addEventListener("change", () => {
       state.sort = ["name", "resolution"].includes(elements["sort-select"].value) ? elements["sort-select"].value : "page";
       resetGalleryPage();
@@ -5543,9 +5689,13 @@
     }
     elements["stop-gallery-button"].addEventListener("click", stopGalleryCollection);
     elements["refresh-media-button"].addEventListener("click", () => {
+      hidePanel("collection-actions-panel");
       return refreshMedia().catch((error) => setNotice(error.message || String(error), "error"));
     });
-    elements["clear-gallery-button"].addEventListener("click", clearSiteGallery);
+    elements["clear-gallery-button"].addEventListener("click", () => {
+      hidePanel("collection-actions-panel");
+      return clearSiteGallery();
+    });
     globalThis.addEventListener("pagehide", () => {
       stopGalleryCollection();
       saveCurrentGallery();
@@ -5657,8 +5807,14 @@
       state.explicitRedownloads.clear();
       renderImages();
     });
-    elements["archive-footer-button"].addEventListener("click", downloadSelectedArchive);
-    elements["upload-button"].addEventListener("click", openUploadDestination);
+    elements["archive-footer-button"].addEventListener("click", () => {
+      hidePanel("download-options-panel");
+      return downloadSelectedArchive();
+    });
+    elements["upload-button"].addEventListener("click", () => {
+      hidePanel("download-options-panel");
+      return openUploadDestination();
+    });
     elements["upload-connection-select"].addEventListener("change", changeUploadConnection);
     elements["confirm-upload-destination-button"].addEventListener("click", confirmUploadDestination);
     elements["cancel-upload-destination-button"].addEventListener("click", () => elements["upload-destination-dialog"].close());

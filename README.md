@@ -16,6 +16,14 @@ To load it in your existing Firefox profile:
 2. Select `extension/manifest.json`.
 3. Click **Reload** after editing source files. The temporary add-on is removed when Firefox restarts.
 
+## Media manager
+
+Use **All / Images / Videos** above the gallery to narrow the collection. Advanced filters appear as removable chips; filtering preserves your selection, and the footer identifies selected files hidden by filters.
+
+Use **Download** for individual files, or its arrow menu for an image-only ZIP or an Immich upload. Each card's **More** menu offers download and ignore/restore actions. **Settings** contains Account and Integrations. **Page actions** contains tracking, scan options, and **Clear collection and rescan…**, which resets the saved collection while keeping downloaded files and history.
+
+The same manager opens in the Firefox Sidebar, with a compact list at narrow widths.
+
 ## Test and lint
 
 The Node tests require no dependency installation.

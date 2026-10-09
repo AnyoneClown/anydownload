@@ -4,6 +4,16 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.22.0] - 2026-10-09
+
+### Changed
+
+- Put Media, Downloads, and Trackers in a compact top navigation bar, with Account and Integrations in Settings. Use the full gallery width in the popup and Firefox Sidebar, with a readable list on the narrowest screens.
+- Expose All, Images, and Videos filters with collection counts, and show removable chips for active filters without clearing selected files.
+- Simplify media cards to selection, preview, and an actions menu. Keep actions bound to the current media record when live updates change its URL, and invalidate them when the source or private context changes.
+- Keep one primary Download action, with ZIP and Upload in its menu. Explain the image-only ZIP restriction there while retaining visible warnings about selected files hidden by filters.
+- Move scanning and collection management into Page actions, and explicitly label the collection-clearing rescan. Preserve keyboard focus, touch targets, private storage separation, and existing permissions.
+
 ## [1.21.11] - 2026-10-06
 
 ### Fixed

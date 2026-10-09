@@ -179,7 +179,7 @@ source = source.replace(entry, `  globalThis.ui = { cacheElements, wireEvents, a
     updateSummary, renderImages, makeImageRow, requireValidFilenameTemplate, requestDownloads, finishArchiveDownload,
     filteredImages, selectedDownloadableImages, resetMediaFilters, openGalleryPreview, openImagePreview,
     moveGalleryPreview, initializeTrackerEditor, saveTracker, focusIgnoredToggle, persistSettings, ignoreStorageArea,
-    handleSettingsStorageChanges, showWorkspace, setIncognitoContext, state, elements };
+    handleSettingsStorageChanges, showWorkspace, setIncognitoContext, beginSidebarTransition, state, elements };
 ${entry}`);
 vm.runInContext(source, context);
 const ui = context.ui;
@@ -310,6 +310,8 @@ for (const button of actions.children) {
 const previewButton = actions.children[0];
 assert.equal(previewButton.tagName, "BUTTON");
 assert.equal(previewButton.textContent, "Preview");
+assert.equal(actions.children.length, 2, "Cards expose preview and a compact per-file actions menu");
+assert.match(actions.children[1].className, /row-more-button/);
 assert.equal(thumbnail.tagName, "DIV");
 assert.equal(openedTabs.length, 0, "Card clicks must not open previews");
 
@@ -418,7 +420,7 @@ for (const embedded of [false, true]) {
     ["media", ""], ["history", ""], ["tracking", ""], ["sync", ""], ["integrations", ""],
     ["upload", "?job=job-12345"]
   ] : [],
-    "Embedded navigation works without a source tab and updates the persistent sidebar");
+    "Embedded navigation works without a source tab and updates workspace navigation");
 }
 
 (async () => {
@@ -487,6 +489,22 @@ for (const embedded of [false, true]) {
   ui.state.selected.clear();
   for (const image of ui.state.images) ui.state.selected.add(image.url);
   const selectedBeforeFilters = [...ui.state.selected];
+  ui.updateSummary();
+  assert.equal(get("archive-footer-button").disabled, true, "ZIP refuses mixed image and video selections");
+  assert.equal(get("archive-selection-help").hidden, false, "Image-only help explains the disabled ZIP action");
+  assert.doesNotMatch(get("selection-warning").textContent, /ZIP/, "ZIP limitations stay beside the ZIP action");
+  const typeLabels = { any: "All (3)", image: "Images (2)", video: "Videos (1)" };
+  for (const type of ["image", "video", "any"]) {
+    get(`media-type-${type}-button`).click();
+    assert.equal(get("media-type-filter-select").value, type, "Visible tabs keep the filter model synchronized");
+    for (const [name, label] of Object.entries(typeLabels)) {
+      const button = get(`media-type-${name}-button`);
+      assert.equal(button.getAttribute("aria-pressed"), String(name === type), "Exactly one media type is active");
+      assert.equal(button.textContent, label);
+    }
+    assert.equal(ui.filteredImages().length, type === "any" ? 3 : type === "image" ? 2 : 1);
+    assert.deepEqual([...ui.state.selected], selectedBeforeFilters, "Changing media tabs preserves hidden selections");
+  }
   get("media-type-filter-select").value = "video";
   get("media-type-filter-select").listeners.change();
   assert.deepEqual(Array.from(ui.filteredImages(), item => item.url), [clip.url]);
@@ -495,6 +513,16 @@ for (const embedded of [false, true]) {
   get("min-width-input").listeners.change();
   assert.equal(ui.filteredImages().length, 0);
   assert.deepEqual(Array.from(ui.selectedDownloadableImages(), item => item.url), selectedBeforeFilters);
+  const widthChip = get("active-filter-chips").children.find(button => button.dataset.filterKey === "minWidth");
+  assert.ok(widthChip, "An active dimension filter has a removable visible chip");
+  widthChip.click();
+  assert.equal(ui.state.smartFilters.minWidth, 0);
+  assert.equal(get("media-type-filter-select").value, "video", "Removing a chip preserves other active filters");
+  assert.deepEqual(Array.from(ui.filteredImages(), item => item.url), [clip.url]);
+  assert.deepEqual([...ui.state.selected], selectedBeforeFilters, "Removing a chip never silently changes selection");
+  assert.equal(get("active-filter-chips").children.some(button => button.dataset.filterKey === "minWidth"), false);
+  get("min-width-input").value = "2500";
+  get("min-width-input").listeners.change();
   get("selected-label").listeners.click();
   assert.equal(ui.state.showSelected, true);
   assert.equal(get("selected-label").attributes["aria-pressed"], "true");
@@ -573,7 +601,9 @@ for (const embedded of [false, true]) {
   get("filename-template-input").value = Templates.DEFAULT_TEMPLATE;
   get("media-type-filter-select").value = "video";
   get("media-type-filter-select").listeners.change();
-  await ui.finishArchiveDownload(ui.selectedDownloadableImages(), { value: "Website media" }, Promise.resolve(true), Templates.DEFAULT_TEMPLATE);
+  get("download-options-panel").showPopover();
+  await get("archive-footer-button").listeners.click();
+  assert.equal(get("download-options-panel").open, false, "Starting a ZIP closes its action menu");
   const archive = Object.entries(previewSession).find(([key]) => key.startsWith("archiveJobRequest:"))?.[1];
   assert.ok(archive, "Filtered selections must still create an archive");
   assert.deepEqual(Array.from(archive.items, item => item.url), [first.url, second.url]);
@@ -694,6 +724,107 @@ for (const embedded of [false, true]) {
   assert.deepEqual(Array.from(downloadMessages.at(-1).items, item => item.url), [refreshed[1].url],
     "Preview download uses the latest record after live URL rotation");
 
+  const openRowActions = image => {
+    const menuRow = ui.makeImageRow(image);
+    const more = menuRow.children.at(-1).children.find(button => /row-more-button/.test(button.className));
+    assert.ok(more, "Every card has a per-file actions button");
+    more.click();
+    assert.equal(get("media-actions-panel").open, true);
+    return more;
+  };
+  ui.state.images = signed;
+  ui.state.selected.clear();
+  const menuPreviewOpener = openRowActions(signed[0]);
+  ui.state.images = refreshed;
+  ui.updateSummary();
+  get("media-action-preview-button").listeners.click();
+  assert.equal(get("media-preview-stage").children[0].src, refreshed[0].url,
+    "Per-file preview resolves the latest signed URL instead of its stale card object");
+  assert.equal(get("media-actions-panel").open, false, "Opening preview closes its action menu");
+  get("close-preview-button").listeners.click();
+  assert.equal(context.document.activeElement, menuPreviewOpener,
+    "Closing a menu-opened preview returns focus to the visible card action button");
+  assert.equal(ui.state.selected.size, 0, "Opening a per-file menu or preview never selects its card");
+
+  ui.state.images = signed;
+  openRowActions(signed[1]);
+  ui.state.images = refreshed;
+  ui.updateSummary();
+  await get("media-action-download-button").listeners.click();
+  await new Promise(setImmediate);
+  assert.deepEqual(Array.from(downloadMessages.at(-1).items, item => item.url), [refreshed[1].url],
+    "Per-file download follows stable adapter identity after live URL rotation");
+
+  ui.state.images = [second];
+  openRowActions(second);
+  ui.state.images = [{ ...second, downloadStatus: "queued" }];
+  ui.updateSummary();
+  assert.equal(get("media-action-download-button").disabled, true,
+    "A live queue update disables an already open per-file download action");
+  get("media-actions-panel").hidePopover();
+
+  ui.state.images = [first];
+  first.downloadStatus = "downloaded";
+  first.downloadFingerprint = "per-file-redownload";
+  openRowActions(first);
+  assert.match(get("media-action-download-button").textContent, /again/i);
+  await get("media-action-download-button").listeners.click();
+  await new Promise(setImmediate);
+  assert.deepEqual(Array.from(downloadMessages.at(-1).items, item => item.url), [first.url],
+    "The per-file menu explicitly allows downloading a completed file again");
+  delete first.downloadStatus;
+  delete first.downloadFingerprint;
+  ui.state.explicitRedownloads.clear();
+
+  ui.state.images = [second];
+  ui.state.ignoredKeys.add(Core.ignoreKeyForUrl(second.url));
+  openRowActions(second);
+  assert.match(get("media-action-ignore-button").textContent, /^Restore\b/);
+  await get("media-action-ignore-button").listeners.click();
+  await new Promise(setImmediate);
+  assert.equal(ui.state.ignoredKeys.has(Core.ignoreKeyForUrl(second.url)), false,
+    "The same per-file menu restores ignored media");
+
+  ui.state.images = [first];
+  openRowActions(first);
+  const requestsBeforeRemoval = downloadMessages.length;
+  ui.state.images = [];
+  ui.updateSummary();
+  assert.equal(get("media-actions-panel").open, false, "Removing the current media closes its action menu");
+  await get("media-action-download-button").listeners.click();
+  await new Promise(setImmediate);
+  assert.equal(downloadMessages.length, requestsBeforeRemoval, "A stale per-file action never downloads a removed record");
+  ui.state.images = [first];
+  openRowActions(first);
+  ui.state.images = [];
+  await get("media-action-download-button").listeners.click();
+  await new Promise(setImmediate);
+  assert.equal(downloadMessages.length, requestsBeforeRemoval,
+    "Action handlers also reject removed records before the next gallery render");
+
+  ui.state.images = [first];
+  openRowActions(first);
+  ui.setIncognitoContext(true);
+  assert.equal(get("media-actions-panel").open, false, "A privacy-context switch closes per-file actions");
+  await get("media-action-download-button").listeners.click();
+  await new Promise(setImmediate);
+  assert.equal(downloadMessages.length, requestsBeforeRemoval,
+    "A closed action cannot download a normal-context record after entering private browsing");
+  ui.setIncognitoContext(false);
+
+  const menuSource = { sourceTabId: ui.state.sourceTabId, sourceWindowId: ui.state.sourceWindowId,
+    pageUrl: ui.state.pageUrl, pageTitle: ui.state.pageTitle };
+  ui.state.images = [first];
+  openRowActions(first);
+  ui.beginSidebarTransition(8, { id: 8, windowId: 1, url: "https://other.example/", title: "Another page", incognito: false });
+  assert.equal(get("media-actions-panel").open, false, "Following another tab closes the old media actions");
+  ui.state.images = [first];
+  await get("media-action-download-button").listeners.click();
+  await new Promise(setImmediate);
+  assert.equal(downloadMessages.length, requestsBeforeRemoval,
+    "A stale action cannot target the same media identity in a different source-page generation");
+  Object.assign(ui.state, menuSource);
+
   ui.state.images = [clip];
   ui.openGalleryPreview(clip);
   const clearedVideo = get("media-preview-stage").children[0];
@@ -793,5 +924,5 @@ for (const embedded of [false, true]) {
   assert.equal(editor.ui.state.tracker.enabled, false, "Updating a paused tracker must preserve its state");
   availableTrackers = [];
   await assert.rejects(editor.ui.initializeTrackerEditor(), /no longer exists/);
-  console.log("Popup UI tests passed: card selection, preview buttons, layout, filters, validation, and navigation.");
+  console.log("Popup UI tests passed: selection, media tabs, filter chips, per-file actions, live updates, preview focus, privacy, and navigation.");
 })().catch(error => { console.error(error); process.exitCode = 1; });
