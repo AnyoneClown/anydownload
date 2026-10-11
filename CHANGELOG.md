@@ -4,6 +4,13 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.22.1] - 2026-10-11
+
+### Fixed
+
+- Give Select all, Deselect, and sorting controls visible borders, readable labels, and consistent spacing in the popup and Sidebar.
+- Center the three-dot menu and preview icons inside media action buttons, including touch layouts.
+
 ## [1.22.0] - 2026-10-09
 
 ### Changed

@@ -367,7 +367,7 @@ svg {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 4px 8px;
+  gap: 8px;
   min-height: 48px;
   padding-block: 6px;
 }
@@ -421,14 +421,15 @@ svg {
 }
 .sort-field select {
   width: auto;
-  max-width: 140px;
-  min-height: 32px;
-  padding: 5px 2px;
-  border: 0;
-  border-radius: 5px;
-  color: var(--ink-muted);
-  background: transparent;
-  font-size: 11px;
+  max-width: 160px;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: var(--surface);
+  font-size: 12px;
+  cursor: pointer;
 }
 
 .selection-actions,
@@ -440,8 +441,21 @@ svg {
 }
 
 .selection-actions .text-button {
-  padding: 6px;
-  font-size: 11px;
+  min-height: 36px;
+  padding: 7px 10px;
+  border-color: var(--line-strong);
+  color: var(--ink);
+  background: var(--surface);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.selection-actions { flex-wrap: nowrap; gap: 6px; }
+
+.selection-actions .text-button:hover:not(:disabled),
+.sort-field select:hover {
+  border-color: var(--brand);
+  background: var(--surface-subtle);
 }
 
 .view-switch {
@@ -884,7 +898,8 @@ svg {
 .row-action-button {
   width: 32px;
   min-height: 32px;
-  padding: 7px;
+  gap: 0;
+  padding: 0;
   color: var(--ink-muted);
   font-size: 0;
 }
@@ -1142,11 +1157,11 @@ svg {
 }
 
 @container (max-width: 420px) {
-  .summary-row { gap: 0 5px; }
-  .summary-row > strong { flex: 1 1 100%; }
+  .summary-row { gap: 8px 6px; }
+  .summary-row > strong { order: -2; flex: 1 1 calc(100% - 72px); }
+  .summary-row .view-switch { order: -1; }
   .sort-field { margin-left: auto; }
-  .sort-field select { max-width: 120px; }
-  .selection-actions .text-button { padding-inline: 4px; }
+  .sort-field select { max-width: 150px; }
   .smart-filter-panel:popover-open { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 }
 
@@ -1186,7 +1201,8 @@ svg {
   .row-more-button { position: static; background: transparent; box-shadow: none; }
   .image-name { font-size: 11px; }
   .image-meta { white-space: normal; overflow-wrap: anywhere; }
-  .sort-field select { max-width: 105px; }
+  .summary-row > strong { flex-basis: 100%; }
+  .sort-field select { max-width: 128px; }
   .view-switch { display: none; }
 }
 
@@ -1562,6 +1578,7 @@ html.tracker-editor body { overflow: auto; }
 @media (pointer: coarse) {
   button, .icon-button, .text-button, .row-action-button, .tracker-action,
   .view-switch .icon-button, .destination-button, .selection-review-button,
+  .selection-actions .text-button,
   .action-copy .text-button, .action-buttons .primary-button, .action-buttons .secondary-button,
   .action-buttons #download-button, .action-buttons .download-options-button,
   .media-type-tabs button, .active-filter-chips button,
