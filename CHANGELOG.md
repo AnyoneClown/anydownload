@@ -4,6 +4,22 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.22.2] - 2026-10-16
+
+### Changed
+
+- Reuse bounded URL parsing and ancestor metadata during page scans, and skip redundant media queries after a complete DOM traversal.
+- Generate unselected filename previews only for visible gallery rows, skip filename refreshes when dimensions cannot affect the template, and retain media cards when download statuses are unchanged.
+- Copy only affected queue tasks for download progress and scheduling, refresh each job once during batched reconciliation, and validate retained queue details once when making room for a large download batch.
+- Add repeatable synthetic queue benchmarks and regression checks for expensive-operation counts.
+- Add a real Firefox comparison harness with local large galleries, UI timings, native-download validation, private-window checks and live-update regressions.
+- Speed up large-gallery opening and reopening with indexed selected-filename collision checks and fewer saved-gallery URL validations; preserve legacy Unicode filename behavior and all storage bounds.
+- Measure fresh and saved manager openings separately, with startup-stage timings and a visible-frame proxy, against either a Git revision or an uncommitted extension snapshot.
+
+### Fixed
+
+- Prevent duplicate maximum-length queue IDs from hanging normalization by reserving space for their uniqueness suffix.
+
 ## [1.22.1] - 2026-10-11
 
 ### Fixed

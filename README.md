@@ -33,6 +33,64 @@ npm test
 npx --yes web-ext@10.6.0 lint --source-dir extension
 ```
 
+## Code structure and performance
+
+| Area | Responsibility |
+| --- | --- |
+| `extension/shared/` | Reusable validation, collectors, provider adapters, filtering, filenames, queue and storage models. Modules expose browser globals and CommonJS exports for dependency-free tests. |
+| `extension/background.js` | Firefox APIs, serialized durable queue operations, download reconciliation, trackers, saved galleries and cloud integration. Normal and private work use separate storage contexts. |
+| `extension/popup/` | Gallery state, filters, selection, paginated rendering, previews and bounded dimension probes. The Sidebar reuses this manager. |
+| Other extension page folders | Dedicated interfaces for history, tracking, archive creation, uploads, synchronization and integrations. |
+| `tests/` | Pure model tests and DOM/Firefox API fixtures that exercise page and background behavior. |
+
+Page scans reuse URL parsing and ancestor metadata within each scan, with bounded URL caches. Complete tree walks avoid a redundant media query; truncated scans retain a separate bounded media pass. The manager formats unselected filename previews as rows become visible and preserves cards when download statuses have not changed. Queue progress updates copy changed tasks, and batched reconciliation updates each affected job once. Queue admission determines all necessary history-detail evictions before validating the retained state.
+
+Selected filename batches use indexed collision checks, preserving filename order and Unicode behavior without rescanning earlier names. Saved-gallery normalization reuses bounded source-page validations and avoids parsing empty optional previews.
+
+Run the synthetic 5,000-task queue benchmarks with:
+
+```bash
+npm run benchmark
+# Compare working-tree code with a repository revision, e.g. before committing:
+npm run benchmark -- --baseline-ref=HEAD
+```
+
+The benchmark reports median Node model timings and task-copy counts. These exclude Firefox rendering, storage, network and server latency. Regression tests also check operation counts, cache limits, selected filename uniqueness, download history and private-context separation.
+
+For an actual Firefox comparison, run:
+
+```bash
+npm run benchmark:firefox -- --baseline-ref=HEAD
+# Optional: executable, artifact directory, or reverse the build order.
+npm run benchmark:firefox -- --firefox=/path/to/firefox --output-dir=/tmp/anydownload-firefox-results --variants=optimized,baseline
+# Compare an uncommitted snapshot, measuring fresh and saved collection openings.
+npm run benchmark:firefox -- --baseline-dir=/path/to/before/extension --opening-samples=3
+# Add --opening-only to skip the separate interaction and download regressions.
+```
+
+This requires Python 3.9+, Node and desktop Firefox. The default executable is the macOS Firefox application. The harness launches a visible browser in disposable profiles, serves local galleries, and grants the test extension access to localhost and private windows. Identical instrumentation is added to temporary extension copies; the repository extension is left intact. JSON results, logs, screenshots and verified downloads are written to the printed artifact directory. Close other heavy work while measuring, and repeat with the build order reversed.
+
+The earlier scan/interaction comparison against commit `9fc609a` used Firefox 158/macOS and three comparisons, including a reversed build order. Medians over 21 samples per build for a 5,000-image gallery were:
+
+| Operation | Before | Optimized |
+| --- | ---: | ---: |
+| Collector scan on loaded DOM, including CSS backgrounds | 133 ms | 99 ms |
+| Deselect event handler | 60 ms | 18 ms |
+| Single checkbox event handler | 53 ms | 10 ms |
+| Dimension update with default filename template | 50 ms | <1 ms |
+
+That earlier comparison changed initial manager readiness only slightly (2.88 s to 2.78 s across three launches per build); pagination and debounced search were broadly unchanged. Media records, discovery order and warnings matched. Both builds passed 23 UI checks per run, native download byte checks and private-storage separation checks; later runs also verified live discovery and preserved selection. [Raw samples, methodology and regression results](benchmarks/firefox-2026-10-16.json) describe this desktop localhost test's scope.
+
+The subsequent opening-focused changes compare with a snapshot that already contains those scan/interaction improvements. On the same Firefox 158 desktop fixture, two comparisons in opposite build orders, with six samples per build and mode, measured:
+
+| 5,000-image opening | Before | Optimized | Time reduction |
+| --- | ---: | ---: | ---: |
+| Fresh collection, full initialization | 2.69 s | 1.07 s | 60% |
+| Saved collection, full initialization | 4.25 s | 1.04 s | 76% |
+| Fresh collection, interactive-frame proxy | 2.17 s | 0.59 s | 73% |
+
+Every opening retained all 5,000 selections. Full initialization includes gallery persistence and live-capture setup; the frame proxy uses two animation frames after the first non-busy collection render. Selected filename generation fell from 1,583 ms to 50.5 ms for fresh collections. Both builds passed 24 browser UI checks, including Unicode filename collisions, plus native-download, private-storage and live-update checks. [Opening samples, source checksums and startup profiles](benchmarks/firefox-opening-2026-10-16.json) record the exact comparison.
+
 ## Build
 
 ```bash

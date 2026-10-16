@@ -126,7 +126,8 @@
     let unique = candidate;
     let suffix = 2;
     while (usedIds.has(unique)) {
-      unique = boundedString(`${candidate}-${suffix}`, MAX_ID_LENGTH, "");
+      const ending = `-${suffix}`;
+      unique = `${candidate.slice(0, MAX_ID_LENGTH - ending.length)}${ending}`;
       suffix += 1;
     }
     usedIds.add(unique);
@@ -291,28 +292,35 @@
   }
 
   function deriveJobStatus(tasks) {
-    if (!tasks.length) {
-      return "complete";
+    let starting = false;
+    let queued = false;
+    let paused = false;
+    let interrupted = false;
+    let cancelled = false;
+    for (const task of tasks) {
+      const status = task.status;
+      if (status === "in_progress") {
+        return "in_progress";
+      }
+      starting = starting || status === "starting";
+      queued = queued || status === "queued";
+      paused = paused || status === "paused";
+      interrupted = interrupted || status === "interrupted";
+      cancelled = cancelled || status === "cancelled";
     }
-    if (tasks.some((task) => task.status === "in_progress")) {
-      return "in_progress";
-    }
-    if (tasks.some((task) => task.status === "starting")) {
+    if (starting) {
       return "starting";
     }
-    if (tasks.some((task) => task.status === "queued")) {
+    if (queued) {
       return "queued";
     }
-    if (tasks.some((task) => task.status === "paused")) {
+    if (paused) {
       return "paused";
     }
-    if (tasks.some((task) => task.status === "interrupted")) {
+    if (interrupted) {
       return "interrupted";
     }
-    if (tasks.some((task) => task.status === "cancelled")) {
-      return "cancelled";
-    }
-    return "complete";
+    return cancelled ? "cancelled" : "complete";
   }
 
   function normalizeJob(
@@ -498,13 +506,24 @@
     return markNormalizedState({ schemaVersion: SCHEMA_VERSION, jobs, history, stats });
   }
 
-  function cloneNormalizedState(state, now) {
+  function cloneNormalizedState(state, now, selectTask) {
     const cloned = markNormalizedState({
       schemaVersion: SCHEMA_VERSION,
-      jobs: state.jobs.map((job) => ({
-        ...job,
-        tasks: job.tasks.map((task) => ({ ...task }))
-      })),
+      jobs: state.jobs.map((job) => {
+        if (!selectTask) {
+          return { ...job, tasks: job.tasks.map((task) => ({ ...task })) };
+        }
+        let tasks = job.tasks;
+        for (let index = 0; index < job.tasks.length; index += 1) {
+          if (selectTask(job.tasks[index])) {
+            if (tasks === job.tasks) {
+              tasks = job.tasks.slice();
+            }
+            tasks[index] = { ...job.tasks[index] };
+          }
+        }
+        return tasks === job.tasks ? job : { ...job, tasks };
+      }),
       history: state.history.map((item) => ({ ...item })),
       stats: {
         lifetime: { ...state.stats.lifetime },
@@ -515,13 +534,14 @@
     return cloned;
   }
 
-  function cloneState(state, now) {
+  function cloneState(state, now, selectTask) {
     // States produced by this model are already bounded and normalized. A
     // structural copy preserves pure transitions without reparsing every URL
-    // in a large queue. External or restored values still take the defensive
-    // hydration path below.
+    // in a large queue. Targeted transitions copy only the tasks they edit and
+    // their parent jobs; all other objects are shared and remain read-only.
+    // External or restored values still take the defensive hydration path.
     return normalizedStates.has(state)
-      ? cloneNormalizedState(state, now)
+      ? cloneNormalizedState(state, now, selectTask)
       : hydrate(state, { now, recoverInFlight: false });
   }
 
@@ -560,7 +580,7 @@
 
   function enqueueBatch(inputState, items, options) {
     const now = resolveNow(read(options, "now", undefined));
-    const state = cloneState(inputState, now);
+    const state = cloneState(inputState, now, () => false);
     const rejected = [];
     if (!Array.isArray(items)) {
       return { state, jobId: null, accepted: 0, acceptedIndexes: [], rejected: [{ index: -1, error: "Items must be an array." }] };
@@ -733,15 +753,33 @@
 
   function claimNextTasks(inputState, options) {
     const now = resolveNow(read(options, "now", undefined));
-    const state = cloneState(inputState, now);
+    const source = normalizedStates.has(inputState)
+      ? inputState
+      : hydrate(inputState, { now, recoverInFlight: false });
     const requested = finiteInteger(read(options, "concurrency", 1), 1, MAX_CONCURRENCY) || 1;
-    const active = state.jobs.reduce(
-      (count, job) => count + job.tasks.filter((task) => ACTIVE_STATUSES.has(task.status)).length,
-      0
-    );
+    let active = 0;
+    for (const job of source.jobs) {
+      for (const task of job.tasks) {
+        if (ACTIVE_STATUSES.has(task.status)) {
+          active += 1;
+        }
+      }
+    }
     let available = Math.max(0, requested - active);
+    let toClone = available;
+    const state = cloneState(source, now, (task) => {
+      if (toClone && task.status === "queued") {
+        toClone -= 1;
+        return true;
+      }
+      return false;
+    });
     const tasks = [];
     for (const job of state.jobs) {
+      if (!available) {
+        break;
+      }
+      let jobChanged = false;
       for (const task of job.tasks) {
         if (!available) {
           break;
@@ -752,6 +790,7 @@
         task.status = "starting";
         task.updatedAt = now;
         job.updatedAt = now;
+        jobChanged = true;
         tasks.push({
           id: task.id,
           jobId: job.id,
@@ -764,15 +803,18 @@
         });
         available -= 1;
       }
-      job.status = deriveJobStatus(job.tasks);
+      if (jobChanged) {
+        job.status = deriveJobStatus(job.tasks);
+      }
     }
     return { state, tasks };
   }
 
   function bindDownload(inputState, taskId, downloadId, options) {
     const now = resolveNow(read(options, "now", undefined));
-    const state = cloneState(inputState, now);
-    const found = locateTask(state, taskId);
+    const safeTaskId = safeId(taskId);
+    const state = cloneState(inputState, now, (task) => task.id === safeTaskId);
+    const found = locateTask(state, safeTaskId);
     const safeDownloadId = normalizeDownloadId(downloadId);
     if (!found || safeDownloadId === null || TERMINAL_STATUSES.has(found.task.status)) {
       return state;
@@ -924,7 +966,6 @@
       task.needsReconciliation = false;
     }
     task.updatedAt = now;
-    refreshJob(state, found.job, now);
     return true;
   }
 
@@ -958,25 +999,28 @@
     task.needsReconciliation = TERMINAL_STATUSES.has(task.status) && !reconciled;
     task.updatedAt = now;
     recordOutcome(state, task, now);
-    refreshJob(state, found.job, now);
     return true;
   }
 
   function applyDownloadSnapshot(inputState, snapshot, options) {
     const now = resolveNow(read(options, "now", undefined));
     const reconciled = read(options, "reconciled", true) !== false;
-    const state = cloneState(inputState, now);
+    const downloadId = normalizeDownloadId(read(snapshot, "id", null));
+    const state = cloneState(inputState, now, (task) => (
+      downloadId !== null && task.downloadId === downloadId
+    ));
     if (!isRecord(snapshot)) {
       return state;
     }
-    const downloadId = normalizeDownloadId(read(snapshot, "id", null));
     if (downloadId === null) {
       return state;
     }
     for (const job of state.jobs) {
       const task = job.tasks.find((candidate) => candidate.downloadId === downloadId);
       if (task) {
-        applySnapshotToTask(state, { job, task }, snapshot, now, reconciled);
+        if (applySnapshotToTask(state, { job, task }, snapshot, now, reconciled)) {
+          refreshJob(state, job, now);
+        }
         break;
       }
     }
@@ -986,20 +1030,46 @@
   function applyDownloadSnapshots(inputState, snapshots, options) {
     const now = resolveNow(read(options, "now", undefined));
     const reconciled = read(options, "reconciled", true) !== false;
-    const state = cloneState(inputState, now);
+    const boundedSnapshots = Array.isArray(snapshots) ? snapshots.slice(0, MAX_STORED_TASKS) : [];
+    const snapshotIds = new Set(boundedSnapshots.map((snapshot) => (
+      normalizeDownloadId(read(snapshot, "id", null))
+    )));
+    const markMissing = read(options, "markMissing", false) === true;
+    const state = cloneState(inputState, now, (task) => (
+      task.downloadId !== null && (markMissing || snapshotIds.has(task.downloadId))
+    ));
     if (!Array.isArray(snapshots)) {
       return state;
     }
     const tasksByDownloadId = new Map();
+    const nonterminalByJob = new Map();
     for (const job of state.jobs) {
+      let nonterminal = 0;
       for (const task of job.tasks) {
+        if (!TERMINAL_STATUSES.has(task.status)) {
+          nonterminal += 1;
+        }
         if (task.downloadId !== null) {
           tasksByDownloadId.set(task.downloadId, { job, task });
         }
       }
+      nonterminalByJob.set(job, nonterminal);
     }
     const matchedDownloadIds = new Set();
-    for (const snapshot of snapshots.slice(0, MAX_STORED_TASKS)) {
+    const changedJobs = new Set();
+    const terminalJobs = new Set();
+    function rememberChangedJob(found, previouslyTerminal) {
+      changedJobs.add(found.job);
+      if (!previouslyTerminal && TERMINAL_STATUSES.has(found.task.status)) {
+        nonterminalByJob.set(found.job, nonterminalByJob.get(found.job) - 1);
+      }
+      if (!nonterminalByJob.get(found.job)) {
+        // Preserve the order in which jobs finish even when their snapshots
+        // are interleaved, without rescanning every task after each update.
+        terminalJobs.add(found.job);
+      }
+    }
+    for (const snapshot of boundedSnapshots) {
       if (!isRecord(snapshot)) {
         continue;
       }
@@ -1007,10 +1077,13 @@
       const found = downloadId === null ? null : tasksByDownloadId.get(downloadId);
       if (found) {
         matchedDownloadIds.add(downloadId);
-        applySnapshotToTask(state, found, snapshot, now, reconciled);
+        const previouslyTerminal = TERMINAL_STATUSES.has(found.task.status);
+        if (applySnapshotToTask(state, found, snapshot, now, reconciled)) {
+          rememberChangedJob(found, previouslyTerminal);
+        }
       }
     }
-    if (read(options, "markMissing", false) === true) {
+    if (markMissing) {
       for (const [downloadId, found] of tasksByDownloadId) {
         if (matchedDownloadIds.has(downloadId)) {
           continue;
@@ -1025,7 +1098,33 @@
         found.task.updatedAt = now;
         found.task.completedAt = now;
         recordOutcome(state, found.task, now);
-        refreshJob(state, found.job, now);
+        rememberChangedJob(found, false);
+      }
+    }
+    for (const job of changedJobs) {
+      if (!terminalJobs.has(job)) {
+        refreshJob(state, job, now);
+      }
+    }
+    for (const job of terminalJobs) {
+      refreshJob(state, job, now);
+    }
+    return state;
+  }
+
+  function markLedgerRecorded(inputState, taskIds, options) {
+    const now = resolveNow(read(options, "now", undefined));
+    const ids = new Set(Array.isArray(taskIds)
+      ? taskIds.slice(0, MAX_STORED_TASKS).map(safeId).filter(Boolean)
+      : []);
+    const state = cloneState(inputState, now, (task) => (
+      task.status === "complete" && !task.ledgerRecorded && ids.has(task.id)
+    ));
+    for (const job of state.jobs) {
+      for (const task of job.tasks) {
+        if (task.status === "complete" && !task.ledgerRecorded && ids.has(task.id)) {
+          task.ledgerRecorded = true;
+        }
       }
     }
     return state;
@@ -1033,7 +1132,7 @@
 
   function applyDownloadChange(inputState, downloadId, change, options) {
     if (!isRecord(change)) {
-      return cloneState(inputState, resolveNow(read(options, "now", undefined)));
+      return cloneState(inputState, resolveNow(read(options, "now", undefined)), () => false);
     }
     const snapshot = {
       id: downloadId,
@@ -1054,8 +1153,9 @@
 
   function setTaskPaused(inputState, taskId, paused, options) {
     const now = resolveNow(read(options, "now", undefined));
-    const state = cloneState(inputState, now);
-    const found = locateTask(state, taskId);
+    const safeTaskId = safeId(taskId);
+    const state = cloneState(inputState, now, (task) => task.id === safeTaskId);
+    const found = locateTask(state, safeTaskId);
     if (!found || TERMINAL_STATUSES.has(found.task.status)) {
       return state;
     }
@@ -1071,10 +1171,12 @@
 
   function setTasksPaused(inputState, taskIds, paused, options) {
     const now = resolveNow(read(options, "now", undefined));
-    const state = cloneState(inputState, now);
     const ids = new Set(
       Array.isArray(taskIds) ? taskIds.map(safeId).filter(Boolean) : []
     );
+    const state = cloneState(inputState, now, (task) => (
+      ids.has(task.id) && !TERMINAL_STATUSES.has(task.status)
+    ));
     let updated = 0;
     for (const job of state.jobs) {
       let jobChanged = false;
@@ -1102,8 +1204,9 @@
 
   function cancelTask(inputState, taskId, options) {
     const now = resolveNow(read(options, "now", undefined));
-    const state = cloneState(inputState, now);
-    const found = locateTask(state, taskId);
+    const safeTaskId = safeId(taskId);
+    const state = cloneState(inputState, now, (task) => task.id === safeTaskId);
+    const found = locateTask(state, safeTaskId);
     if (!found || TERMINAL_STATUSES.has(found.task.status)) {
       return state;
     }
@@ -1119,10 +1222,12 @@
 
   function cancelTasks(inputState, taskIds, options) {
     const now = resolveNow(read(options, "now", undefined));
-    const state = cloneState(inputState, now);
     const ids = new Set(
       Array.isArray(taskIds) ? taskIds.map(safeId).filter(Boolean) : []
     );
+    const state = cloneState(inputState, now, (task) => (
+      ids.has(task.id) && !TERMINAL_STATUSES.has(task.status)
+    ));
     const reason = boundedString(
       read(options, "reason", "Cancelled"),
       MAX_ERROR_LENGTH,
@@ -1153,8 +1258,9 @@
 
   function interruptTask(inputState, taskId, error, options) {
     const now = resolveNow(read(options, "now", undefined));
-    const state = cloneState(inputState, now);
-    const found = locateTask(state, taskId);
+    const safeTaskId = safeId(taskId);
+    const state = cloneState(inputState, now, (task) => task.id === safeTaskId);
+    const found = locateTask(state, safeTaskId);
     if (!found || TERMINAL_STATUSES.has(found.task.status)) {
       return state;
     }
@@ -1190,9 +1296,13 @@
 
   function retryFailures(inputState, options) {
     const now = resolveNow(read(options, "now", undefined));
-    const state = cloneState(inputState, now);
     const jobId = safeId(read(options, "jobId", ""));
     const includeCancelled = read(options, "includeCancelled", false) === true;
+    const state = cloneState(inputState, now, (task) => (
+      (!jobId || task.jobId === jobId) && task.attempt < 1000000 && (
+        task.status === "interrupted" || (includeCancelled && task.status === "cancelled")
+      )
+    ));
     let retried = 0;
     for (const job of state.jobs) {
       if (jobId && job.id !== jobId) {
@@ -1221,8 +1331,9 @@
 
   function retryTask(inputState, taskId, options) {
     const now = resolveNow(read(options, "now", undefined));
-    const state = cloneState(inputState, now);
-    const found = locateTask(state, taskId);
+    const safeTaskId = safeId(taskId);
+    const state = cloneState(inputState, now, (task) => task.id === safeTaskId);
+    const found = locateTask(state, safeTaskId);
     const includeCancelled = read(options, "includeCancelled", false) === true;
     if (
       !found
@@ -1242,7 +1353,7 @@
 
   function clearCompleted(inputState, options) {
     const now = resolveNow(read(options, "now", undefined));
-    const state = cloneState(inputState, now);
+    const state = cloneState(inputState, now, () => false);
     let removed = 0;
     state.jobs = state.jobs.filter((job) => {
       if (
@@ -1259,7 +1370,7 @@
 
   function clearHistory(inputState, options) {
     const now = resolveNow(read(options, "now", undefined));
-    const state = cloneState(inputState, now);
+    const state = cloneState(inputState, now, () => false);
     const removed = state.history.length;
     state.history = [];
     return { state, removed };
@@ -1347,6 +1458,7 @@
     applyDownloadChange,
     applyDownloadSnapshot,
     applyDownloadSnapshots,
+    markLedgerRecorded,
     setTaskPaused,
     setTasksPaused,
     cancelTask,

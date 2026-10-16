@@ -17,18 +17,25 @@
   const MAX_ITEMS = 5000;
   const MAX_STEPS = 120;
   const MAX_DURATION_MS = 5 * 60 * 1000;
+  const MAX_SOURCE_URL_CACHE = 128;
 
-  function pageUrl(value) {
+  function parsedPageUrl(value) {
     try {
       const url = new URL(String(value || ""));
-      if (!Core.siteKeyForUrl(url.href) || url.username || url.password || url.href.length > 16384) {
-        return "";
+      if (!["http:", "https:"].includes(url.protocol) ||
+        url.username || url.password || url.href.length > 16384) {
+        return null;
       }
       if (url.origin !== "https://web.telegram.org") url.hash = "";
-      return url.href;
+      return url;
     } catch (_error) {
-      return "";
+      return null;
     }
+  }
+
+  function pageUrl(value) {
+    const url = parsedPageUrl(value);
+    return url ? url.href : "";
   }
 
   function mediaUrl(value) {
@@ -36,7 +43,9 @@
     if (!result.ok) {
       return "";
     }
-    return result.value.startsWith("data:") ? result.value : pageUrl(result.value);
+    if (result.value.startsWith("data:")) return result.value;
+    const url = parsedPageUrl(result.value);
+    return url && !/(^|\.)googlevideo\.com$/i.test(url.hostname) ? url.href : "";
   }
 
   function isFapelloUrl(value) {
@@ -86,33 +95,41 @@
     return "";
   }
 
-  function isGoogleVideo(value) {
-    try {
-      return /(^|\.)googlevideo\.com$/i.test(new URL(value).hostname);
-    } catch (_error) {
-      return false;
-    }
+  function normalizeRecord(value, siteKey) {
+    return normalizeRecordWithSources(value, siteKey, null);
   }
 
-  function normalizeRecord(value, siteKey) {
+  function normalizeRecordWithSources(value, siteKey, sources) {
     if (!value || typeof value !== "object") {
       return null;
     }
-    const sourceUrl = pageUrl(value.pageUrl);
-    // Telegram files belong to an open tab/session and must be rescanned.
-    if (/^https:\/\/web\.telegram\.org\//i.test(sourceUrl)) return null;
-    if (Core.siteKeyForUrl(sourceUrl) !== siteKey) {
+    const sourceValue = value.pageUrl;
+    let source;
+    if (sources && typeof sourceValue === "string" && sources.has(sourceValue)) {
+      source = sources.get(sourceValue);
+    } else {
+      source = parsedPageUrl(sourceValue);
+      // Records commonly share one page. Cache only within this normalization,
+      // with a small bound even when every record has a different source page.
+      if (sources && typeof sourceValue === "string" && sources.size < MAX_SOURCE_URL_CACHE) {
+        sources.set(sourceValue, source);
+      }
+    }
+    if (!source || source.origin !== siteKey) {
       return null;
     }
+    const sourceUrl = source.href;
+    // Telegram files belong to an open tab/session and must be rescanned.
+    if (/^https:\/\/web\.telegram\.org\//i.test(sourceUrl)) return null;
     const providerUrl = youtubeUrl(value);
     const url = providerUrl || mediaUrl(value.url);
-    if (!url || isGoogleVideo(url)) {
+    if (!url) {
       return null;
     }
     const record = {
       url,
       identityKey: String(value.identityKey || "").slice(0, 300),
-      previewUrl: isGoogleVideo(value.previewUrl) ? "" : mediaUrl(value.previewUrl),
+      previewUrl: mediaUrl(value.previewUrl),
       pageUrl: sourceUrl,
       pageTitle: String(value.pageTitle || "").slice(0, 300),
       selected: value.selected === true,
@@ -151,16 +168,18 @@
   }
 
   function normalizeSite(value) {
-    const siteKey = Core.siteKeyForUrl(pageUrl(value && value.siteKey));
+    const siteUrl = parsedPageUrl(value && value.siteKey);
+    const siteKey = siteUrl ? siteUrl.origin : "";
     if (!siteKey) {
       return null;
     }
     const records = new Map();
+    const sources = new Map();
     let bytes = 0;
     let urls = 0;
     let trimmed = false;
     for (const raw of (Array.isArray(value.records) ? value.records : []).slice(0, MAX_ITEMS * 2)) {
-      let record = normalizeRecord(raw, siteKey);
+      let record = normalizeRecordWithSources(raw, siteKey, sources);
       if (!record) {
         continue;
       }

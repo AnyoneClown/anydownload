@@ -635,7 +635,10 @@
     if (typeof filenameForImage !== "function") {
       throw new TypeError("filenameForImage must be a function.");
     }
-    const usedNames = new Set();
+    const templates = typeof module === "object" && module && module.exports
+      ? require("../shared/templates.js")
+      : globalScope.ImageDownloaderTemplates;
+    const usedNames = templates.createUsedNames();
     return (Array.isArray(images) ? images : []).map((image, index) => ({
       url: image && typeof image.url === "string" ? image.url : "",
       filename: filenameForImage(image, index, usedNames),
@@ -718,6 +721,7 @@
   let filenamePreviewsDirty = true;
   let filenamePreviewDateKey = "";
   let filenamePreviewTemplateValue = "";
+  let filenamePreviewContext = null;
   let filterRenderTimer = null;
   let uploadClient = null;
   let uploadConnections = [];
@@ -1486,24 +1490,10 @@
       const selected = selectedDownloadableImages();
       const rendered = renderedDownloadItems(selected, result.value, date);
       rendered.forEach((item, index) => previews.set(selected[index].url, item.filename));
-      for (const image of state.images) {
-        if (previews.has(image.url)) {
-          continue;
-        }
-        const preview = Templates.preview(
-          result.value,
-          filenameMetadata(image, 0, date)
-        );
-        previews.set(
-          image.url,
-          preview.ok ? preview.value : baseFilenameForMedia(image, 0)
-        );
-      }
-    } else {
-      state.images.forEach((image, index) => {
-        previews.set(image.url, baseFilenameForMedia(image, index));
-      });
     }
+    // Selected names share one collision set and their complete batch order.
+    // Other names are independent previews, so defer them until a row is shown.
+    filenamePreviewContext = { result, date };
     state.filenamePreviewByUrl = previews;
     filenamePreviewsDirty = false;
     filenamePreviewTemplateValue = elements["filename-template-input"].value;
@@ -1527,7 +1517,8 @@
       width: 1920,
       height: 1080
     };
-    const mappedPreview = sample && previews.get(sample.url);
+    const mappedPreview = sample && (previews.get(sample.url) ||
+      (result.ok || state.images.length > 0 ? friendlyFilename(sample) : ""));
     const preview = mappedPreview
       ? { ok: true, value: mappedPreview, error: "" }
       : Templates.preview(
@@ -2794,19 +2785,28 @@
         byIdentity.set(request.key, status || {});
       }
     });
+    let changed = false;
     for (const image of state.images) {
       const status = byIdentity.get(mediaIdentityKey(image)) || {};
-      image.downloadStatus = ["queued", "downloaded", "failed"].includes(status.status)
+      const downloadStatus = ["queued", "downloaded", "failed"].includes(status.status)
         ? status.status
         : "new";
-      image.downloadFingerprint = String(status.fingerprint || "");
-      image.downloadedAt = Number(status.completedAt) || 0;
-      image.downloadedFilename = String(status.filename || "");
+      const downloadFingerprint = String(status.fingerprint || "");
+      const downloadedAt = Number(status.completedAt) || 0;
+      const downloadedFilename = String(status.filename || "");
+      changed = changed || downloadStatusFor(image) !== downloadStatus ||
+        (image.downloadFingerprint || "") !== downloadFingerprint ||
+        (image.downloadedAt || 0) !== downloadedAt ||
+        (image.downloadedFilename || "") !== downloadedFilename;
+      image.downloadStatus = downloadStatus;
+      image.downloadFingerprint = downloadFingerprint;
+      image.downloadedAt = downloadedAt;
+      image.downloadedFilename = downloadedFilename;
       if (!imageCanBeSelected(image)) {
-        state.selected.delete(image.url);
+        changed = state.selected.delete(image.url) || changed;
       }
     }
-    if (settings.render) {
+    if (settings.render && changed) {
       renderImages();
     }
     return true;
@@ -2931,8 +2931,19 @@
     if (state.filenamePreviewByUrl.has(image.url)) {
       return state.filenamePreviewByUrl.get(image.url);
     }
+    if (filenamePreviewContext && filenamePreviewContext.result.ok) {
+      const preview = Templates.preview(
+        filenamePreviewContext.result.value,
+        filenameMetadata(image, 0, filenamePreviewContext.date)
+      );
+      const filename = preview.ok ? preview.value : baseFilenameForMedia(image, 0);
+      state.filenamePreviewByUrl.set(image.url, filename);
+      return filename;
+    }
     const index = Math.max(0, state.images.indexOf(image));
-    return baseFilenameForMedia(image, index);
+    const filename = baseFilenameForMedia(image, index);
+    state.filenamePreviewByUrl.set(image.url, filename);
+    return filename;
   }
 
   function validPixelDimension(value) {
@@ -2958,7 +2969,10 @@
       return false;
     }
     if (image.width !== width || image.height !== height) {
-      markFilenamePreviewsDirty();
+      const template = filenameTemplateStatus();
+      if (template.ok && (template.tokens.includes("width") || template.tokens.includes("height"))) {
+        markFilenamePreviewsDirty();
+      }
     }
     image.width = width;
     image.height = height;
@@ -3031,7 +3045,7 @@
     const matchedBefore = Filters.matchesSmartFilters(image, state.smartFilters);
     const applied = applyMeasuredDimensions(image, result.width, result.height);
     updateImageMetas(url);
-    if (applied) {
+    if (applied && filenamePreviewsDirty) {
       refreshRenderedFilenamePreviews();
     }
     if (matchedBefore !== Filters.matchesSmartFilters(image, state.smartFilters)) {
@@ -3092,7 +3106,7 @@
           if (current && (!current.width || !current.height)) {
             const matchedBefore = Filters.matchesSmartFilters(current, state.smartFilters);
             const applied = applyMeasuredDimensions(current, thumbnail.naturalWidth, thumbnail.naturalHeight);
-            if (applied) {
+            if (applied && filenamePreviewsDirty) {
               refreshRenderedFilenamePreviews();
             }
             if (matchedBefore !== Filters.matchesSmartFilters(current, state.smartFilters)) {

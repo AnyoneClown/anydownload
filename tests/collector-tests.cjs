@@ -517,6 +517,104 @@ function urls(result) {
   assert(limited.warnings.some((warning) => /first 3 direct media elements/.test(warning)));
 }
 
+// A completed tree walk already includes every direct media element, including
+// open shadow roots. Re-querying those trees is unnecessary DOM work.
+{
+  const shadow = element("shadow-root", {}, {}, [element("img", { src: "/complete-shadow.jpg" })]);
+  const host = element("div", {}, { shadowRoot: shadow });
+  withFakePage([host, element("img", { src: "/complete.jpg" })], (document) => {
+    let mediaQueries = 0;
+    for (const root of [document, shadow]) {
+      const querySelectorAll = root.querySelectorAll.bind(root);
+      root.querySelectorAll = (selector) => {
+        if (selector === "img, video, image, input[type='image']") {
+          mediaQueries += 1;
+        }
+        return querySelectorAll(selector);
+      };
+    }
+    const result = collectImagesFromPage({ includeBackgrounds: false });
+    assert.deepEqual(urls(result), [
+      "https://gallery.test/complete.jpg",
+      "https://gallery.test/complete-shadow.jpg"
+    ]);
+    assert.equal(mediaQueries, 0, "complete scans must not perform a second direct-media DOM query");
+  });
+
+  const unwalkedShadow = element("shadow-root", {}, {}, [element("img", { src: "/budget-shadow.jpg" })]);
+  const limited = scan([element("div", {}, { shadowRoot: unwalkedShadow })], { maxElements: 3 });
+  assert.deepEqual(urls(limited), ["https://gallery.test/budget-shadow.jpg"],
+    "a shadow root at the exact general budget still needs the direct-media fallback");
+  assert(limited.warnings.some((warning) => /first 3 page elements/.test(warning)));
+
+  withFakePage([element("img", { src: "/interrupted.jpg" })], (document) => {
+    document.createTreeWalker = () => { throw new Error("Detached tree"); };
+    const result = collectImagesFromPage({ includeBackgrounds: false });
+    assert.deepEqual(urls(result), ["https://gallery.test/interrupted.jpg"],
+      "interrupted tree walks retain the direct-media fallback");
+  });
+}
+
+// Parsing a source once should cover candidate ranking, preview normalization,
+// derivation and insertion. Keep this true after both cache budgets recycle.
+{
+  for (const [count, paddingLength] of [[1200, 0], [40, 8000]]) {
+    const images = Array.from({ length: count }, (_unused, index) => {
+      const url = `https://gallery.test/cache/${index}.jpg${paddingLength ? `?token=${"x".repeat(paddingLength)}` : ""}`;
+      const image = element("img", { src: url });
+      Object.defineProperty(image, "currentSrc", { value: url });
+      return image;
+    });
+    const NativeUrl = globalThis.URL;
+    let urlConstructions = 0;
+    try {
+      globalThis.URL = new Proxy(NativeUrl, {
+        construct(target, argumentsList) {
+          urlConstructions += 1;
+          return Reflect.construct(target, argumentsList);
+        }
+      });
+      const result = scan(images);
+      assert.equal(result.images.length, count);
+      assert.equal(urlConstructions, count,
+        "each ordinary image URL is parsed once, including after cache eviction");
+    } finally {
+      globalThis.URL = NativeUrl;
+    }
+  }
+}
+
+// Sibling images may share the same original-size metadata. Reuse those hints
+// during one scan and read fresh metadata when a later scan runs.
+{
+  const wrapper = element("figure", {
+    "data-image": "/shared-original.jpg",
+    "data-width": "2400",
+    "data-height": "1600"
+  }, {}, Array.from({ length: 30 }, (_unused, index) => element("img", { src: `/shared-thumb-${index}.jpg` })));
+  const getAttribute = wrapper.getAttribute.bind(wrapper);
+  let dimensionReads = 0;
+  let sourceReads = 0;
+  wrapper.getAttribute = (name) => {
+    if (name === "data-width") {
+      dimensionReads += 1;
+    }
+    if (name === "data-image") {
+      sourceReads += 1;
+    }
+    return getAttribute(name);
+  };
+  const first = scan([wrapper]);
+  assert.equal(first.images[0].width, 2400);
+  assert.equal(dimensionReads, 1, "shared full-size dimension hints are read once per scan");
+  assert.equal(sourceReads, 1, "shared full-size source attributes are read once per scan");
+  wrapper.setAttribute("data-width", "4096");
+  const second = scan([wrapper]);
+  assert.equal(second.images[0].width, 4096);
+  assert.equal(dimensionReads, 2, "dimension hints must not remain cached across scans");
+  assert.equal(sourceReads, 2, "source attributes must not remain cached across scans");
+}
+
 // Known gallery/CDN wrappers are upgraded only on their narrowly matched hosts
 // and paths. The displayed resource remains available as the cheap popup preview.
 {

@@ -14,6 +14,14 @@
       options || {}
     );
     const found = new Map();
+    // Candidate resolution, preview selection and insertion often normalize the
+    // same source repeatedly. Keep this cache local to one scan and bound both
+    // its entries and URL text so a large gallery cannot retain unbounded data.
+    const normalizedUrls = new Map();
+    const parsedUrls = new Map();
+    let cachedUrlLength = 0;
+    const fullImageDimensions = new WeakMap();
+    const fullImageSources = new WeakMap();
     const telegramPage = /^https:\/\/web\.telegram\.org\/(?:k|a)\//i.test(document.baseURI);
     const warnings = [];
     const IMAGE_EXTENSION = /\.(?:apng|avif|bmp|gif|ico|jpe?g|jxl|png|svg|tiff?|webp)$/i;
@@ -123,6 +131,11 @@
         return "";
       }
 
+      const cachedUrl = normalizedUrls.get(value);
+      if (cachedUrl) {
+        return cachedUrl;
+      }
+
       try {
         const parsed = new URL(value, document.baseURI);
         if (parsed.protocol === "blob:") {
@@ -142,10 +155,25 @@
           return "";
         }
         parsed.hash = "";
-        return parsed.href;
+        const url = parsed.href;
+        if (normalizedUrls.size >= 1023 || cachedUrlLength + value.length + url.length > 262144) {
+          normalizedUrls.clear();
+          parsedUrls.clear();
+          cachedUrlLength = 0;
+        }
+        normalizedUrls.set(value, url);
+        normalizedUrls.set(url, url);
+        parsedUrls.set(url, parsed);
+        cachedUrlLength += value.length + url.length;
+        return url;
       } catch (_error) {
         return "";
       }
+    }
+
+    function parsedUrl(url) {
+      // Callers only read these objects; URL rewrites must use a fresh URL.
+      return parsedUrls.get(url) || new URL(url);
     }
 
     function isVideoManifestMimeType(rawValue) {
@@ -159,7 +187,7 @@
         return url;
       }
       try {
-        const parsed = new URL(url);
+        const parsed = parsedUrl(url);
         const format = (parsed.searchParams.get("format") || parsed.searchParams.get("fm") || "")
           .toLowerCase()
           .replace(/^(?:application|video)\//, "");
@@ -209,7 +237,7 @@
       }
 
       try {
-        const pathname = new URL(rawUrl).pathname.toLowerCase();
+        const pathname = parsedUrl(rawUrl).pathname.toLowerCase();
         if (/\.mp4$/i.test(pathname)) {
           return "video/mp4";
         }
@@ -251,6 +279,10 @@
     }
 
     function fullImageDimensionHints(element) {
+      const cached = fullImageDimensions.get(element);
+      if (cached) {
+        return cached;
+      }
       let candidate = element;
       for (let depth = 0; candidate && depth <= 4; depth += 1) {
         for (const [widthAttribute, heightAttribute] of FULL_IMAGE_DIMENSION_ATTRIBUTES) {
@@ -265,12 +297,36 @@
           const width = parseDimensionHint(rawWidth);
           const height = parseDimensionHint(rawHeight);
           if (width || height) {
-            return { width, height };
+            const dimensions = { width, height };
+            fullImageDimensions.set(element, dimensions);
+            return dimensions;
           }
         }
         candidate = candidate.parentElement || candidate.parentNode;
       }
-      return { width: 0, height: 0 };
+      const dimensions = { width: 0, height: 0 };
+      fullImageDimensions.set(element, dimensions);
+      return dimensions;
+    }
+
+    function fullImageAttributeValues(element) {
+      const cached = fullImageSources.get(element);
+      if (cached) {
+        return cached;
+      }
+      const values = [];
+      if (element.getAttribute) {
+        for (const attribute of FULL_IMAGE_ATTRIBUTES) {
+          const value = element.getAttribute(attribute);
+          if (value) {
+            values.push(value);
+          }
+        }
+      }
+      // Sibling images often inspect the same wrappers, body and root element.
+      // Preserve attribute priority while avoiding those repeated DOM reads.
+      fullImageSources.set(element, values);
+      return values;
     }
 
     function addImage(rawUrl, details) {
@@ -521,7 +577,7 @@
         return true;
       }
       try {
-        const parsed = new URL(normalizedUrl);
+        const parsed = parsedUrl(normalizedUrl);
         if (IMAGE_EXTENSION.test(parsed.pathname)) {
           return true;
         }
@@ -555,7 +611,7 @@
         return true;
       }
       try {
-        const parsed = new URL(normalizedUrl);
+        const parsed = parsedUrl(normalizedUrl);
         if (VIDEO_EXTENSION.test(parsed.pathname)) {
           return true;
         }
@@ -576,7 +632,7 @@
       }
       const derived = [];
       try {
-        const parsed = new URL(normalizedUrl);
+        const parsed = parsedUrl(normalizedUrl);
         const hostname = parsed.hostname.toLowerCase();
         const originalPath = parsed.pathname;
 
@@ -738,11 +794,7 @@
       let ancestor = element;
       for (let depth = 0; ancestor && depth <= 4; depth += 1) {
         let foundExplicitAtDepth = false;
-        for (const attribute of FULL_IMAGE_ATTRIBUTES) {
-          const rawValue = ancestor.getAttribute && ancestor.getAttribute(attribute);
-          if (!rawValue) {
-            continue;
-          }
+        for (const rawValue of fullImageAttributeValues(ancestor)) {
           const dimensions = fullImageDimensionHints(ancestor);
           if (consider(rawValue, {
             kind: "Full-size image",
@@ -934,8 +986,10 @@
     }
 
     const roots = [document];
+    const visitedRoots = new Set(roots);
     const allElements = targetMedia ? [targetMedia] : [];
     let elementLimitReached = false;
+    let traversalInterrupted = false;
     for (let rootIndex = 0; !targetMedia && rootIndex < roots.length && allElements.length < settings.maxElements; rootIndex += 1) {
       try {
         const walker = document.createTreeWalker(roots[rootIndex], NodeFilter.SHOW_ELEMENT);
@@ -946,15 +1000,20 @@
             break;
           }
           allElements.push(element);
-          if (element.shadowRoot && !roots.includes(element.shadowRoot)) {
+          if (element.shadowRoot && !visitedRoots.has(element.shadowRoot)) {
+            visitedRoots.add(element.shadowRoot);
             roots.push(element.shadowRoot);
           }
         }
       } catch (_error) {
         // Detached or browser-owned roots can disappear while being walked.
+        traversalInterrupted = true;
       }
       if (elementLimitReached) {
         break;
+      }
+      if (allElements.length >= settings.maxElements && rootIndex + 1 < roots.length) {
+        elementLimitReached = true;
       }
     }
     if (elementLimitReached) {
@@ -965,7 +1024,7 @@
     // and computed-style budget, but also inspect a bounded set of direct media
     // beyond that prefix so newly loaded photos are still discoverable.
     const generalElementCount = allElements.length;
-    if (!targetMedia) {
+    if (!targetMedia && (elementLimitReached || traversalInterrupted)) {
       const visitedElements = new Set(allElements);
       let mediaElementCount = 0;
       let mediaElementLimitReached = false;
@@ -1092,6 +1151,9 @@
             style.webkitMaskImage
           ];
           for (const value of values) {
+            if (!value || value === "none") {
+              continue;
+            }
             for (const url of cssUrls(value)) {
               addImage(url, {
                 kind: "CSS image",

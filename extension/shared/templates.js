@@ -89,6 +89,7 @@
     "video/x-quicktime": "mov"
   });
   const CONTROL_OR_BIDI = /[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/;
+  const managedUsedNames = new WeakMap();
 
   function normalize(value) {
     if (typeof value !== "string") {
@@ -389,7 +390,66 @@
     return normalized.toLocaleLowerCase("en-US");
   }
 
+  function addManagedName(managed, value) {
+    if (managed.names.has(value)) return;
+    managed.names.add(value);
+    if (typeof value === "string") {
+      const alias = usedNameKey(value);
+      managed.aliases.set(alias, (managed.aliases.get(alias) || 0) + 1);
+    }
+  }
+
+  function deleteManagedName(managed, value) {
+    if (!managed.names.delete(value)) return false;
+    if (typeof value === "string") {
+      const alias = usedNameKey(value);
+      const count = managed.aliases.get(alias) - 1;
+      if (count) managed.aliases.set(alias, count);
+      else managed.aliases.delete(alias);
+    }
+    return true;
+  }
+
+  // Index both exact stored values and their folded aliases, matching the
+  // compatibility scan below. Folding is not idempotent for every Unicode
+  // sequence, so generated keys must be stored without another transformation.
+  function createUsedNames(values) {
+    const managed = { names: new Set(), aliases: new Map() };
+    const registry = Object.freeze({
+      get size() { return managed.names.size; },
+      has(value) {
+        if (managed.names.has(value)) return true;
+        if (typeof value !== "string") return false;
+        const key = usedNameKey(value);
+        return managed.names.has(key) || managed.aliases.has(key);
+      },
+      add(value) { addManagedName(managed, value); return registry; },
+      delete(value) {
+        if (deleteManagedName(managed, value)) return true;
+        if (typeof value !== "string") return false;
+        const key = usedNameKey(value);
+        for (const stored of managed.names) {
+          if (stored === key || typeof stored === "string" && usedNameKey(stored) === key) {
+            return deleteManagedName(managed, stored);
+          }
+        }
+        return false;
+      },
+      clear() { managed.names.clear(); managed.aliases.clear(); },
+      [Symbol.iterator]() { return managed.names[Symbol.iterator](); }
+    });
+    if (values != null) {
+      for (const value of values) registry.add(value);
+    }
+    managedUsedNames.set(registry, managed);
+    return registry;
+  }
+
   function hasUsedName(usedNames, key) {
+    const managed = managedUsedNames.get(usedNames);
+    if (managed) {
+      return managed.names.has(key) || managed.aliases.has(key);
+    }
     if (usedNames.has(key)) {
       return true;
     }
@@ -433,7 +493,10 @@
         throw new Error("Could not create a unique filename.");
       }
     }
-    usedNames.add(usedNameKey(candidate));
+    const key = usedNameKey(candidate);
+    const managed = managedUsedNames.get(usedNames);
+    if (managed) addManagedName(managed, key);
+    else usedNames.add(key);
     return candidate;
   }
 
@@ -483,6 +546,7 @@
     MAX_FILENAME_LENGTH,
     MAX_TEMPLATE_LENGTH,
     TOKENS,
+    createUsedNames,
     normalize,
     validate,
     render,

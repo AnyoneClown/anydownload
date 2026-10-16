@@ -1,0 +1,3344 @@
+{
+  "date": "2026-10-16",
+  "environment": {
+    "browser": "Firefox",
+    "version": "158.0",
+    "buildID": "20261007201254",
+    "platform": "mac",
+    "headed": true
+  },
+  "comparison": {
+    "baseline": "Preserved working-tree extension at the start of the initial-opening optimization request; already includes previous scan/interaction performance improvements.",
+    "baselineExtensionSha256": "7703867d4abc79f235909b1b8e4b8695563c260cf8e7f3ddcdc531f80187f5c1",
+    "optimizedExtensionSha256": "6f375498d0861669e46777dfc46beeea2f5da3d1da94baa3b194f2499ec9e5d7",
+    "baselineSnapshot": "/private/tmp/anydownload-opening-before-20261016/extension",
+    "order": [
+      [
+        "baseline",
+        "optimized"
+      ],
+      [
+        "optimized",
+        "baseline"
+      ]
+    ]
+  },
+  "method": {
+    "fixture": "5,000 locally served SVG images with exposed original URLs and 1200x900 dimensions; loaded source page; all 5,000 media remain selected.",
+    "samplesPerBuildPerMode": 6,
+    "startupWarmups": 0,
+    "fresh": "Saved gallery removed before opening; same loaded source tab.",
+    "saved": "Manager reopened with the just-saved 5,000-record gallery; same source tab and selected set.",
+    "fullInitialization": "performance.now() from manager navigation through initialize completion, including selected filename generation, status lookups, gallery persistence and live fingerprint setup.",
+    "interactiveFrameProxy": "Double requestAnimationFrame after the first non-busy 5,000-item collection render. This is a frame-ready proxy, not compositor paint telemetry.",
+    "profiling": "Identical temporary function wrappers in each copied extension. Named stage durations are inclusive and overlap; do not sum nested stages.",
+    "timerPrecision": "Firefox default; whole-millisecond samples.",
+    "scope": "Desktop manager tab using shared popup/Sidebar code and deterministic localhost media. Public-site adapters and Android devices were not exercised."
+  },
+  "changes": [
+    "Index exact filename keys and counted folded aliases for constant-time unique-name collision checks, preserving legacy order-dependent Unicode behavior.",
+    "Reuse parsed URL validation and a per-call source-page cache capped at 128 entries; avoid empty optional preview URL exceptions."
+  ],
+  "summary": {
+    "fresh": {
+      "baseline": {
+        "fullInitializationMs": {
+          "median": 2692.0,
+          "samples": [
+            2764,
+            2687,
+            2660,
+            2800,
+            2669,
+            2697
+          ]
+        },
+        "interactiveFrameProxyMs": {
+          "median": 2170.5,
+          "samples": [
+            2165,
+            2179,
+            2149,
+            2188,
+            2163,
+            2176
+          ]
+        },
+        "selectedFilenameBatchMs": {
+          "median": 1583.0,
+          "samples": [
+            1580,
+            1591,
+            1578,
+            1570,
+            1586,
+            1593
+          ]
+        }
+      },
+      "optimized": {
+        "fullInitializationMs": {
+          "median": 1066.5,
+          "samples": [
+            1122,
+            1036,
+            1033,
+            1116,
+            1072,
+            1061
+          ]
+        },
+        "interactiveFrameProxyMs": {
+          "median": 592.0,
+          "samples": [
+            610,
+            566,
+            593,
+            594,
+            591,
+            583
+          ]
+        },
+        "selectedFilenameBatchMs": {
+          "median": 50.5,
+          "samples": [
+            55,
+            49,
+            51,
+            56,
+            50,
+            49
+          ]
+        }
+      },
+      "fullInitializationReductionPercent": 60.38,
+      "fullInitializationSpeedup": 2.52
+    },
+    "saved": {
+      "baseline": {
+        "fullInitializationMs": {
+          "median": 4254.0,
+          "samples": [
+            4274,
+            4278,
+            4241,
+            4211,
+            4187,
+            4267
+          ]
+        },
+        "interactiveFrameProxyMs": {
+          "median": 4255.5,
+          "samples": [
+            4274,
+            4278,
+            4244,
+            4211,
+            4187,
+            4267
+          ]
+        },
+        "selectedFilenameBatchMs": {
+          "median": 3179.5,
+          "samples": [
+            3179,
+            3205,
+            3171,
+            3180,
+            3157,
+            3187
+          ]
+        }
+      },
+      "optimized": {
+        "fullInitializationMs": {
+          "median": 1039.5,
+          "samples": [
+            1020,
+            1103,
+            1010,
+            1035,
+            1044,
+            1107
+          ]
+        },
+        "interactiveFrameProxyMs": {
+          "median": 1035.5,
+          "samples": [
+            1021,
+            1096,
+            1011,
+            1027,
+            1044,
+            1107
+          ]
+        },
+        "selectedFilenameBatchMs": {
+          "median": 106.0,
+          "samples": [
+            105,
+            113,
+            101,
+            106,
+            106,
+            117
+          ]
+        }
+      },
+      "fullInitializationReductionPercent": 75.56,
+      "fullInitializationSpeedup": 4.09
+    }
+  },
+  "validation": {
+    "npmTest": "passed",
+    "webExtLintVersion": "10.6.0",
+    "lintErrors": 0,
+    "lintWarnings": 0,
+    "uiChecksPerBuild": 24,
+    "uiChecksTotal": 48,
+    "uncaughtManagerErrors": {
+      "baseline": [],
+      "optimized": []
+    },
+    "collectorRecordsMetadataOrderAndWarningsMatch": true,
+    "nativeDownloadsVerifiedByteForByte": 2,
+    "downloadBytesEach": 276,
+    "privateStorageIsolation": {
+      "baseline": {
+        "incognito": true,
+        "privateRecords": 1200,
+        "normalRecords": 5000,
+        "normalGalleryUnchanged": true,
+        "rows": 350,
+        "errors": []
+      },
+      "optimized": {
+        "incognito": true,
+        "privateRecords": 1200,
+        "normalRecords": 5000,
+        "normalGalleryUnchanged": true,
+        "rows": 350,
+        "errors": []
+      }
+    },
+    "liveUpdates": {
+      "baseline": {
+        "count": 1201,
+        "existingSelectionRetained": true,
+        "normalGalleryUnchanged": true,
+        "elapsedMs": 2110,
+        "errors": []
+      },
+      "optimized": {
+        "count": 1201,
+        "existingSelectionRetained": true,
+        "normalGalleryUnchanged": true,
+        "elapsedMs": 2057,
+        "errors": []
+      }
+    },
+    "unicodeFilenameBrowserCheck": {
+      "name": "Unicode collision names match legacy Set ordering",
+      "passed": true
+    },
+    "uiChecks": [
+      {
+        "name": "large gallery contains 5,000 media",
+        "passed": true,
+        "details": 5000
+      },
+      {
+        "name": "first gallery page has 350 cards",
+        "passed": true,
+        "details": 350
+      },
+      {
+        "name": "first pagination label",
+        "passed": true,
+        "details": "1\u2013350 of 5\u00a0000"
+      },
+      {
+        "name": "Deselect removes all selections",
+        "passed": true
+      },
+      {
+        "name": "single checkbox tracks selection",
+        "passed": true
+      },
+      {
+        "name": "second page starts at item 351",
+        "passed": true
+      },
+      {
+        "name": "search matches exactly one image",
+        "passed": true
+      },
+      {
+        "name": "clearing search restores 5,000 media",
+        "passed": true
+      },
+      {
+        "name": "dimension updates refresh card metadata",
+        "passed": true
+      },
+      {
+        "name": "width and height tokens update filename",
+        "passed": true,
+        "details": "00001-1806x901.svg"
+      },
+      {
+        "name": "selection survives page changes and filtering",
+        "passed": true
+      },
+      {
+        "name": "hidden selections remain visible in summary",
+        "passed": true,
+        "details": "2 selected \u00b7 1 hidden"
+      },
+      {
+        "name": "selected review preserves page-order filename indices",
+        "passed": true,
+        "details": [
+          "0001-00001.svg",
+          "0002-00351.svg"
+        ]
+      },
+      {
+        "name": "download filename collisions receive distinct suffixes",
+        "passed": true,
+        "details": [
+          "collision.svg",
+          "collision-2.svg"
+        ]
+      },
+      {
+        "name": "download batch filename index follows selected page order",
+        "passed": true,
+        "details": [
+          "0001-collision.svg",
+          "0002-collision.svg"
+        ]
+      },
+      {
+        "name": "Unicode collision names match legacy Set ordering",
+        "passed": true
+      },
+      {
+        "name": "final gallery page contains 100 cards",
+        "passed": true,
+        "details": 100
+      },
+      {
+        "name": "final pagination label",
+        "passed": true,
+        "details": "4901\u20135000 of 5\u00a0000"
+      },
+      {
+        "name": "filename sort retains all media",
+        "passed": true
+      },
+      {
+        "name": "resolution sort orders descending image area",
+        "passed": true
+      },
+      {
+        "name": "unchanged status refresh preserves gallery count",
+        "passed": true
+      },
+      {
+        "name": "preview dialog opens",
+        "passed": true
+      },
+      {
+        "name": "preview decodes real local image",
+        "passed": true,
+        "details": {
+          "width": 1200,
+          "height": 900
+        }
+      },
+      {
+        "name": "preview dialog closes",
+        "passed": true
+      }
+    ]
+  },
+  "rawOpenings": [
+    {
+      "order": [
+        "baseline",
+        "optimized"
+      ],
+      "builds": {
+        "baseline": [
+          {
+            "mode": "fresh",
+            "sample": 0,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 2764,
+            "firstReadyMs": 2061,
+            "firstPaintMs": 2165,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 29,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 29,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 29,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 33,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 34,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 35,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 35,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 35,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 35,
+                "durationMs": 0
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 34,
+                "durationMs": 1
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 342,
+                "durationMs": 26
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 368,
+                "durationMs": 1
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 403,
+                "durationMs": 1580
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 401,
+                "durationMs": 1582
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 401,
+                "durationMs": 1582
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 1983,
+                "durationMs": 61
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 2045,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 2045,
+                "durationMs": 16
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 2061,
+                "durationMs": 661
+              },
+              {
+                "name": "scanPage",
+                "startMs": 33,
+                "durationMs": 2689
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 2722,
+                "durationMs": 36
+              },
+              {
+                "name": "initialize",
+                "startMs": 28,
+                "durationMs": 2730
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          },
+          {
+            "mode": "saved",
+            "sample": 0,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 4274,
+            "firstReadyMs": 4176,
+            "firstPaintMs": 4274,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 24,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 24,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 24,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 29,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 31,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 425,
+                "durationMs": 1596
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 415,
+                "durationMs": 1606
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 415,
+                "durationMs": 1606
+              },
+              {
+                "name": "renderImages",
+                "startMs": 415,
+                "durationMs": 1624
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 31,
+                "durationMs": 2008
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 2347,
+                "durationMs": 24
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 2371,
+                "durationMs": 82
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 2498,
+                "durationMs": 1583
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 2497,
+                "durationMs": 1584
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 2497,
+                "durationMs": 1584
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 4081,
+                "durationMs": 76
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 4158,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 4158,
+                "durationMs": 18
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 4176,
+                "durationMs": 72
+              },
+              {
+                "name": "scanPage",
+                "startMs": 30,
+                "durationMs": 4218
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 4248,
+                "durationMs": 20
+              },
+              {
+                "name": "initialize",
+                "startMs": 24,
+                "durationMs": 4244
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          },
+          {
+            "mode": "fresh",
+            "sample": 1,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 2687,
+            "firstReadyMs": 2081,
+            "firstPaintMs": 2179,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 56,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 55,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 55,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 61,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 64,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 67,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 67,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 67,
+                "durationMs": 1
+              },
+              {
+                "name": "renderImages",
+                "startMs": 67,
+                "durationMs": 1
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 64,
+                "durationMs": 4
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 380,
+                "durationMs": 20
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 400,
+                "durationMs": 1
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 428,
+                "durationMs": 1591
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 426,
+                "durationMs": 1593
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 426,
+                "durationMs": 1593
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 2019,
+                "durationMs": 49
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 2069,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 2068,
+                "durationMs": 13
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 2081,
+                "durationMs": 599
+              },
+              {
+                "name": "scanPage",
+                "startMs": 62,
+                "durationMs": 2618
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 2680,
+                "durationMs": 2
+              },
+              {
+                "name": "initialize",
+                "startMs": 55,
+                "durationMs": 2627
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          },
+          {
+            "mode": "saved",
+            "sample": 1,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 4278,
+            "firstReadyMs": 4183,
+            "firstPaintMs": 4278,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 26,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 26,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 26,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 30,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 31,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 407,
+                "durationMs": 1588
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 393,
+                "durationMs": 1602
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 393,
+                "durationMs": 1602
+              },
+              {
+                "name": "renderImages",
+                "startMs": 392,
+                "durationMs": 1618
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 31,
+                "durationMs": 1980
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 2332,
+                "durationMs": 25
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 2357,
+                "durationMs": 34
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 2488,
+                "durationMs": 1617
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 2485,
+                "durationMs": 1620
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 2485,
+                "durationMs": 1620
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 4105,
+                "durationMs": 58
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 4165,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 4165,
+                "durationMs": 18
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 4183,
+                "durationMs": 68
+              },
+              {
+                "name": "scanPage",
+                "startMs": 31,
+                "durationMs": 4220
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 4251,
+                "durationMs": 20
+              },
+              {
+                "name": "initialize",
+                "startMs": 25,
+                "durationMs": 4246
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          },
+          {
+            "mode": "fresh",
+            "sample": 2,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 2660,
+            "firstReadyMs": 2036,
+            "firstPaintMs": 2149,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 24,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 24,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 24,
+                "durationMs": 2
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 29,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 32,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 33,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 33,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 33,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 33,
+                "durationMs": 0
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 32,
+                "durationMs": 1
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 330,
+                "durationMs": 24
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 354,
+                "durationMs": 1
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 383,
+                "durationMs": 1578
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 382,
+                "durationMs": 1581
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 382,
+                "durationMs": 1581
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 1963,
+                "durationMs": 54
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 2019,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 2019,
+                "durationMs": 17
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 2036,
+                "durationMs": 613
+              },
+              {
+                "name": "scanPage",
+                "startMs": 30,
+                "durationMs": 2619
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 2649,
+                "durationMs": 6
+              },
+              {
+                "name": "initialize",
+                "startMs": 24,
+                "durationMs": 2631
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          },
+          {
+            "mode": "saved",
+            "sample": 2,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 4241,
+            "firstReadyMs": 4148,
+            "firstPaintMs": 4244,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 46,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 46,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 46,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 51,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 64,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 455,
+                "durationMs": 1594
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 446,
+                "durationMs": 1603
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 446,
+                "durationMs": 1603
+              },
+              {
+                "name": "renderImages",
+                "startMs": 446,
+                "durationMs": 1620
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 64,
+                "durationMs": 2002
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 2359,
+                "durationMs": 24
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 2383,
+                "durationMs": 38
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 2464,
+                "durationMs": 1577
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 2462,
+                "durationMs": 1579
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 2462,
+                "durationMs": 1579
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 4041,
+                "durationMs": 88
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 4130,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 4130,
+                "durationMs": 18
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 4148,
+                "durationMs": 69
+              },
+              {
+                "name": "scanPage",
+                "startMs": 52,
+                "durationMs": 4165
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 4217,
+                "durationMs": 20
+              },
+              {
+                "name": "initialize",
+                "startMs": 46,
+                "durationMs": 4191
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          }
+        ],
+        "optimized": [
+          {
+            "mode": "fresh",
+            "sample": 0,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 1122,
+            "firstReadyMs": 536,
+            "firstPaintMs": 610,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 25,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 25,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 25,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 30,
+                "durationMs": 1
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 32,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 33,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 33,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 33,
+                "durationMs": 1
+              },
+              {
+                "name": "renderImages",
+                "startMs": 33,
+                "durationMs": 1
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 32,
+                "durationMs": 2
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 350,
+                "durationMs": 24
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 374,
+                "durationMs": 1
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 408,
+                "durationMs": 55
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 406,
+                "durationMs": 57
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 406,
+                "durationMs": 57
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 463,
+                "durationMs": 57
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 521,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 521,
+                "durationMs": 15
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 536,
+                "durationMs": 541
+              },
+              {
+                "name": "scanPage",
+                "startMs": 32,
+                "durationMs": 1045
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 1078,
+                "durationMs": 37
+              },
+              {
+                "name": "initialize",
+                "startMs": 25,
+                "durationMs": 1090
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          },
+          {
+            "mode": "saved",
+            "sample": 0,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 1020,
+            "firstReadyMs": 952,
+            "firstPaintMs": 1021,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 25,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 25,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 25,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 29,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 32,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 344,
+                "durationMs": 53
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 333,
+                "durationMs": 64
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 333,
+                "durationMs": 64
+              },
+              {
+                "name": "renderImages",
+                "startMs": 333,
+                "durationMs": 82
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 32,
+                "durationMs": 383
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 723,
+                "durationMs": 24
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 747,
+                "durationMs": 36
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 825,
+                "durationMs": 52
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 823,
+                "durationMs": 54
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 823,
+                "durationMs": 54
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 877,
+                "durationMs": 58
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 936,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 936,
+                "durationMs": 16
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 952,
+                "durationMs": 44
+              },
+              {
+                "name": "scanPage",
+                "startMs": 30,
+                "durationMs": 966
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 996,
+                "durationMs": 18
+              },
+              {
+                "name": "initialize",
+                "startMs": 25,
+                "durationMs": 989
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          },
+          {
+            "mode": "fresh",
+            "sample": 1,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 1036,
+            "firstReadyMs": 502,
+            "firstPaintMs": 566,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 25,
+                "durationMs": 1
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 25,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 25,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 29,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 31,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 32,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 32,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 32,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 32,
+                "durationMs": 1
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 31,
+                "durationMs": 2
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 332,
+                "durationMs": 16
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 348,
+                "durationMs": 1
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 382,
+                "durationMs": 48
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 380,
+                "durationMs": 51
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 380,
+                "durationMs": 51
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 431,
+                "durationMs": 54
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 485,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 485,
+                "durationMs": 17
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 502,
+                "durationMs": 519
+              },
+              {
+                "name": "scanPage",
+                "startMs": 30,
+                "durationMs": 991
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 1022,
+                "durationMs": 2
+              },
+              {
+                "name": "initialize",
+                "startMs": 24,
+                "durationMs": 1000
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          },
+          {
+            "mode": "saved",
+            "sample": 1,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 1103,
+            "firstReadyMs": 1038,
+            "firstPaintMs": 1096,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 24,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 24,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 24,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 29,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 31,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 383,
+                "durationMs": 63
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 367,
+                "durationMs": 79
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 367,
+                "durationMs": 79
+              },
+              {
+                "name": "renderImages",
+                "startMs": 367,
+                "durationMs": 95
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 31,
+                "durationMs": 431
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 770,
+                "durationMs": 18
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 788,
+                "durationMs": 86
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 916,
+                "durationMs": 50
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 915,
+                "durationMs": 51
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 914,
+                "durationMs": 52
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 966,
+                "durationMs": 54
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 1021,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 1021,
+                "durationMs": 17
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 1038,
+                "durationMs": 40
+              },
+              {
+                "name": "scanPage",
+                "startMs": 30,
+                "durationMs": 1048
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 1078,
+                "durationMs": 20
+              },
+              {
+                "name": "initialize",
+                "startMs": 24,
+                "durationMs": 1074
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          },
+          {
+            "mode": "fresh",
+            "sample": 2,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 1033,
+            "firstReadyMs": 523,
+            "firstPaintMs": 593,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 26,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 26,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 26,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 30,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 32,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 34,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 34,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 34,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 34,
+                "durationMs": 1
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 32,
+                "durationMs": 3
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 354,
+                "durationMs": 17
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 371,
+                "durationMs": 1
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 407,
+                "durationMs": 51
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 405,
+                "durationMs": 54
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 405,
+                "durationMs": 54
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 459,
+                "durationMs": 50
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 510,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 510,
+                "durationMs": 13
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 523,
+                "durationMs": 496
+              },
+              {
+                "name": "scanPage",
+                "startMs": 31,
+                "durationMs": 988
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 1019,
+                "durationMs": 3
+              },
+              {
+                "name": "initialize",
+                "startMs": 26,
+                "durationMs": 996
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          },
+          {
+            "mode": "saved",
+            "sample": 2,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 1010,
+            "firstReadyMs": 945,
+            "firstPaintMs": 1011,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 23,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 23,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 23,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 29,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 31,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 333,
+                "durationMs": 51
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 318,
+                "durationMs": 67
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 318,
+                "durationMs": 67
+              },
+              {
+                "name": "renderImages",
+                "startMs": 318,
+                "durationMs": 82
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 31,
+                "durationMs": 369
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 722,
+                "durationMs": 16
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 738,
+                "durationMs": 40
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 821,
+                "durationMs": 50
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 819,
+                "durationMs": 53
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 819,
+                "durationMs": 53
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 872,
+                "durationMs": 55
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 930,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 930,
+                "durationMs": 15
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 945,
+                "durationMs": 40
+              },
+              {
+                "name": "scanPage",
+                "startMs": 29,
+                "durationMs": 956
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 985,
+                "durationMs": 19
+              },
+              {
+                "name": "initialize",
+                "startMs": 22,
+                "durationMs": 982
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          }
+        ]
+      }
+    },
+    {
+      "order": [
+        "optimized",
+        "baseline"
+      ],
+      "builds": {
+        "baseline": [
+          {
+            "mode": "fresh",
+            "sample": 0,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 2800,
+            "firstReadyMs": 2085,
+            "firstPaintMs": 2188,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 34,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 34,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 34,
+                "durationMs": 2
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 39,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 62,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 65,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 65,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 65,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 65,
+                "durationMs": 1
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 62,
+                "durationMs": 4
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 383,
+                "durationMs": 27
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 410,
+                "durationMs": 1
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 443,
+                "durationMs": 1570
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 441,
+                "durationMs": 1572
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 441,
+                "durationMs": 1572
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 2013,
+                "durationMs": 57
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 2071,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 2071,
+                "durationMs": 14
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 2085,
+                "durationMs": 670
+              },
+              {
+                "name": "scanPage",
+                "startMs": 55,
+                "durationMs": 2701
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 2756,
+                "durationMs": 38
+              },
+              {
+                "name": "initialize",
+                "startMs": 34,
+                "durationMs": 2760
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          },
+          {
+            "mode": "saved",
+            "sample": 0,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 4211,
+            "firstReadyMs": 4111,
+            "firstPaintMs": 4211,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 24,
+                "durationMs": 1
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 24,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 24,
+                "durationMs": 2
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 29,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 31,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 418,
+                "durationMs": 1598
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 409,
+                "durationMs": 1608
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 409,
+                "durationMs": 1608
+              },
+              {
+                "name": "renderImages",
+                "startMs": 409,
+                "durationMs": 1623
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 31,
+                "durationMs": 2001
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 2342,
+                "durationMs": 21
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 2363,
+                "durationMs": 30
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 2436,
+                "durationMs": 1581
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 2434,
+                "durationMs": 1583
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 2434,
+                "durationMs": 1583
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 4017,
+                "durationMs": 77
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 4094,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 4094,
+                "durationMs": 17
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 4111,
+                "durationMs": 75
+              },
+              {
+                "name": "scanPage",
+                "startMs": 30,
+                "durationMs": 4156
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 4186,
+                "durationMs": 20
+              },
+              {
+                "name": "initialize",
+                "startMs": 24,
+                "durationMs": 4182
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          },
+          {
+            "mode": "fresh",
+            "sample": 1,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 2669,
+            "firstReadyMs": 2066,
+            "firstPaintMs": 2163,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 27,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 27,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 26,
+                "durationMs": 2
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 45,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 49,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 53,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 53,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 52,
+                "durationMs": 1
+              },
+              {
+                "name": "renderImages",
+                "startMs": 52,
+                "durationMs": 1
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 49,
+                "durationMs": 4
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 368,
+                "durationMs": 21
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 389,
+                "durationMs": 1
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 415,
+                "durationMs": 1586
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 414,
+                "durationMs": 1587
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 414,
+                "durationMs": 1587
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 2001,
+                "durationMs": 50
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 2052,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 2052,
+                "durationMs": 14
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 2066,
+                "durationMs": 595
+              },
+              {
+                "name": "scanPage",
+                "startMs": 46,
+                "durationMs": 2615
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 2661,
+                "durationMs": 3
+              },
+              {
+                "name": "initialize",
+                "startMs": 26,
+                "durationMs": 2638
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          },
+          {
+            "mode": "saved",
+            "sample": 1,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 4187,
+            "firstReadyMs": 4090,
+            "firstPaintMs": 4187,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 25,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 25,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 25,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 32,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 35,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 403,
+                "durationMs": 1585
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 394,
+                "durationMs": 1594
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 394,
+                "durationMs": 1594
+              },
+              {
+                "name": "renderImages",
+                "startMs": 394,
+                "durationMs": 1610
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 35,
+                "durationMs": 1969
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 2341,
+                "durationMs": 25
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 2366,
+                "durationMs": 34
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 2443,
+                "durationMs": 1572
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 2442,
+                "durationMs": 1573
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 2442,
+                "durationMs": 1573
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 4015,
+                "durationMs": 58
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 4073,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 4073,
+                "durationMs": 17
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 4090,
+                "durationMs": 69
+              },
+              {
+                "name": "scanPage",
+                "startMs": 33,
+                "durationMs": 4126
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 4159,
+                "durationMs": 21
+              },
+              {
+                "name": "initialize",
+                "startMs": 24,
+                "durationMs": 4156
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          },
+          {
+            "mode": "fresh",
+            "sample": 2,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 2697,
+            "firstReadyMs": 2061,
+            "firstPaintMs": 2176,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 27,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 27,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 27,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 32,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 34,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 35,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 35,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 35,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 35,
+                "durationMs": 0
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 34,
+                "durationMs": 1
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 346,
+                "durationMs": 21
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 367,
+                "durationMs": 1
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 395,
+                "durationMs": 1593
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 394,
+                "durationMs": 1595
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 394,
+                "durationMs": 1595
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 1989,
+                "durationMs": 52
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 2042,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 2042,
+                "durationMs": 19
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 2061,
+                "durationMs": 619
+              },
+              {
+                "name": "scanPage",
+                "startMs": 33,
+                "durationMs": 2647
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 2680,
+                "durationMs": 5
+              },
+              {
+                "name": "initialize",
+                "startMs": 26,
+                "durationMs": 2659
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          },
+          {
+            "mode": "saved",
+            "sample": 2,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 4267,
+            "firstReadyMs": 4169,
+            "firstPaintMs": 4267,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 42,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 42,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 42,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 47,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 50,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 422,
+                "durationMs": 1608
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 412,
+                "durationMs": 1618
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 412,
+                "durationMs": 1618
+              },
+              {
+                "name": "renderImages",
+                "startMs": 412,
+                "durationMs": 1634
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 50,
+                "durationMs": 1996
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 2356,
+                "durationMs": 25
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 2381,
+                "durationMs": 89
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 2517,
+                "durationMs": 1579
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 2516,
+                "durationMs": 1580
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 2515,
+                "durationMs": 1581
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 4096,
+                "durationMs": 55
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 4152,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 4152,
+                "durationMs": 17
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 4169,
+                "durationMs": 71
+              },
+              {
+                "name": "scanPage",
+                "startMs": 48,
+                "durationMs": 4192
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 4240,
+                "durationMs": 21
+              },
+              {
+                "name": "initialize",
+                "startMs": 41,
+                "durationMs": 4220
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          }
+        ],
+        "optimized": [
+          {
+            "mode": "fresh",
+            "sample": 0,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 1116,
+            "firstReadyMs": 524,
+            "firstPaintMs": 594,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 25,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 25,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 25,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 29,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 31,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 32,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 32,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 32,
+                "durationMs": 1
+              },
+              {
+                "name": "renderImages",
+                "startMs": 32,
+                "durationMs": 1
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 31,
+                "durationMs": 2
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 342,
+                "durationMs": 24
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 366,
+                "durationMs": 1
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 397,
+                "durationMs": 56
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 396,
+                "durationMs": 58
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 396,
+                "durationMs": 58
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 454,
+                "durationMs": 55
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 510,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 510,
+                "durationMs": 14
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 524,
+                "durationMs": 548
+              },
+              {
+                "name": "scanPage",
+                "startMs": 30,
+                "durationMs": 1042
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 1072,
+                "durationMs": 38
+              },
+              {
+                "name": "initialize",
+                "startMs": 24,
+                "durationMs": 1086
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          },
+          {
+            "mode": "saved",
+            "sample": 0,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 1035,
+            "firstReadyMs": 965,
+            "firstPaintMs": 1027,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 27,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 27,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 26,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 31,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 32,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 359,
+                "durationMs": 52
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 348,
+                "durationMs": 64
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 348,
+                "durationMs": 64
+              },
+              {
+                "name": "renderImages",
+                "startMs": 348,
+                "durationMs": 79
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 32,
+                "durationMs": 395
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 741,
+                "durationMs": 18
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 759,
+                "durationMs": 27
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 830,
+                "durationMs": 54
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 829,
+                "durationMs": 55
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 829,
+                "durationMs": 55
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 884,
+                "durationMs": 61
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 946,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 946,
+                "durationMs": 19
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 965,
+                "durationMs": 42
+              },
+              {
+                "name": "scanPage",
+                "startMs": 31,
+                "durationMs": 976
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 1008,
+                "durationMs": 21
+              },
+              {
+                "name": "initialize",
+                "startMs": 26,
+                "durationMs": 1003
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          },
+          {
+            "mode": "fresh",
+            "sample": 1,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 1072,
+            "firstReadyMs": 524,
+            "firstPaintMs": 591,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 25,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 25,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 25,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 29,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 31,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 32,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 32,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 32,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 32,
+                "durationMs": 0
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 31,
+                "durationMs": 1
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 338,
+                "durationMs": 18
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 356,
+                "durationMs": 1
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 401,
+                "durationMs": 50
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 400,
+                "durationMs": 52
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 400,
+                "durationMs": 52
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 452,
+                "durationMs": 57
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 509,
+                "durationMs": 1
+              },
+              {
+                "name": "renderImages",
+                "startMs": 509,
+                "durationMs": 15
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 524,
+                "durationMs": 541
+              },
+              {
+                "name": "scanPage",
+                "startMs": 30,
+                "durationMs": 1035
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 1065,
+                "durationMs": 2
+              },
+              {
+                "name": "initialize",
+                "startMs": 24,
+                "durationMs": 1043
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          },
+          {
+            "mode": "saved",
+            "sample": 1,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 1044,
+            "firstReadyMs": 976,
+            "firstPaintMs": 1044,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 25,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 25,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 25,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 29,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 30,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 359,
+                "durationMs": 52
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 348,
+                "durationMs": 63
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 348,
+                "durationMs": 63
+              },
+              {
+                "name": "renderImages",
+                "startMs": 348,
+                "durationMs": 79
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 30,
+                "durationMs": 397
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 744,
+                "durationMs": 17
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 761,
+                "durationMs": 40
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 844,
+                "durationMs": 54
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 843,
+                "durationMs": 55
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 843,
+                "durationMs": 55
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 898,
+                "durationMs": 61
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 960,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 960,
+                "durationMs": 16
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 976,
+                "durationMs": 42
+              },
+              {
+                "name": "scanPage",
+                "startMs": 29,
+                "durationMs": 990
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 1019,
+                "durationMs": 20
+              },
+              {
+                "name": "initialize",
+                "startMs": 24,
+                "durationMs": 1015
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          },
+          {
+            "mode": "fresh",
+            "sample": 2,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 1061,
+            "firstReadyMs": 505,
+            "firstPaintMs": 583,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 24,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 24,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 24,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 28,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 29,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 31,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 31,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 31,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 31,
+                "durationMs": 1
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 29,
+                "durationMs": 3
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 331,
+                "durationMs": 28
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 359,
+                "durationMs": 1
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 384,
+                "durationMs": 49
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 382,
+                "durationMs": 51
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 382,
+                "durationMs": 51
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 433,
+                "durationMs": 56
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 490,
+                "durationMs": 0
+              },
+              {
+                "name": "renderImages",
+                "startMs": 490,
+                "durationMs": 15
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 505,
+                "durationMs": 549
+              },
+              {
+                "name": "scanPage",
+                "startMs": 28,
+                "durationMs": 1026
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 1054,
+                "durationMs": 1
+              },
+              {
+                "name": "initialize",
+                "startMs": 24,
+                "durationMs": 1031
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          },
+          {
+            "mode": "saved",
+            "sample": 2,
+            "count": 5000,
+            "selected": 5000,
+            "ms": 1107,
+            "firstReadyMs": 1033,
+            "firstPaintMs": 1107,
+            "stages": [
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 23,
+                "durationMs": 0
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 23,
+                "durationMs": 0
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 23,
+                "durationMs": 1
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 28,
+                "durationMs": 0
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 30,
+                "durationMs": 0
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 363,
+                "durationMs": 57
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 354,
+                "durationMs": 67
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 354,
+                "durationMs": 67
+              },
+              {
+                "name": "renderImages",
+                "startMs": 354,
+                "durationMs": 84
+              },
+              {
+                "name": "restoreSiteGallery",
+                "startMs": 30,
+                "durationMs": 408
+              },
+              {
+                "name": "mergeScanResults",
+                "startMs": 750,
+                "durationMs": 26
+              },
+              {
+                "name": "loadIgnoredKeys",
+                "startMs": 776,
+                "durationMs": 41
+              },
+              {
+                "name": "renderedDownloadItems",
+                "startMs": 872,
+                "durationMs": 60
+              },
+              {
+                "name": "rebuildFilenamePreviews",
+                "startMs": 870,
+                "durationMs": 63
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 870,
+                "durationMs": 63
+              },
+              {
+                "name": "refreshDownloadStatuses",
+                "startMs": 933,
+                "durationMs": 79
+              },
+              {
+                "name": "updateFilenameTemplateUi",
+                "startMs": 1015,
+                "durationMs": 1
+              },
+              {
+                "name": "renderImages",
+                "startMs": 1015,
+                "durationMs": 18
+              },
+              {
+                "name": "saveCurrentGallery",
+                "startMs": 1033,
+                "durationMs": 50
+              },
+              {
+                "name": "scanPage",
+                "startMs": 29,
+                "durationMs": 1054
+              },
+              {
+                "name": "startLiveCapture",
+                "startMs": 1083,
+                "durationMs": 18
+              },
+              {
+                "name": "initialize",
+                "startMs": 22,
+                "durationMs": 1079
+              }
+            ],
+            "errors": [],
+            "notice": ""
+          }
+        ]
+      }
+    }
+  ]
+}

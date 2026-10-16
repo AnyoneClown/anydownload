@@ -1432,9 +1432,8 @@
         const updated = DownloadLedger.recordCompletions(current, completed);
         await saveDownloadLedger(context.incognito, updated);
       }
-      for (const task of markable) {
-        task.ledgerRecorded = true;
-      }
+      context.state = DownloadQueue.markLedgerRecorded(context.state,
+        markable.map((task) => task.id));
       context.dirty = true;
       return true;
     } catch (error) {
@@ -1898,15 +1897,28 @@
       .filter((job) => ["complete", "interrupted", "cancelled"].includes(job.status) &&
         !job.tasks.some((task) => task.needsReconciliation))
       .sort((left, right) => left.finishedAt - right.finishedAt);
+    let jobCount = nextState.jobs.length;
+    let taskCount = nextState.jobs.reduce((total, job) => total + job.tasks.length, 0);
+    let urlLength = nextState.jobs.reduce(
+      (total, job) => total + job.tasks.reduce((sum, task) => sum + task.url.length, 0),
+      items.reduce((total, item) => total + item.url.length, 0)
+    );
     const removedIds = new Set();
     for (const job of terminalJobs) {
       removedIds.add(job.id);
-      const candidate = DownloadQueue.hydrate({
-        ...nextState,
-        jobs: nextState.jobs.filter((entry) => !removedIds.has(entry.id))
-      }, { recoverInFlight: false });
-      if (queueHasRoomFor(candidate, items)) {
-        return candidate;
+      jobCount -= 1;
+      taskCount -= job.tasks.length;
+      urlLength -= job.tasks.reduce((total, task) => total + task.url.length, 0);
+      if (jobCount < DownloadQueue.MAX_STORED_JOBS &&
+          taskCount + items.length <= DownloadQueue.MAX_STORED_TASKS &&
+          urlLength <= DownloadQueue.MAX_BATCH_TOTAL_URL_LENGTH) {
+        // Decide which old details to evict before validating the retained
+        // state. Large batches can require removing many jobs; normalizing the
+        // whole queue after each candidate removal makes admission quadratic.
+        return DownloadQueue.hydrate({
+          ...nextState,
+          jobs: nextState.jobs.filter((entry) => !removedIds.has(entry.id))
+        }, { recoverInFlight: false });
       }
     }
     return nextState;

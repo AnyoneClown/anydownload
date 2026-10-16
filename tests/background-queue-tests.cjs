@@ -115,6 +115,7 @@ function createHarness(options = {}) {
   const rejectFirstDownloads = Math.max(0, Number(options.rejectFirstDownloads) || 0);
   const createdObjectUrls = [];
   const revokedObjectUrls = [];
+  let queueHydrationCalls = 0;
   const downloads = new Map();
   for (const item of options.downloads || []) {
     downloads.set(item.id, copy(item));
@@ -324,6 +325,16 @@ function createHarness(options = {}) {
       context,
       { filename: path.basename(relativePath) }
     );
+    if (relativePath.endsWith("/download-queue.js")) {
+      const model = context.ImageDownloaderDownloadQueue;
+      context.ImageDownloaderDownloadQueue = {
+        ...model,
+        hydrate(...args) {
+          queueHydrationCalls += 1;
+          return model.hydrate(...args);
+        }
+      };
+    }
   }
 
   async function send(message) {
@@ -361,6 +372,9 @@ function createHarness(options = {}) {
     resumeCalls,
     rejectingDownloadApis,
     revokedObjectUrls,
+    get queueHydrationCalls() {
+      return queueHydrationCalls;
+    },
     searchFailures,
     send,
     session,
@@ -1315,6 +1329,52 @@ async function testFinishedDetailsMakeRoomWithoutLosingHistory() {
   assert.equal(compact.tasks.length, 0);
 }
 
+async function testLargeBatchPrunesFinishedDetailsInOnePass() {
+  const now = Date.UTC(2026, 7, 7);
+  const seed = DownloadQueue.enqueueBatch(DownloadQueue.emptyState(now),
+    Array.from({ length: 50 }, (_, index) => ({
+      url: `https://finished.example/${index}.jpg`, filename: `${index}.jpg`
+    })), { now, idFactory: (kind, index) => `${kind}-seed-${index}` });
+  const finished = DownloadQueue.cancelTasks(seed.state,
+    seed.state.jobs[0].tasks.map((task) => task.id), { now: now + 1 }).state;
+  const jobs = Array.from({ length: 100 }, (_, index) => ({
+    ...finished.jobs[0],
+    id: `job-finished-${index}`,
+    createdAt: now + index,
+    finishedAt: now + index + 1,
+    tasks: finished.jobs[0].tasks.map((task, taskIndex) => ({
+      ...task, id: `task-finished-${index}-${taskIndex}`
+    }))
+  }));
+  const queueState = DownloadQueue.hydrate({
+    ...finished, jobs,
+    history: jobs.map((job) => ({ ...finished.history[0], jobId: job.id })),
+    stats: {
+      ...finished.stats,
+      lifetime: { ...finished.stats.lifetime, enqueued: 5000, cancelled: 5000 }
+    }
+  }, { now: now + 101, recoverInFlight: false });
+  assert.equal(queueState.jobs.flatMap((job) => job.tasks).length, DownloadQueue.MAX_STORED_TASKS);
+  const harness = createHarness({ local: { [QUEUE_STORAGE_KEY]: queueState } });
+  const response = await harness.send({
+    type: "DOWNLOAD_BATCH", pageTitle: "Replacement batch", folder: "AnyDownload/new",
+    items: Array.from({ length: 1500 }, (_, index) => ({
+      url: `https://new.example/${index}.jpg`, filename: `new-${index}.jpg`
+    }))
+  });
+  assert.equal(response.ok, true);
+  assert.equal(response.queued, 1500);
+  const stored = harness.local.dump()[QUEUE_STORAGE_KEY];
+  assert.equal(stored.jobs.length, 71);
+  assert.equal(stored.jobs.flatMap((job) => job.tasks).length, DownloadQueue.MAX_STORED_TASKS);
+  assert.ok(!stored.jobs.some((job) => job.id === "job-finished-29"));
+  assert.ok(stored.jobs.some((job) => job.id === "job-finished-30"));
+  assert.ok(stored.history.some((item) => item.jobId === "job-finished-0"),
+    "Evicted details must retain compact history");
+  assert.equal(harness.queueHydrationCalls, 3,
+    "Load both storage contexts and validate the retained queue once, regardless of jobs evicted");
+}
+
 async function testBulkControlsAtQueueLimit() {
   const harness = createHarness();
   const response = await harness.send({
@@ -1614,6 +1674,7 @@ async function testTelegramSourceTransfer() {
   await testTerminalMetadataReconciliation();
   await testStartFailuresDoNotStrandQueuedItems();
   await testFinishedDetailsMakeRoomWithoutLosingHistory();
+  await testLargeBatchPrunesFinishedDetailsInOnePass();
   await testBulkControlsAtQueueLimit();
   await testBulkRetryLeavesCancelledTasksAlone();
   await testProgressEventsAvoidDurableWriteAmplification();

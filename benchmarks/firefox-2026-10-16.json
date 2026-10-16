@@ -1,0 +1,2548 @@
+{
+  "date": "2026-10-16",
+  "firefoxVersion": "158.0",
+  "firefoxBuildID": "20261007201254",
+  "platform": "mac",
+  "headed": true,
+  "baselineCommit": "9fc609a7e2499005d793200f155609a0af61e12a",
+  "productionDiffSha256": "3a43ae71008f3c7692aa92becd6c7cd0d4e9200a274e21f82913fc9bfc731516",
+  "method": {
+    "runs": [
+      "baseline then optimized",
+      "optimized then baseline",
+      "baseline then optimized; final post-phase asynchronous error assertions enabled"
+    ],
+    "collectorAndInteractionSamplesPerBuild": 21,
+    "untimedWarmupsPerScenarioPerRun": 2,
+    "managerLaunchSamplesPerBuild": 3,
+    "fixtures": "Same already-loaded localhost SVG galleries (1,200 and 5,000 media); 10,500-element page with CSS, responsive, lazy, shadow-root and real WebM video cases",
+    "timerPrecision": "Firefox default; 0ms denotes below timer resolution, not zero work",
+    "interactionTiming": "Synchronous real DOM event handler time and time through a subsequent rendered frame (double requestAnimationFrame)",
+    "instrumentation": "Identical test-only wrappers expose closed-over functions in disposable extension copies; production manifest and code unchanged during these tests",
+    "scope": "Desktop manager tab sharing popup/Sidebar code; Firefox 158 on this Mac; localhost deterministic media. No public-site adapters or Android device tested."
+  },
+  "summary": {
+    "collector": {
+      "gallery-1200-media": {
+        "baseline": {
+          "medianMs": 29,
+          "samplesMs": [
+            27,
+            28,
+            28,
+            26,
+            27,
+            30,
+            30,
+            27,
+            30,
+            28,
+            30,
+            28,
+            29,
+            29,
+            30,
+            30,
+            29,
+            29,
+            28,
+            28,
+            29
+          ]
+        },
+        "optimized": {
+          "medianMs": 20,
+          "samplesMs": [
+            19,
+            21,
+            20,
+            18,
+            21,
+            19,
+            20,
+            20,
+            17,
+            20,
+            19,
+            20,
+            20,
+            20,
+            20,
+            19,
+            20,
+            20,
+            20,
+            18,
+            19
+          ]
+        }
+      },
+      "gallery-1200-backgrounds": {
+        "baseline": {
+          "medianMs": 31,
+          "samplesMs": [
+            32,
+            30,
+            32,
+            33,
+            31,
+            31,
+            29,
+            30,
+            32,
+            30,
+            32,
+            32,
+            31,
+            32,
+            30,
+            33,
+            32,
+            30,
+            31,
+            31,
+            34
+          ]
+        },
+        "optimized": {
+          "medianMs": 22,
+          "samplesMs": [
+            24,
+            21,
+            20,
+            25,
+            21,
+            21,
+            27,
+            23,
+            21,
+            27,
+            22,
+            22,
+            24,
+            24,
+            21,
+            21,
+            27,
+            21,
+            22,
+            22,
+            25
+          ]
+        }
+      },
+      "gallery-5000-media": {
+        "baseline": {
+          "medianMs": 122,
+          "samplesMs": [
+            120,
+            116,
+            124,
+            124,
+            117,
+            125,
+            124,
+            122,
+            120,
+            121,
+            123,
+            120,
+            121,
+            122,
+            116,
+            122,
+            119,
+            124,
+            123,
+            122,
+            114
+          ]
+        },
+        "optimized": {
+          "medianMs": 86,
+          "samplesMs": [
+            88,
+            85,
+            86,
+            91,
+            83,
+            87,
+            85,
+            85,
+            86,
+            89,
+            83,
+            83,
+            156,
+            87,
+            83,
+            85,
+            88,
+            83,
+            85,
+            86,
+            86
+          ]
+        }
+      },
+      "gallery-5000-backgrounds": {
+        "baseline": {
+          "medianMs": 133,
+          "samplesMs": [
+            157,
+            136,
+            130,
+            130,
+            131,
+            125,
+            131,
+            147,
+            121,
+            120,
+            116,
+            136,
+            135,
+            137,
+            154,
+            134,
+            138,
+            133,
+            127,
+            133,
+            134
+          ]
+        },
+        "optimized": {
+          "medianMs": 99,
+          "samplesMs": [
+            94,
+            104,
+            117,
+            92,
+            98,
+            100,
+            101,
+            96,
+            100,
+            116,
+            99,
+            94,
+            97,
+            94,
+            100,
+            104,
+            121,
+            92,
+            98,
+            101,
+            93
+          ]
+        }
+      },
+      "long-dom-media": {
+        "baseline": {
+          "medianMs": 4,
+          "samplesMs": [
+            4,
+            4,
+            4,
+            4,
+            3,
+            3,
+            3,
+            5,
+            5,
+            4,
+            3,
+            4,
+            3,
+            4,
+            5,
+            5,
+            3,
+            3,
+            4,
+            4,
+            4
+          ]
+        },
+        "optimized": {
+          "medianMs": 4,
+          "samplesMs": [
+            5,
+            4,
+            4,
+            4,
+            3,
+            4,
+            3,
+            5,
+            4,
+            3,
+            3,
+            3,
+            5,
+            3,
+            4,
+            3,
+            4,
+            4,
+            3,
+            3,
+            3
+          ]
+        }
+      },
+      "long-dom-backgrounds": {
+        "baseline": {
+          "medianMs": 21,
+          "samplesMs": [
+            19,
+            23,
+            21,
+            21,
+            22,
+            21,
+            20,
+            23,
+            22,
+            21,
+            23,
+            23,
+            23,
+            21,
+            20,
+            20,
+            22,
+            21,
+            22,
+            23,
+            21
+          ]
+        },
+        "optimized": {
+          "medianMs": 20,
+          "samplesMs": [
+            20,
+            28,
+            19,
+            19,
+            24,
+            18,
+            20,
+            28,
+            19,
+            20,
+            18,
+            23,
+            20,
+            19,
+            20,
+            28,
+            19,
+            20,
+            24,
+            18,
+            19
+          ]
+        }
+      }
+    },
+    "manager": {
+      "deselectAll": {
+        "baseline": {
+          "medianSyncMs": 60,
+          "medianPaintedMs": 90,
+          "samples": [
+            {
+              "syncMs": 59,
+              "paintedMs": 83,
+              "renderCpuMs": 59,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 62,
+              "paintedMs": 92,
+              "renderCpuMs": 62,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 59,
+              "paintedMs": 84,
+              "renderCpuMs": 59,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 61,
+              "paintedMs": 92,
+              "renderCpuMs": 61,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 59,
+              "paintedMs": 89,
+              "renderCpuMs": 59,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 63,
+              "paintedMs": 148,
+              "renderCpuMs": 63,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 59,
+              "paintedMs": 84,
+              "renderCpuMs": 59,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 59,
+              "paintedMs": 90,
+              "renderCpuMs": 59,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 60,
+              "paintedMs": 85,
+              "renderCpuMs": 60,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 58,
+              "paintedMs": 104,
+              "renderCpuMs": 58,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 61,
+              "paintedMs": 90,
+              "renderCpuMs": 61,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 58,
+              "paintedMs": 128,
+              "renderCpuMs": 58,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 62,
+              "paintedMs": 90,
+              "renderCpuMs": 62,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 61,
+              "paintedMs": 94,
+              "renderCpuMs": 61,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 60,
+              "paintedMs": 88,
+              "renderCpuMs": 60,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 58,
+              "paintedMs": 85,
+              "renderCpuMs": 58,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 61,
+              "paintedMs": 84,
+              "renderCpuMs": 60,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 60,
+              "paintedMs": 125,
+              "renderCpuMs": 60,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 62,
+              "paintedMs": 104,
+              "renderCpuMs": 62,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 59,
+              "paintedMs": 87,
+              "renderCpuMs": 59,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 59,
+              "paintedMs": 85,
+              "renderCpuMs": 59,
+              "renderCount": 1
+            }
+          ]
+        },
+        "optimized": {
+          "medianSyncMs": 18,
+          "medianPaintedMs": 48,
+          "samples": [
+            {
+              "syncMs": 20,
+              "paintedMs": 48,
+              "renderCpuMs": 20,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 19,
+              "paintedMs": 51,
+              "renderCpuMs": 18,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 18,
+              "paintedMs": 77,
+              "renderCpuMs": 18,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 19,
+              "paintedMs": 75,
+              "renderCpuMs": 18,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 18,
+              "paintedMs": 42,
+              "renderCpuMs": 18,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 18,
+              "paintedMs": 47,
+              "renderCpuMs": 18,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 21,
+              "paintedMs": 49,
+              "renderCpuMs": 21,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 18,
+              "paintedMs": 49,
+              "renderCpuMs": 18,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 17,
+              "paintedMs": 44,
+              "renderCpuMs": 17,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 21,
+              "paintedMs": 59,
+              "renderCpuMs": 20,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 18,
+              "paintedMs": 49,
+              "renderCpuMs": 18,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 18,
+              "paintedMs": 79,
+              "renderCpuMs": 18,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 18,
+              "paintedMs": 43,
+              "renderCpuMs": 18,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 19,
+              "paintedMs": 43,
+              "renderCpuMs": 18,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 18,
+              "paintedMs": 46,
+              "renderCpuMs": 18,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 18,
+              "paintedMs": 41,
+              "renderCpuMs": 18,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 17,
+              "paintedMs": 51,
+              "renderCpuMs": 17,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 18,
+              "paintedMs": 48,
+              "renderCpuMs": 18,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 17,
+              "paintedMs": 78,
+              "renderCpuMs": 17,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 19,
+              "paintedMs": 45,
+              "renderCpuMs": 19,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 18,
+              "paintedMs": 42,
+              "renderCpuMs": 18,
+              "renderCount": 1
+            }
+          ]
+        }
+      },
+      "singleCheckbox": {
+        "baseline": {
+          "medianSyncMs": 53,
+          "medianPaintedMs": 70,
+          "samples": [
+            {
+              "syncMs": 51,
+              "paintedMs": 67,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 53,
+              "paintedMs": 71,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 53,
+              "paintedMs": 70,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 53,
+              "paintedMs": 67,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 56,
+              "paintedMs": 72,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 58,
+              "paintedMs": 74,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 56,
+              "paintedMs": 83,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 51,
+              "paintedMs": 72,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 52,
+              "paintedMs": 66,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 53,
+              "paintedMs": 76,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 54,
+              "paintedMs": 69,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 54,
+              "paintedMs": 65,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 52,
+              "paintedMs": 76,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 52,
+              "paintedMs": 87,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 60,
+              "paintedMs": 76,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 60,
+              "paintedMs": 80,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 55,
+              "paintedMs": 69,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 53,
+              "paintedMs": 67,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 53,
+              "paintedMs": 70,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 57,
+              "paintedMs": 70,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 54,
+              "paintedMs": 69,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            }
+          ]
+        },
+        "optimized": {
+          "medianSyncMs": 10,
+          "medianPaintedMs": 25,
+          "samples": [
+            {
+              "syncMs": 11,
+              "paintedMs": 25,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 10,
+              "paintedMs": 25,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 10,
+              "paintedMs": 25,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 10,
+              "paintedMs": 25,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 10,
+              "paintedMs": 25,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 9,
+              "paintedMs": 30,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 10,
+              "paintedMs": 24,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 10,
+              "paintedMs": 25,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 10,
+              "paintedMs": 25,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 10,
+              "paintedMs": 25,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 10,
+              "paintedMs": 29,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 11,
+              "paintedMs": 24,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 8,
+              "paintedMs": 24,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 11,
+              "paintedMs": 31,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 11,
+              "paintedMs": 26,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 9,
+              "paintedMs": 31,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 10,
+              "paintedMs": 25,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 9,
+              "paintedMs": 29,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 8,
+              "paintedMs": 22,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 10,
+              "paintedMs": 24,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 11,
+              "paintedMs": 29,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            }
+          ]
+        }
+      },
+      "nextPage": {
+        "baseline": {
+          "medianSyncMs": 14,
+          "medianPaintedMs": 43,
+          "samples": [
+            {
+              "syncMs": 13,
+              "paintedMs": 37,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 38,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 12,
+              "paintedMs": 50,
+              "renderCpuMs": 12,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 58,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 38,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 40,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 19,
+              "paintedMs": 42,
+              "renderCpuMs": 19,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 89,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 15,
+              "paintedMs": 45,
+              "renderCpuMs": 15,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 48,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 34,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 15,
+              "paintedMs": 57,
+              "renderCpuMs": 15,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 15,
+              "paintedMs": 60,
+              "renderCpuMs": 15,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 63,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 43,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 36,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 12,
+              "paintedMs": 36,
+              "renderCpuMs": 12,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 50,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 39,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 40,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 12,
+              "paintedMs": 52,
+              "renderCpuMs": 12,
+              "renderCount": 1
+            }
+          ]
+        },
+        "optimized": {
+          "medianSyncMs": 13,
+          "medianPaintedMs": 38,
+          "samples": [
+            {
+              "syncMs": 14,
+              "paintedMs": 49,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 34,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 36,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 38,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 37,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 37,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 39,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 41,
+              "renderCpuMs": 12,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 38,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 15,
+              "paintedMs": 37,
+              "renderCpuMs": 15,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 39,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 39,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 12,
+              "paintedMs": 35,
+              "renderCpuMs": 12,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 44,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 48,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 46,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 36,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 51,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 36,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 41,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 12,
+              "paintedMs": 38,
+              "renderCpuMs": 12,
+              "renderCount": 1
+            }
+          ]
+        }
+      },
+      "previousPage": {
+        "baseline": {
+          "medianSyncMs": 14,
+          "medianPaintedMs": 39,
+          "samples": [
+            {
+              "syncMs": 17,
+              "paintedMs": 48,
+              "renderCpuMs": 17,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 36,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 15,
+              "paintedMs": 42,
+              "renderCpuMs": 15,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 48,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 44,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 38,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 42,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 38,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 16,
+              "paintedMs": 41,
+              "renderCpuMs": 15,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 38,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 39,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 36,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 37,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 15,
+              "paintedMs": 38,
+              "renderCpuMs": 15,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 36,
+              "paintedMs": 72,
+              "renderCpuMs": 36,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 38,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 49,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 46,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 37,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 53,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 12,
+              "paintedMs": 37,
+              "renderCpuMs": 12,
+              "renderCount": 1
+            }
+          ]
+        },
+        "optimized": {
+          "medianSyncMs": 13,
+          "medianPaintedMs": 38,
+          "samples": [
+            {
+              "syncMs": 14,
+              "paintedMs": 48,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 48,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 47,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 12,
+              "paintedMs": 44,
+              "renderCpuMs": 12,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 12,
+              "paintedMs": 37,
+              "renderCpuMs": 12,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 38,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 34,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 37,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 38,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 36,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 44,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 37,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 37,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 43,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 36,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 15,
+              "paintedMs": 36,
+              "renderCpuMs": 15,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 39,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 36,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 39,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 13,
+              "paintedMs": 39,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 14,
+              "paintedMs": 34,
+              "renderCpuMs": 14,
+              "renderCount": 1
+            }
+          ]
+        }
+      },
+      "filterSearch": {
+        "baseline": {
+          "medianSyncMs": 0,
+          "medianPaintedMs": 117,
+          "samples": [
+            {
+              "syncMs": 0,
+              "paintedMs": 110,
+              "renderCpuMs": 6,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 107,
+              "renderCpuMs": 6,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 118,
+              "renderCpuMs": 5,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 130,
+              "renderCpuMs": 10,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 125,
+              "renderCpuMs": 5,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 115,
+              "renderCpuMs": 7,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 121,
+              "renderCpuMs": 6,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 1,
+              "paintedMs": 107,
+              "renderCpuMs": 7,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 110,
+              "renderCpuMs": 4,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 124,
+              "renderCpuMs": 6,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 1,
+              "paintedMs": 109,
+              "renderCpuMs": 6,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 117,
+              "renderCpuMs": 5,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 116,
+              "renderCpuMs": 7,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 118,
+              "renderCpuMs": 6,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 109,
+              "renderCpuMs": 5,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 107,
+              "renderCpuMs": 6,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 117,
+              "renderCpuMs": 8,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 142,
+              "renderCpuMs": 5,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 121,
+              "renderCpuMs": 6,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 144,
+              "renderCpuMs": 6,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 108,
+              "renderCpuMs": 5,
+              "renderCount": 1
+            }
+          ]
+        },
+        "optimized": {
+          "medianSyncMs": 0,
+          "medianPaintedMs": 116,
+          "samples": [
+            {
+              "syncMs": 0,
+              "paintedMs": 116,
+              "renderCpuMs": 7,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 117,
+              "renderCpuMs": 6,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 121,
+              "renderCpuMs": 5,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 117,
+              "renderCpuMs": 5,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 171,
+              "renderCpuMs": 6,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 108,
+              "renderCpuMs": 5,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 116,
+              "renderCpuMs": 6,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 116,
+              "renderCpuMs": 8,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 1,
+              "paintedMs": 117,
+              "renderCpuMs": 10,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 117,
+              "renderCpuMs": 11,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 108,
+              "renderCpuMs": 6,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 1,
+              "paintedMs": 109,
+              "renderCpuMs": 6,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 116,
+              "renderCpuMs": 5,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 108,
+              "renderCpuMs": 6,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 116,
+              "renderCpuMs": 10,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 117,
+              "renderCpuMs": 6,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 117,
+              "renderCpuMs": 5,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 117,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 116,
+              "renderCpuMs": 11,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 116,
+              "renderCpuMs": 13,
+              "renderCount": 1
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 125,
+              "renderCpuMs": 16,
+              "renderCount": 1
+            }
+          ]
+        }
+      },
+      "dimensionsDefaultTemplate": {
+        "baseline": {
+          "medianSyncMs": 50,
+          "medianPaintedMs": 192,
+          "samples": [
+            {
+              "syncMs": 47,
+              "paintedMs": 151,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 52,
+              "paintedMs": 332,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 51,
+              "paintedMs": 192,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 56,
+              "paintedMs": 204,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 47,
+              "paintedMs": 202,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 48,
+              "paintedMs": 93,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 54,
+              "paintedMs": 66,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 49,
+              "paintedMs": 152,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 56,
+              "paintedMs": 323,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 52,
+              "paintedMs": 192,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 50,
+              "paintedMs": 192,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 46,
+              "paintedMs": 202,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 50,
+              "paintedMs": 88,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 56,
+              "paintedMs": 68,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 49,
+              "paintedMs": 153,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 47,
+              "paintedMs": 323,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 50,
+              "paintedMs": 191,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 55,
+              "paintedMs": 201,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 47,
+              "paintedMs": 206,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 50,
+              "paintedMs": 93,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 55,
+              "paintedMs": 67,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            }
+          ]
+        },
+        "optimized": {
+          "medianSyncMs": 0,
+          "medianPaintedMs": 17,
+          "samples": [
+            {
+              "syncMs": 0,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 16,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 1,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 16,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 16,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 16,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 16,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 16,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 16,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 0,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            }
+          ]
+        }
+      },
+      "dimensionsWidthTemplate": {
+        "baseline": {
+          "medianSyncMs": 53,
+          "medianPaintedMs": 198,
+          "samples": [
+            {
+              "syncMs": 56,
+              "paintedMs": 67,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 57,
+              "paintedMs": 164,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 58,
+              "paintedMs": 70,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 50,
+              "paintedMs": 241,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 47,
+              "paintedMs": 200,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 49,
+              "paintedMs": 199,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 53,
+              "paintedMs": 217,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 48,
+              "paintedMs": 58,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 49,
+              "paintedMs": 133,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 55,
+              "paintedMs": 250,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 56,
+              "paintedMs": 191,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 60,
+              "paintedMs": 80,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 55,
+              "paintedMs": 231,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 57,
+              "paintedMs": 225,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 52,
+              "paintedMs": 65,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 51,
+              "paintedMs": 160,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 60,
+              "paintedMs": 260,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 48,
+              "paintedMs": 198,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 50,
+              "paintedMs": 204,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 55,
+              "paintedMs": 107,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 50,
+              "paintedMs": 208,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            }
+          ]
+        },
+        "optimized": {
+          "medianSyncMs": 5,
+          "medianPaintedMs": 17,
+          "samples": [
+            {
+              "syncMs": 5,
+              "paintedMs": 16,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 5,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 5,
+              "paintedMs": 16,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 5,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 5,
+              "paintedMs": 16,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 6,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 5,
+              "paintedMs": 16,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 6,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 5,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 5,
+              "paintedMs": 16,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 5,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 5,
+              "paintedMs": 16,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 5,
+              "paintedMs": 18,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 4,
+              "paintedMs": 16,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 5,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 5,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 5,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 4,
+              "paintedMs": 16,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 6,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 5,
+              "paintedMs": 16,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            },
+            {
+              "syncMs": 5,
+              "paintedMs": 17,
+              "renderCpuMs": 0,
+              "renderCount": 0
+            }
+          ]
+        }
+      }
+    },
+    "initialReadyMs": {
+      "baseline": {
+        "medianMs": 2883,
+        "samplesMs": [
+          2883,
+          2916,
+          2874
+        ]
+      },
+      "optimized": {
+        "medianMs": 2778,
+        "samplesMs": [
+          2778,
+          2845,
+          2777
+        ]
+      }
+    }
+  },
+  "regressions": {
+    "uiChecksPerBuildPerRun": 23,
+    "allUiChecksPassed": true,
+    "allCollectorUrlSetsMetadataOrderAndWarningsMatch": true,
+    "actualNativeDownloadsVerified": 6,
+    "downloadBytesEach": 276,
+    "normalGalleryRecords": 5000,
+    "privateGalleryRecords": 1200,
+    "privateLiveUpdateRecords": 1201,
+    "normalPrivateSeparationPassed": true,
+    "liveSelectionPreserved": true,
+    "uncaughtManagerErrors": [],
+    "totalUiChecksPassed": 138,
+    "postDownloadPrivateAndLiveAsyncErrors": {
+      "baseline": [],
+      "optimized": []
+    }
+  },
+  "observations": {
+    "unchangedStatusRefresh": {
+      "baseline": [
+        {
+          "syncMs": 2,
+          "paintedMs": 165,
+          "renderCpuMs": 12,
+          "renderCount": 1,
+          "preservesCardNode": false
+        },
+        {
+          "syncMs": 1,
+          "paintedMs": 1439,
+          "renderCpuMs": 24,
+          "renderCount": 1,
+          "preservesCardNode": false
+        },
+        {
+          "syncMs": 1,
+          "paintedMs": 162,
+          "renderCpuMs": 14,
+          "renderCount": 1,
+          "preservesCardNode": false
+        }
+      ],
+      "optimized": [
+        {
+          "syncMs": 1,
+          "paintedMs": 63,
+          "renderCpuMs": 0,
+          "renderCount": 0,
+          "preservesCardNode": true
+        },
+        {
+          "syncMs": 2,
+          "paintedMs": 64,
+          "renderCpuMs": 0,
+          "renderCount": 0,
+          "preservesCardNode": true
+        },
+        {
+          "syncMs": 1,
+          "paintedMs": 72,
+          "renderCpuMs": 0,
+          "renderCount": 0,
+          "preservesCardNode": true
+        }
+      ]
+    },
+    "liveUpdates": {
+      "baseline": {
+        "count": 1201,
+        "existingSelectionRetained": true,
+        "normalGalleryUnchanged": true,
+        "elapsedMs": 2126,
+        "errors": []
+      },
+      "optimized": {
+        "count": 1201,
+        "existingSelectionRetained": true,
+        "normalGalleryUnchanged": true,
+        "elapsedMs": 2108,
+        "errors": []
+      }
+    },
+    "collectorEdgeChecks": {
+      "count": 2,
+      "records": [
+        {
+          "url": "http://127.0.0.1:8189/media/long/clip.webm",
+          "mediaType": "video",
+          "width": 0,
+          "height": 0,
+          "previewUrl": "",
+          "duration": 0,
+          "mimeType": "video/webm",
+          "kinds": [
+            "Video"
+          ]
+        },
+        {
+          "url": "http://127.0.0.1:8189/media/long/edge-valid.svg",
+          "mediaType": "image",
+          "width": 0,
+          "height": 0,
+          "previewUrl": "",
+          "duration": 0,
+          "mimeType": "",
+          "kinds": [
+            "Image"
+          ]
+        }
+      ],
+      "warnings": [
+        "2 page-owned blob images were skipped because Firefox cannot download it from an extension.",
+        "1 page-owned blob video URL was skipped because Firefox cannot download it from an extension.",
+        "2 streaming video manifests were skipped because it is not a standalone video file."
+      ],
+      "passedChecks": [
+        "Malformed and script URL rejection",
+        "Blob image/video rejection and warnings",
+        "HLS/DASH manifest rejection and warnings",
+        "Duplicate URL collapse",
+        "Valid image and direct video preservation"
+      ]
+    },
+    "collectorChecks": {
+      "gallery-1200-media": [
+        "Exact expected URL set and count",
+        "No duplicate, unsafe or noncanonical media/preview URLs",
+        "Correct image/video classification and finite dimensions",
+        "Bounded media count and source kinds",
+        "Full-size dimensions for every gallery image",
+        "No unexpected gallery warnings"
+      ],
+      "gallery-1200-backgrounds": [
+        "Exact expected URL set and count",
+        "No duplicate, unsafe or noncanonical media/preview URLs",
+        "Correct image/video classification and finite dimensions",
+        "Bounded media count and source kinds",
+        "Full-size dimensions for every gallery image",
+        "No unexpected gallery warnings"
+      ],
+      "gallery-5000-media": [
+        "Exact expected URL set and count",
+        "No duplicate, unsafe or noncanonical media/preview URLs",
+        "Correct image/video classification and finite dimensions",
+        "Bounded media count and source kinds",
+        "Full-size dimensions for every gallery image",
+        "No unexpected gallery warnings"
+      ],
+      "gallery-5000-backgrounds": [
+        "Exact expected URL set and count",
+        "No duplicate, unsafe or noncanonical media/preview URLs",
+        "Correct image/video classification and finite dimensions",
+        "Bounded media count and source kinds",
+        "Full-size dimensions for every gallery image",
+        "No unexpected gallery warnings"
+      ],
+      "long-dom-media": [
+        "Exact expected URL set and count",
+        "No duplicate, unsafe or noncanonical media/preview URLs",
+        "Correct image/video classification and finite dimensions",
+        "Bounded media count and source kinds",
+        "Late image/video and open-shadow media beyond the general DOM budget",
+        "Lazy original dimensions and largest responsive source",
+        "CSS background exclusion",
+        "Video dimensions, one-second duration, WebM MIME and poster preview",
+        "General DOM budget warning"
+      ],
+      "long-dom-backgrounds": [
+        "Exact expected URL set and count",
+        "No duplicate, unsafe or noncanonical media/preview URLs",
+        "Correct image/video classification and finite dimensions",
+        "Bounded media count and source kinds",
+        "Late image/video and open-shadow media beyond the general DOM budget",
+        "Lazy original dimensions and largest responsive source",
+        "CSS background discovery",
+        "Video dimensions, one-second duration, WebM MIME and poster preview",
+        "General DOM budget warning"
+      ]
+    },
+    "uiChecks": [
+      {
+        "name": "large gallery contains 5,000 media",
+        "passed": true,
+        "details": 5000
+      },
+      {
+        "name": "first gallery page has 350 cards",
+        "passed": true,
+        "details": 350
+      },
+      {
+        "name": "first pagination label",
+        "passed": true,
+        "details": "1\u2013350 of 5\u00a0000"
+      },
+      {
+        "name": "Deselect removes all selections",
+        "passed": true
+      },
+      {
+        "name": "single checkbox tracks selection",
+        "passed": true
+      },
+      {
+        "name": "second page starts at item 351",
+        "passed": true
+      },
+      {
+        "name": "search matches exactly one image",
+        "passed": true
+      },
+      {
+        "name": "clearing search restores 5,000 media",
+        "passed": true
+      },
+      {
+        "name": "dimension updates refresh card metadata",
+        "passed": true
+      },
+      {
+        "name": "width and height tokens update filename",
+        "passed": true,
+        "details": "00001-1806x901.svg"
+      },
+      {
+        "name": "selection survives page changes and filtering",
+        "passed": true
+      },
+      {
+        "name": "hidden selections remain visible in summary",
+        "passed": true,
+        "details": "2 selected \u00b7 1 hidden"
+      },
+      {
+        "name": "selected review preserves page-order filename indices",
+        "passed": true,
+        "details": [
+          "0001-00001.svg",
+          "0002-00351.svg"
+        ]
+      },
+      {
+        "name": "download filename collisions receive distinct suffixes",
+        "passed": true,
+        "details": [
+          "collision.svg",
+          "collision-2.svg"
+        ]
+      },
+      {
+        "name": "download batch filename index follows selected page order",
+        "passed": true,
+        "details": [
+          "0001-collision.svg",
+          "0002-collision.svg"
+        ]
+      },
+      {
+        "name": "final gallery page contains 100 cards",
+        "passed": true,
+        "details": 100
+      },
+      {
+        "name": "final pagination label",
+        "passed": true,
+        "details": "4901\u20135000 of 5\u00a0000"
+      },
+      {
+        "name": "filename sort retains all media",
+        "passed": true
+      },
+      {
+        "name": "resolution sort orders descending image area",
+        "passed": true
+      },
+      {
+        "name": "unchanged status refresh preserves gallery count",
+        "passed": true
+      },
+      {
+        "name": "preview dialog opens",
+        "passed": true
+      },
+      {
+        "name": "preview decodes real local image",
+        "passed": true,
+        "details": {
+          "width": 1200,
+          "height": 900
+        }
+      },
+      {
+        "name": "preview dialog closes",
+        "passed": true
+      }
+    ],
+    "additionalLiveUpdates": {
+      "baseline": {
+        "count": 1201,
+        "existingSelectionRetained": true,
+        "normalGalleryUnchanged": true,
+        "elapsedMs": 2141,
+        "errors": []
+      },
+      "optimized": {
+        "count": 1201,
+        "existingSelectionRetained": true,
+        "normalGalleryUnchanged": true,
+        "elapsedMs": 2102,
+        "errors": []
+      }
+    }
+  }
+}

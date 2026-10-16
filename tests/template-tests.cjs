@@ -29,6 +29,7 @@ assert.deepEqual(Object.keys(Templates).sort(), [
   "MAX_FILENAME_LENGTH",
   "MAX_TEMPLATE_LENGTH",
   "TOKENS",
+  "createUsedNames",
   "normalize",
   "preview",
   "render",
@@ -226,6 +227,115 @@ assert.equal(
   "holiday-2.png",
   "Pre-populated sets may contain either output names or normalized keys"
 );
+const mutatedNames = new Set(["ＨＯＬＩＤＡＹ.png"]);
+assert.equal(Templates.render("holiday", { filename: "source.png" }, { usedNames: mutatedNames }), "holiday-2.png");
+mutatedNames.delete("ＨＯＬＩＤＡＹ.png");
+assert.equal(Templates.render("holiday", { filename: "source.png" }, { usedNames: mutatedNames }), "holiday.png",
+  "Caller-owned sets must reflect removed names between renders");
+mutatedNames.add("HOLIDAY-3.PNG");
+assert.equal(Templates.render("holiday", { filename: "source.png" }, { usedNames: mutatedNames }), "holiday-4.png",
+  "Caller-owned sets must reflect mixed-case names added between renders");
+
+const managedNames = Templates.createUsedNames(["ＨＯＬＩＤＡＹ.png"]);
+assert.equal(Templates.render("holiday", { filename: "source.png" }, { usedNames: managedNames }), "holiday-2.png");
+assert.equal(managedNames.add("HOLIDAY-3.PNG"), managedNames);
+assert.equal(Templates.render("holiday", { filename: "source.png" }, { usedNames: managedNames }), "holiday-4.png");
+assert.ok(managedNames.has("Ｈｏｌｉｄａｙ-３.png"));
+assert.ok(managedNames.delete("HOLIDAY.PNG"));
+assert.equal(Templates.render("holiday", { filename: "source.png" }, { usedNames: managedNames }), "holiday.png");
+assert.equal(managedNames.size, 4);
+managedNames.clear();
+assert.equal(managedNames.size, 0);
+assert.equal(Templates.render("holiday", { filename: "source.png" }, { usedNames: managedNames }), "holiday.png");
+
+const sharedAliasNames = Templates.createUsedNames(["PHOTO.JPG", "photo.jpg"]);
+assert.ok(sharedAliasNames.delete("PHOTO.JPG"));
+assert.equal(Templates.render("{filename}", { filename: "photo.jpg" }, { usedNames: sharedAliasNames }), "photo-2.jpg",
+  "Removing one spelling must retain folded aliases contributed by another stored name");
+assert.ok(sharedAliasNames.delete("photo.jpg"));
+assert.equal(Templates.render("{filename}", { filename: "photo.jpg" }, { usedNames: sharedAliasNames }), "photo.jpg");
+
+const renderNameSequence = (filenames, names) => filenames.map(filename =>
+  Templates.render("{filename}", { filename }, { usedNames: names }));
+for (const [filenames, expected] of [
+  [["J\u030c.jpg", "J\u030c.jpg"], ["J\u030c.jpg", "J\u030c-2.jpg"]],
+  [["J\u030c.jpg", "ǰ.jpg"], ["J\u030c.jpg", "ǰ-2.jpg"]],
+  [["ǰ.jpg", "J\u030c.jpg"], ["ǰ.jpg", "J\u030c.jpg"]],
+  [["Ｊ\u030c.jpg", "J\u030c.jpg"], ["J\u030c.jpg", "J\u030c-2.jpg"]]
+]) {
+  assert.deepEqual(renderNameSequence(filenames, Templates.createUsedNames()), expected,
+    "Managed collisions must preserve order-dependent legacy Unicode folding");
+  assert.deepEqual(renderNameSequence(filenames, new Set()), expected);
+}
+assert.deepEqual(renderNameSequence(["ǰ.jpg"], Templates.createUsedNames(["J\u030c.jpg"])), ["ǰ.jpg"],
+  "Pre-populated values must be indexed exactly as caller-owned Set entries");
+
+// Compare the managed index with the compatibility Set path across deterministic
+// Unicode inputs, existing entries, direct mutations, and collision suffixes.
+const unicodeNames = [
+  "J\u030c.jpg", "ǰ.jpg", "j\u030c.jpg", "Ｊ\u030c.jpg", "Photo.jpg", "Ｐｈｏｔｏ.jpg",
+  "PHOTO.JPG", "ß.jpg", "ẞ.jpg", "İ.jpg", "i\u0307.jpg", "Σ.jpg", "ς.jpg", "σ.jpg",
+  "K.jpg", "K.jpg", "𝐉\u030c.jpg", "ﬃ.jpg", "FFI.jpg", "ǰ-2.jpg", "J\u030c-2.jpg",
+  "H\u0331.jpg", "ẖ.jpg", "T\u0308.jpg", "ẗ.jpg", "T\u0344.jpg", "ẗ\u0301.jpg",
+  "W\u030a.jpg", "ẘ.jpg", "Y\u030a.jpg", "ẙ.jpg"
+];
+let randomState = 0x51f15e;
+const randomIndex = length => {
+  randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0;
+  return randomState % length;
+};
+for (let batch = 0; batch < 200; batch += 1) {
+  const seeds = Array.from({ length: randomIndex(5) }, () => unicodeNames[randomIndex(unicodeNames.length)]);
+  const referenceNames = new Set(seeds);
+  const indexedNames = Templates.createUsedNames(seeds);
+  for (let step = 0; step < 35; step += 1) {
+    const filename = unicodeNames[randomIndex(unicodeNames.length)];
+    if (step % 11 === 0) {
+      referenceNames.add(filename);
+      indexedNames.add(filename);
+    } else if (step % 13 === 0 && referenceNames.size) {
+      const stored = Array.from(referenceNames)[randomIndex(referenceNames.size)];
+      assert.equal(indexedNames.delete(stored), referenceNames.delete(stored));
+    } else {
+      assert.equal(
+        Templates.render("{filename}", { filename }, { usedNames: indexedNames }),
+        Templates.render("{filename}", { filename }, { usedNames: referenceNames }),
+        `Unicode collision output must match the legacy Set in batch ${batch}, step ${step}`
+      );
+    }
+    assert.deepEqual(Array.from(indexedNames), Array.from(referenceNames),
+      "The managed registry must retain the exact stored values and insertion order");
+  }
+}
+
+const setLikeValues = new Set(["PHOTO.JPG"]);
+const setLikeNames = {
+  has: value => setLikeValues.has(value),
+  add: value => setLikeValues.add(value),
+  [Symbol.iterator]: () => setLikeValues[Symbol.iterator]()
+};
+assert.equal(Templates.render("{filename}", { filename: "photo.jpg" }, { usedNames: setLikeNames }), "photo-2.jpg",
+  "Existing iterable set-like collision registries remain supported");
+
+const largeBatchNames = Templates.createUsedNames();
+const originalCaseFold = String.prototype.toLocaleLowerCase;
+let caseFolds = 0;
+try {
+  String.prototype.toLocaleLowerCase = function countedCaseFold(...args) {
+    caseFolds += 1;
+    return originalCaseFold.apply(this, args);
+  };
+  for (let index = 1; index <= 5000; index += 1) {
+    assert.equal(Templates.render(Templates.DEFAULT_TEMPLATE, {
+      filename: "Photo.jpg", index
+    }, { usedNames: largeBatchNames }), `${String(index).padStart(4, "0")}-Photo.jpg`);
+  }
+} finally {
+  String.prototype.toLocaleLowerCase = originalCaseFold;
+}
+assert.equal(largeBatchNames.size, 5000);
+assert.ok(caseFolds <= 5000 * 4,
+  `A 5,000-name batch must use a bounded number of case folds per item, saw ${caseFolds}`);
 assert.throws(
   () => Templates.render("{filename}", { filename: "photo.jpg" }, { usedNames: {} }),
   /usedNames must be a Set/

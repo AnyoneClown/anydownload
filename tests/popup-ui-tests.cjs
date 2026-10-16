@@ -7,6 +7,12 @@ const vm = require("node:vm");
 const Core = require("../extension/shared/core.js");
 const Filters = require("../extension/shared/filters.js");
 const Templates = require("../extension/shared/templates.js");
+const templateCalls = { preview: 0, render: 0 };
+const MeasuredTemplates = {
+  ...Templates,
+  preview(...args) { templateCalls.preview += 1; return Templates.preview(...args); },
+  render(...args) { templateCalls.render += 1; return Templates.render(...args); }
+};
 const Immich = require("../extension/shared/immich.js");
 const Integrations = require("../extension/shared/integrations.js");
 const integrationOwner = "11111111-1111-4111-8111-111111111111";
@@ -118,7 +124,7 @@ const context = vm.createContext({
   location: { href: "moz-extension://test/popup/popup.html?sourceTabId=7" },
   ImageDownloaderCore: Core,
   ImageDownloaderFilters: Filters,
-  ImageDownloaderTemplates: Templates,
+  ImageDownloaderTemplates: MeasuredTemplates,
   ImageDownloaderImmich: PickerImmich,
   AnyDownloadIntegrations: Integrations,
   AnyDownloadTracker: require("../extension/shared/tracker.js"),
@@ -177,6 +183,7 @@ const entry = '  document.addEventListener("DOMContentLoaded", () => {';
 assert.ok(source.includes(entry));
 source = source.replace(entry, `  globalThis.ui = { cacheElements, wireEvents, applyMediaView, applySmartFiltersToControls,
     updateSummary, renderImages, makeImageRow, requireValidFilenameTemplate, requestDownloads, finishArchiveDownload,
+    markFilenamePreviewsDirty, applyDimensionResult, refreshDownloadStatuses,
     filteredImages, selectedDownloadableImages, resetMediaFilters, openGalleryPreview, openImagePreview,
     moveGalleryPreview, initializeTrackerEditor, saveTracker, focusIgnoredToggle, persistSettings, ignoreStorageArea,
     handleSettingsStorageChanges, showWorkspace, setIncognitoContext, beginSidebarTransition, state, elements };
@@ -372,6 +379,7 @@ assert.equal(ui.requireValidFilenameTemplate(), null);
 assert.equal(get("download-settings-panel").open, true, "Invalid settings must be revealed before focusing them");
 assert.equal(get("filename-template-input").focused, true);
 assert.equal(get("download-button").disabled, true);
+assert.equal(get("filename-template-preview").textContent, "Example: lake.jpg", "Invalid templates retain the safe original filename example");
 
 get("filename-template-input").value = Templates.DEFAULT_TEMPLATE;
 get("folder-input").value = "../outside";
@@ -591,6 +599,61 @@ for (const embedded of [false, true]) {
   get("min-width-input").value = "1200";
   get("min-width-input").listeners.change();
   assert.equal(ui.state.galleryPage, 0, "Changing filters resets pagination");
+
+  ui.resetMediaFilters();
+  ui.state.images = Array.from({ length: 5000 }, (_, index) => ({
+    url: `https://photos.example/performance-${index}.jpg`, filename: "photo.jpg", width: 1000, height: 600
+  }));
+  ui.state.selected.clear();
+  get("filename-template-input").value = "{width}x{height}-{index}-{filename}";
+  ui.markFilenamePreviewsDirty();
+  templateCalls.preview = 0;
+  templateCalls.render = 0;
+  ui.renderImages();
+  assert.equal(templateCalls.preview, 350, "A 5,000-item gallery only formats the first page's 350 unselected previews");
+  assert.equal(templateCalls.render, 0);
+  assert.equal(ui.state.filenamePreviewByUrl.size, 350, "Off-page filename previews remain deferred");
+  get("next-page-button").listeners.click();
+  assert.equal(templateCalls.preview, 700, "Paging computes only newly visible names");
+  const measured = ui.state.images[350];
+  templateCalls.preview = 0;
+  ui.applyDimensionResult(measured.url, { width: 1920, height: 1080 });
+  assert.equal(templateCalls.preview, 351, "Dimension-dependent previews refresh visible rows and the example only");
+  assert.equal(rows()[0].children[2].children[0].children[0].textContent, "1920x1080-0001-photo.jpg");
+
+  get("filename-template-input").value = Templates.DEFAULT_TEMPLATE;
+  ui.renderImages();
+  templateCalls.preview = 0;
+  templateCalls.render = 0;
+  ui.applyDimensionResult(measured.url, { width: 2560, height: 1440 });
+  assert.deepEqual(templateCalls, { preview: 0, render: 0 }, "Measuring dimensions does not rebuild names for templates without dimension tokens");
+
+  ui.state.selected.add(ui.state.images[4000].url);
+  ui.state.selected.add(ui.state.images[350].url);
+  get("filename-template-input").value = "{filename}";
+  ui.renderImages();
+  assert.equal(ui.state.filenamePreviewByUrl.get(ui.state.images[350].url), "photo.jpg");
+  assert.equal(ui.state.filenamePreviewByUrl.get(ui.state.images[4000].url), "photo-2.jpg",
+    "Selected off-page names retain full discovery order and collision handling");
+  get("filename-template-input").value = "{width}-{filename}";
+  ui.renderImages();
+  ui.applyDimensionResult(measured.url, { width: 1000, height: 600 });
+  assert.equal(ui.state.filenamePreviewByUrl.get(measured.url), "1000-photo.jpg");
+  assert.equal(ui.state.filenamePreviewByUrl.get(ui.state.images[4000].url), "1000-photo-2.jpg",
+    "Changing a selected item's dimensions also updates off-page filename collisions");
+  const unchangedPage = get("image-list").children[0];
+  await ui.refreshDownloadStatuses();
+  assert.equal(get("image-list").children[0], unchangedPage,
+    "Unchanged download status does not recreate cards, observers, or thumbnail requests");
+  const statusSender = context.browser.runtime.sendMessage;
+  context.browser.runtime.sendMessage = async message => message.type === "GET_MEDIA_DOWNLOAD_STATUS"
+    ? { ok: true, statuses: message.items.map(item => ({ status: item.url === measured.url ? "queued" : "new" })) }
+    : statusSender(message);
+  await ui.refreshDownloadStatuses();
+  assert.notEqual(get("image-list").children[0], unchangedPage, "Changed status still refreshes visible cards");
+  assert.equal(ui.state.selected.has(measured.url), false, "Queued media are removed from selection during status refresh");
+  assert.equal(rows()[0].children[0].disabled, true);
+  context.browser.runtime.sendMessage = statusSender;
 
   ui.resetMediaFilters();
   ui.state.images = [first, second];
