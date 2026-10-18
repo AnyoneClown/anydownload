@@ -5,104 +5,69 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>AnyDownload — Account</title>
     <link rel="stylesheet" href="../shared/theme.css">
-    <link rel="stylesheet" href="sync.css">
+    <link rel="stylesheet" href="account.css">
   </head>
-  <body class="dashboard">
+  <body class="account-page">
+    <a class="skip-link" href="#main-content">Skip to account</a>
     <div class="workspace-header">
       <div class="app-brand"><img src="../icons/image-downloader-illustrated-v2-96.png" alt="" width="32" height="32"><span>AnyDownload</span></div>
       <nav class="workspace-nav" aria-label="Workspace">
         <a class="nav-link" data-source-link href="../popup/popup.html" hidden><svg aria-hidden="true" viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" rx="2"/><circle cx="7" cy="7" r="1"/><path d="m3 14 4-4 3 3 3-3 4 4"/></svg>Media</a>
         <a class="nav-link" data-source-link href="../history/history.html"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 3v10m-4-4 4 4 4-4M3 13v4h14v-4"/></svg>Downloads</a>
         <a class="nav-link" data-source-link href="../tracking/tracking.html"><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/></svg>Trackers</a>
-        <a class="nav-link current" data-source-link href="sync.html" aria-current="page"><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="6" r="3"/><path d="M4 17v-2a6 6 0 0 1 12 0v2"/></svg>Account</a>
-        <a class="nav-link" data-source-link href="../integrations/integrations.html"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M7 2v4m6-4v4M5 6h10v4a5 5 0 0 1-10 0V6m5 9v3"/></svg>Integrations</a>
       </nav>
+      <div class="workspace-utilities" role="group" aria-label="Account and integrations">
+        <a class="utility-button current" aria-label="Account" title="Account" data-source-link href="sync.html" aria-current="page"><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="6" r="3"/><path d="M4 17v-2a6 6 0 0 1 12 0v2"/></svg></a>
+        <a class="utility-button" aria-label="Integrations" title="Integrations" data-source-link href="../integrations/integrations.html"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M7 2v4m6-4v4M5 6h10v4a5 5 0 0 1-10 0V6m5 9v3"/></svg></a>
+      </div>
     </div>
-    <main class="page-shell">
+    <main id="main-content" class="page-shell" tabindex="-1">
       <header class="page-header">
-        <div>
-          <p class="eyebrow">Account</p>
-          <h1>Your setup.<br>Everywhere you download.</h1>
-          <p class="subtitle">Keep your preferences and completed-download records together, from desktop to Android.</p>
-        </div>
-        <div class="device-art" aria-hidden="true">
-          <svg viewBox="0 0 280 160" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect class="device-fill" x="15" y="34" width="146" height="94" rx="8"/><path d="M15 55h146M68 128v13m-21 0h63"/>
-            <path class="art-accent" d="m38 77 7 7 12-13m-19 30 7 7 12-13M72 79h61m-61 24h42"/>
-            <rect class="device-fill" x="194" y="48" width="66" height="106" rx="12"/><path d="M216 57h22m-22 86h22"/>
-            <path class="art-accent" d="m210 94 10 10 20-23"/>
-            <circle class="cloud-fill" cx="177" cy="35" r="28"/><path class="art-accent" d="M164 36a13 13 0 0 1 22-10l4 4m0-9v9h-9m9 5a13 13 0 0 1-22 10l-4-4m0 9v-9h9"/>
-          </svg>
-          <span>One Google account. All your devices.</span>
-        </div>
+        <h1>Account</h1>
+        <button id="refresh-button" class="icon-button" type="button" aria-label="Refresh account status" title="Refresh account status" disabled hidden><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M16 6V2.5M16 2.5h-3.5M16 2.5l-2.4 2.4A6.5 6.5 0 1 0 16 10"/></svg></button>
       </header>
 
-      <div id="error-banner" role="alert" hidden></div>
-      <section id="private-notice" class="card" hidden>
-        <h2>Private browsing stays private</h2>
-        <p>Cloud sync is unavailable in private windows. Open AnyDownload in a normal window to connect your account.</p>
-      </section>
+      <p id="page-loading" class="page-loading" role="status">Loading account…</p>
+      <div id="error-banner" class="error-banner" role="alert" hidden></div>
+      <p id="private-notice" class="private-notice" hidden>Cloud sync is unavailable in private windows. Open Account in a regular Firefox window.</p>
       <div id="sync-content" hidden>
-        <div class="sync-layout">
-          <section id="sync-card" class="card account-card" aria-labelledby="account-heading" hidden>
-            <div class="card-heading">
-              <span class="section-label">THIS DEVICE</span>
-              <span id="status-badge" class="status-badge">Loading</span>
-            </div>
-            <div class="account-identity">
-              <span id="account-avatar" class="account-avatar" aria-hidden="true">G</span>
-              <div><h2 id="account-heading">Connect with Google</h2><p id="account-email" class="muted">One sign-in to bring your setup along.</p></div>
-            </div>
-            <p id="sync-status" role="status" aria-live="polite">Loading sync settings…</p>
-            <p id="last-sync" class="muted" hidden></p>
-
-            <div id="setup-section">
-              <label class="consent-row">
-                <input id="sync-consent" type="checkbox" aria-describedby="consent-detail" disabled>
-                <span>Enable cloud sync for my Google account and the preferences, ignore rules, and completed-download records listed below.</span>
-              </label>
-              <p id="consent-detail" class="muted">This sends your Google account information and the listed extension data to AnyDownload’s cloud service, hosted on Supabase. Nothing is sent until you sign in.</p>
-            </div>
-            <div id="automatic-section" class="automatic-section" hidden>
-              <div><h3>Automatic sync</h3><p id="auto-description" class="muted">Changes travel with you, without another click.</p></div>
-              <button id="auto-button" type="button" role="switch" aria-checked="true" aria-label="Automatic sync on this device" disabled><span id="auto-label">On</span><span class="switch-track" aria-hidden="true"></span></button>
-            </div>
-            <div class="actions">
-              <button id="signin-button" class="primary-button google-button" type="button" disabled><span aria-hidden="true">G</span> Continue with Google</button>
-              <button id="sync-button" class="primary-button" type="button" hidden disabled>Sync now</button>
-              <button id="signout-button" type="button" hidden disabled>Sign out</button>
-              <button id="refresh-button" class="quiet-button" type="button" disabled><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="M16 6V2.5M16 2.5h-3.5M16 2.5l-2.4 2.4A6.5 6.5 0 1 0 16 10"/></svg>Refresh status</button>
-            </div>
-            <p id="action-hint" class="muted">Allow Firefox permissions, then choose your Google account in the tab that opens.</p>
-            <p id="account-note" class="account-note muted" hidden>This installation stays linked to this Google account after sign-out. Use the same account to reconnect. Signing out keeps your local and cloud data.</p>
-          </section>
-
-          <aside class="card device-card" aria-labelledby="device-heading">
-            <p class="eyebrow">Better together</p>
-            <h2 id="device-heading">Connect another device</h2>
-            <p class="muted">Your desktop and Android share the same setup.</p>
-            <ol class="device-steps">
-              <li><span class="step-number" aria-hidden="true">1</span><strong>Open AnyDownload</strong><span>Install the extension in Firefox on your other device.</span></li>
-              <li><span class="step-number" aria-hidden="true">2</span><strong>Open Account</strong><span>Choose Continue with Google and sign in with <b id="device-account">the same Google account</b>.</span></li>
-              <li><span class="step-number" aria-hidden="true">3</span><strong>You’re connected</strong><span>Existing preferences and records merge automatically. Keep Firefox running to stay in sync.</span></li>
-            </ol>
-            <p class="device-note">Offline? Keep downloading. Your local changes sync when you’re back online.</p>
-          </aside>
-        </div>
-
-        <section class="scope-section" aria-labelledby="scope-heading">
-          <div class="section-heading"><h2 id="scope-heading">Know what goes with you</h2><span class="muted">Your files stay on your device</span></div>
-          <div class="scope-grid">
-            <div class="card scope-card"><span class="scope-icon" aria-hidden="true">↔</span><h3>Your preferences</h3><p>Grid or list layout, background-image scanning, filters, and filename templates.</p><span class="scope-label">Synced across devices</span></div>
-            <div class="card scope-card"><span class="scope-icon" aria-hidden="true">✓</span><h3>What you’ve downloaded</h3><p>Completed-download records and website ignore rules, so you can avoid repeats.</p><span class="scope-label">Synced across devices</span></div>
-            <div class="card scope-card local-card"><span class="scope-icon" aria-hidden="true">⌂</span><h3>Local to each device</h3><p>Files, folders, Save As choices, queues, history, statistics, galleries, trackers, and private-window data.</p><span class="scope-label">Never synced</span></div>
+        <section id="sync-card" class="account-panel" aria-label="Cloud sync" tabindex="-1" hidden>
+          <div class="account-identity">
+            <p id="account-email" class="account-email">Cloud sync</p>
+            <span id="status-badge" class="status-badge"></span>
           </div>
+          <p id="sync-purpose" class="sync-purpose">Sync preferences, ignore rules, and completed-download records across devices.</p>
+          <p id="sync-status" class="sync-status" role="status" aria-live="polite" hidden></p>
+          <p id="last-sync" class="last-sync" hidden></p>
+
+          <div id="setup-section">
+            <label class="consent-row">
+              <input id="sync-consent" type="checkbox" aria-describedby="consent-detail" disabled>
+              <span>I agree to send my Google account information, preferences, ignore rules, and completed-download records to AnyDownload’s cloud service on Supabase.</span>
+            </label>
+            <p id="consent-detail" class="consent-detail">Nothing is sent until you continue with Google. Files stay on your device.</p>
+          </div>
+          <div id="automatic-section" class="automatic-section" hidden>
+            <span id="automatic-label">Automatic sync</span>
+            <button id="auto-button" type="button" role="switch" aria-checked="true" aria-labelledby="automatic-label" disabled><span id="auto-label">On</span><span class="switch-track" aria-hidden="true"></span></button>
+          </div>
+          <div class="actions">
+            <button id="signin-button" class="primary-button" type="button" disabled>Continue with Google</button>
+            <button id="sync-button" class="primary-button" type="button" hidden disabled>Sync now</button>
+            <button id="signout-button" type="button" hidden disabled>Sign out</button>
+          </div>
+          <p id="account-note" class="account-note" hidden></p>
         </section>
+
         <details class="privacy-details">
-          <summary>Privacy, storage, and how merging works</summary>
-          <p>Ignore rules include site names and hashed media identifiers. Completed records include the website, media fingerprint, filename, media type, and completion time. Your Google account identity and this metadata are stored on Supabase with per-account access rules; they are not end-to-end encrypted. AnyDownload never stores your Google password or uploads website login cookies.</p>
-          <p>A local copy remains available offline. First sign-in merges existing local and cloud records. If the same preference changes on two devices, the device saving its local edit wins. Automatic sync checks for other-device changes about once a minute while Firefox is running; browser sleep can delay it.</p>
-          <p>Pausing stops automatic uploads and downloads on this device; Sync now still works. Signing out stops sync and retains existing data. Removing the extension removes its local copy; cloud-account deletion is currently managed by the service administrator.</p>
+          <summary>Sync data and privacy</summary>
+          <div class="privacy-content">
+            <p>Synced preferences include gallery layout, background-image scanning, filters, and filename templates. Ignore rules include site names and hashed media identifiers. Completed-download records include the website, media fingerprint, filename, media type, and completion time.</p>
+            <p>Your Google account identity and this metadata are stored by AnyDownload on Supabase with per-account access rules. They are not end-to-end encrypted. AnyDownload never stores your Google password or uploads website login cookies.</p>
+            <p>Files, folders, Save As choices, queues, history, statistics, galleries, trackers, and private-window data stay local to each device.</p>
+            <p>First sign-in merges local and cloud data. If a preference changes on two devices, the device saving its local edit wins. Local changes sync within seconds; other-device changes are checked about once a minute while Firefox runs. Offline changes remain local until sync resumes.</p>
+            <p>Pausing stops automatic sync on this device; Sync now still works. Signing out retains local and cloud data, and this installation stays linked to the same Google account. Removing the extension deletes its local copy. Cloud-account deletion is currently managed by the service administrator.</p>
+          </div>
         </details>
       </div>
     </main>

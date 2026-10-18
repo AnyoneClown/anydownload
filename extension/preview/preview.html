@@ -10,10 +10,11 @@
   <body>
     <header class="preview-header">
       <div class="title-copy">
-        <strong id="image-name">Image preview</strong>
-        <span id="image-meta">Loading…</span>
+        <h1 id="image-name">Image preview</h1>
+        <span id="image-meta" role="status" aria-live="polite" aria-atomic="true">Loading…</span>
       </div>
       <nav class="header-actions" aria-label="Preview actions">
+        <button id="size-toggle" class="header-button size-toggle" type="button" disabled>Actual size</button>
         <a id="source-link" class="header-button" href="#" hidden><svg aria-hidden="true" viewBox="0 0 20 20"><path d="m8 4-6 6 6 6m-6-6h15"/></svg>Return to source</a>
         <a id="original-link" class="header-button" href="#" target="_blank" rel="noopener noreferrer" hidden>
           Open original
@@ -22,8 +23,8 @@
       </nav>
     </header>
 
-    <main id="preview-stage" class="preview-stage">
-      <button id="image-button" class="image-button" type="button" aria-label="Toggle actual image size" aria-pressed="false" disabled>
+    <main id="preview-stage" class="preview-stage" aria-label="Media preview" aria-busy="true">
+      <button id="image-button" class="image-button" type="button" aria-label="Actual image size" aria-pressed="false" aria-describedby="preview-footer" disabled>
         <img id="preview-image" alt="" referrerpolicy="no-referrer">
       </button>
       <video id="preview-video" class="preview-video" controls preload="metadata" playsinline hidden></video>
@@ -32,7 +33,7 @@
     </main>
 
     <footer id="preview-footer" class="preview-footer">
-      Click the image, or focus it and press Enter or Space, to switch between fit-to-window and actual size.
+      Image fits the window. Click the image or choose Actual size to zoom in.
     </footer>
 
     <script src="../shared/core.js"></script>

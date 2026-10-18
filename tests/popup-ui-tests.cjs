@@ -48,18 +48,33 @@ class Element {
   getAttribute(name) { return this.attributes[name] ?? null; }
   get src() { return this.attributes.src || ""; }
   set src(value) { this.attributes.src = value; this.srcWrites = (this.srcWrites || 0) + 1; }
-  remove() { this.parentElement.children = this.parentElement.children.filter(child => child !== this); this.isConnected = false; }
+  setConnected(connected) {
+    this.isConnected = connected;
+    for (const child of this.children) child.setConnected(connected);
+  }
+  remove() {
+    if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(child => child !== this);
+    this.setConnected(false);
+  }
   removeAttribute(name) { delete this.attributes[name]; }
   addEventListener(name, callback) { this.listeners[name] = callback; }
   append(...children) {
     this.children.push(...children);
-    for (const child of children) child.parentElement = this;
+    for (const child of children) {
+      child.parentElement = this;
+      child.setConnected(this.isConnected);
+    }
   }
   appendChild(child) { this.append(child); }
-  replaceChildren(...children) { this.children = []; this.append(...children); }
+  replaceChildren(...children) {
+    for (const child of this.children) child.setConnected(false);
+    this.children = [];
+    this.append(...children);
+  }
   querySelectorAll(selector) {
     return this.children.flatMap(child => [
-      ...(selector.split(",").map(tag => tag.trim().toUpperCase()).includes(child.tagName) ? [child] : []),
+      ...(selector === "[data-focus-key]" ? child.dataset.focusKey ? [child] : []
+        : selector.split(",").map(tag => tag.trim().toUpperCase()).includes(child.tagName) ? [child] : []),
       ...child.querySelectorAll(selector)
     ]);
   }
@@ -185,7 +200,7 @@ source = source.replace(entry, `  globalThis.ui = { cacheElements, wireEvents, a
     updateSummary, renderImages, makeImageRow, requireValidFilenameTemplate, requestDownloads, finishArchiveDownload,
     markFilenamePreviewsDirty, applyDimensionResult, refreshDownloadStatuses,
     filteredImages, selectedDownloadableImages, resetMediaFilters, openGalleryPreview, openImagePreview,
-    moveGalleryPreview, initializeTrackerEditor, saveTracker, focusIgnoredToggle, persistSettings, ignoreStorageArea,
+    moveGalleryPreview, initializeTrackerEditor, initializeTrackerCreator, saveTracker, focusIgnoredToggle, persistSettings, ignoreStorageArea,
     handleSettingsStorageChanges, showWorkspace, setIncognitoContext, beginSidebarTransition, state, elements };
 ${entry}`);
 vm.runInContext(source, context);
@@ -204,6 +219,13 @@ assert.equal(get("tracker-button").attributes["aria-expanded"], "true");
 get("tracker-panel").hidePopover();
 get("tracker-panel").listeners.toggle();
 assert.equal(get("tracker-button").attributes["aria-expanded"], "false", "Closing tracking resets its button");
+get("download-settings-panel").showPopover();
+get("download-settings-panel").listeners.toggle();
+assert.equal(get("download-settings-button").getAttribute("aria-expanded"), "true",
+  "Download settings exposes its open state to assistive technology");
+get("download-settings-panel").hidePopover();
+get("download-settings-panel").listeners.toggle();
+assert.equal(get("download-settings-button").getAttribute("aria-expanded"), "false");
 
 get("list-view-button").listeners.click();
 assert.equal(get("image-list").dataset.view, "list");
@@ -223,7 +245,8 @@ get("filter-input").value = "lake";
 ui.updateSummary();
 assert.equal(get("selected-label").textContent, "2 selected · 1 hidden");
 assert.equal(get("download-button").textContent, "Download 2 files");
-assert.match(get("selection-warning").textContent, /includes 1 files hidden/);
+assert.match(get("selection-warning").textContent, /includes 1 file hidden/);
+assert.match(get("selected-label").getAttribute("aria-label"), /including 1 hidden by filters/);
 assert.equal(ui.state.selected.size, 2, "Searching must preserve existing selections");
 
 const workspaceButtons = {
@@ -236,6 +259,8 @@ for (const view of ["history", "tracking", "integrations", "sync", "media"]) {
   assert.equal(ui.state.workspace, view, `${view} opens in the popup workspace`);
   assert.equal(get("media-workspace").hidden, view !== "media");
   assert.equal(workspaceFrame.hidden, view === "media");
+  assert.equal(get("skip-to-content").href, view === "media" ? "#image-list" : "#workspace-frame",
+    "Skip navigation targets the currently visible workspace");
   for (const [name, id] of Object.entries(workspaceButtons)) {
     assert.equal(get(id).getAttribute("aria-current") === "page", name === view,
       "Only the visible workspace is marked current");
@@ -259,6 +284,12 @@ context.AnyDownloadWorkspace.editTracker("tracker-7");
 assert.equal(ui.state.workspace, "tracking", "Editing a tracker stays in its workspace");
 assert.equal(new URL(workspaceFrame.src).pathname, "/popup/popup.html");
 assert.equal(new URL(workspaceFrame.src).searchParams.get("editTrackerId"), "tracker-7");
+context.AnyDownloadWorkspace.createTracker();
+assert.equal(ui.state.workspace, "tracking");
+assert.equal(new URL(workspaceFrame.src).pathname, "/popup/popup.html");
+assert.equal(new URL(workspaceFrame.src).searchParams.get("createTracker"), "1", "Add tracker opens setup directly");
+assert.equal(new URL(workspaceFrame.src).searchParams.get("sourceTabId"), "7");
+assert.equal(workspaceFrame.title, "New tracker");
 get("tracking-dashboard-button").click();
 assert.equal(new URL(workspaceFrame.src).pathname, "/tracking/tracking.html", "The Trackers button returns from its editor");
 get("media-button").click();
@@ -268,16 +299,25 @@ for (const view of ["unexpected", "__proto__", "https://unexpected.example"]) {
 }
 get("integrations-button").click();
 ui.setIncognitoContext(true);
+for (const id of ["sync-button", "integrations-button"]) {
+  assert.equal(get(id).disabled, true, "Visible account destinations stay disabled in private contexts");
+  assert.match(get(id).title, /unavailable in private windows/);
+}
 assert.equal(ui.state.workspace, "media", "A private-context switch immediately closes account integrations");
 assert.equal(workspaceFrame.getAttribute("src"), null, "Private browsing unloads the protected document");
 for (const view of ["tracking", "sync", "integrations"]) {
   ui.showWorkspace(view);
   assert.equal(ui.state.workspace, "media", "Private restrictions cannot be bypassed by invoking navigation");
 }
+context.AnyDownloadWorkspace.createTracker();
+assert.equal(ui.state.workspace, "media", "Private windows cannot open the tracker creator through the API");
 get("history-button").click();
 assert.equal(ui.state.workspace, "history", "Private download history remains accessible");
 const historyWrites = workspaceFrame.srcWrites;
 ui.setIncognitoContext(false);
+for (const id of ["sync-button", "integrations-button"]) {
+  assert.equal(get(id).disabled, false, "Account destinations become available in a regular context");
+}
 assert.ok(workspaceFrame.srcWrites > historyWrites, "Download history reloads when its privacy context changes");
 get("media-button").click();
 
@@ -334,6 +374,27 @@ const busyRow = ui.makeImageRow(first);
 busyRow.click();
 assert.equal(ui.state.selected.size, 0, "Busy cards cannot be selected");
 assert.equal(busyRow.children[3].children[0].disabled, true);
+assert.equal(busyRow.children[3].children[1].disabled, true,
+  "Busy cards disable More alongside Preview on their initial render");
+actions.children[1].listeners.click();
+assert.equal(get("media-actions-panel").open, undefined,
+  "A stale card cannot open a menu of unavailable actions after an operation starts");
+ui.updateSummary();
+assert.equal(actions.children[0].disabled, true);
+assert.equal(actions.children[1].disabled, true, "Summary updates disable existing card actions without rebuilding the gallery");
+ui.state.busy = false;
+get("filename-template-input").listeners.input();
+assert.equal(actions.children[0].disabled, false);
+assert.equal(actions.children[1].disabled, false, "Filename refreshes re-enable card actions after the operation finishes");
+ui.state.busy = true;
+get("filename-template-input").listeners.input();
+assert.equal(actions.children[0].disabled, true);
+assert.equal(actions.children[1].disabled, true, "Filename refreshes also preserve the busy state");
+ui.state.busy = false;
+ui.updateSummary();
+assert.equal(actions.children[0].disabled, false);
+assert.equal(actions.children[1].disabled, false, "Summary updates re-enable existing card actions when idle");
+ui.state.busy = true;
 ui.state.liveScanning = true;
 ui.state.selected.add(second.url);
 get("filter-input").value = "lake";
@@ -432,18 +493,39 @@ for (const embedded of [false, true]) {
 }
 
 (async () => {
-  previewButton.focus();
-  previewButton.listeners.click();
+  ui.renderImages();
+  const previewOpener = get("image-list").querySelectorAll("button")
+    .find(button => button.dataset.focusKey === previewButton.dataset.focusKey);
+  previewOpener.focus();
+  previewOpener.click();
   assert.equal(get("media-preview-dialog").open, true, "Preview opens inside the gallery");
   assert.equal(openedTabs.length, 0);
   assert.equal(get("media-preview-stage").children[0].src, first.url);
+  assert.equal(get("media-preview-stage").getAttribute("aria-busy"), "true");
+  assert.match(get("media-preview-stage").children[1].textContent, /Loading image preview/);
+  const loadedPreview = get("media-preview-stage").children[0];
+  assert.equal(loadedPreview.alt, get("media-preview-title").textContent,
+    "A preview without page alt text retains its current filename as a useful accessible name");
+  loadedPreview.listeners.load();
+  assert.equal(get("media-preview-stage").getAttribute("aria-busy"), "false");
+  assert.equal(get("media-preview-stage").children.length, 1, "Loaded previews remove their loading feedback");
   get("media-preview-dialog").listeners.keydown({ key: "ArrowRight", target: get("preview-selected-input"), preventDefault() {} });
   assert.equal(get("media-preview-stage").children[0].src, first.url, "Arrow keys on form controls must keep their native behavior");
   assert.equal(get("media-preview-position").textContent, "1 of 2");
   assert.equal(get("preview-previous-button").disabled, true);
+  get("preview-next-button").focus();
   get("preview-next-button").listeners.click();
   assert.equal(get("media-preview-stage").children[0].src, second.url);
   assert.equal(get("preview-next-button").disabled, true);
+  loadedPreview.listeners.load();
+  assert.equal(get("media-preview-stage").getAttribute("aria-busy"), "true",
+    "A delayed event from the previous image cannot clear the current preview's loading state");
+  assert.equal(context.document.activeElement, get("preview-previous-button"),
+    "Reaching the final preview keeps focus on an available navigation control");
+  get("media-preview-stage").children[0].listeners.error();
+  assert.equal(get("media-preview-error").hidden, false);
+  assert.equal(get("media-preview-stage").getAttribute("aria-busy"), "false");
+  assert.equal(get("media-preview-stage").children.length, 1, "A failed preview replaces loading with actionable feedback");
   get("media-preview-dialog").listeners.keydown({ key: "ArrowLeft", target: get("close-preview-button"), preventDefault() {} });
   assert.equal(get("media-preview-stage").children[0].src, first.url);
   get("preview-selected-input").checked = false;
@@ -454,7 +536,9 @@ for (const embedded of [false, true]) {
   assert.equal(ui.state.selected.has(first.url), true);
   get("close-preview-button").listeners.click();
   assert.equal(get("media-preview-dialog").open, false);
-  assert.equal(context.document.activeElement, previewButton, "Closing preview restores keyboard focus to its opener");
+  assert.equal(context.document.activeElement.dataset.focusKey, previewOpener.dataset.focusKey,
+    "Closing preview restores keyboard focus to its current card control");
+  assert.equal(context.document.activeElement.disabled, false);
   ui.state.pageUrl = "https://photos.example/gallery";
   await ui.openImagePreview(first);
   const writesBeforePrivate = settingsMessages.length;
@@ -582,6 +666,26 @@ for (const embedded of [false, true]) {
   ui.renderImages();
   const rows = () => get("image-list").children.flatMap(node => node.tagName === "ARTICLE" ? [node] : node.children.filter(child => child.tagName === "ARTICLE"));
   assert.equal(rows().length, 350);
+  const focusedSelection = rows()[0].children[0];
+  focusedSelection.focus();
+  ui.renderImages();
+  assert.notEqual(rows()[0].children[0], focusedSelection);
+  assert.equal(context.document.activeElement, rows()[0].children[0],
+    "Gallery updates preserve keyboard focus on the equivalent media control");
+  const detachedPreviewOpener = rows()[0].children.at(-1).children[0];
+  detachedPreviewOpener.click();
+  ui.renderImages();
+  get("close-preview-button").click();
+  assert.equal(context.document.activeElement, rows()[0].children.at(-1).children[0],
+    "Closing a preview after a live gallery render focuses its replacement card button");
+  rows()[0].children[0].focus();
+  get("filter-input").value = "no matching media";
+  ui.renderImages();
+  assert.equal(get("selected-label").disabled, true);
+  assert.equal(context.document.activeElement, get("filter-input"),
+    "When a focused card disappears, an empty selection cannot receive focus");
+  get("filter-input").value = "";
+  ui.renderImages();
   assert.equal(get("gallery-pagination").hidden, false);
   assert.equal(get("previous-page-button").disabled, true);
   get("next-page-button").listeners.click();
@@ -737,6 +841,9 @@ for (const embedded of [false, true]) {
   const playing = get("media-preview-stage").children[0];
   assert.equal(playing.tagName, "VIDEO");
   assert.equal(playing.controls, true);
+  playing.listeners.loadedmetadata();
+  assert.equal(get("media-preview-stage").getAttribute("aria-busy"), "false",
+    "Metadata-only video previews become ready without requiring playback");
   get("close-preview-button").listeners.click();
   assert.equal(playing.paused, true, "Closing an inline video must stop playback");
   assert.equal(playing.src, "");
@@ -795,6 +902,15 @@ for (const embedded of [false, true]) {
     assert.equal(get("media-actions-panel").open, true);
     return more;
   };
+  ui.state.images = [first];
+  const escapeMenuOpener = openRowActions(first);
+  let preventedMenuEscape = false;
+  get("media-actions-panel").listeners.keydown({ key: "Escape", preventDefault() { preventedMenuEscape = true; } });
+  assert.equal(preventedMenuEscape, true);
+  assert.equal(get("media-actions-panel").open, false);
+  assert.equal(escapeMenuOpener.getAttribute("aria-expanded"), "false");
+  assert.equal(context.document.activeElement, escapeMenuOpener,
+    "Escape from a script-opened media menu restores focus to its card button");
   ui.state.images = signed;
   ui.state.selected.clear();
   const menuPreviewOpener = openRowActions(signed[0]);
@@ -944,6 +1060,7 @@ for (const embedded of [false, true]) {
     folder: "Tracked photos", filenameTemplate: "{filename}", intervalMinutes: 60,
     filters: { ...Filters.DEFAULT_FILTERS, minWidth: 1600, orientation: "landscape" },
     matching: { includeText: "keep", excludeText: "skip", includePatterns: ["*/full/*"], excludePatterns: [], maxDownloadsPerRun: 50 },
+    pagination: { mode: "next-link", maxPages: 3 },
     action: "review", enabled: false
   });
   assert.ok(tracker);
@@ -987,5 +1104,159 @@ for (const embedded of [false, true]) {
   assert.equal(editor.ui.state.tracker.enabled, false, "Updating a paused tracker must preserve its state");
   availableTrackers = [];
   await assert.rejects(editor.ui.initializeTrackerEditor(), /no longer exists/);
+
+  const creatorMessages = [], creatorPermissions = [];
+  let creatorStorageReads = 0;
+  let resolveCreatorPermission;
+  let creatorPrivate = false, sourcePrivate = false;
+  let creatorExistingTracker = null;
+  let deferCreatorLookup = false, failCreatorLookup = false, resolveCreatorLookup;
+  const creatorBrowser = {
+    ...context.browser,
+    extension: { inIncognitoContext: true },
+    tabs: { ...context.browser.tabs, getCurrent: async () => ({ incognito: creatorPrivate }),
+      get: async () => ({ incognito: sourcePrivate, url: "https://photos.example/gallery", title: "Photo gallery" }) },
+    storage: { ...context.browser.storage, local: { ...context.browser.storage.local,
+      get: async () => { creatorStorageReads += 1; return {}; } } },
+    permissions: { request: request => {
+      creatorPermissions.push(request);
+      return new Promise(resolve => { resolveCreatorPermission = resolve; });
+    } },
+    runtime: { ...context.browser.runtime, sendMessage: async message => {
+      creatorMessages.push(message);
+      if (message.type === "GET_DOWNLOAD_DASHBOARD") return { ok: true, snapshot: { summary: {} } };
+      if (message.type === "GET_TRACKER") {
+        if (failCreatorLookup) throw new Error("Lookup unavailable");
+        const matching = creatorExistingTracker?.url === message.url ? creatorExistingTracker : null;
+        if (deferCreatorLookup) await new Promise(resolve => { resolveCreatorLookup = resolve; });
+        return { ok: true, tracker: matching };
+      }
+      assert.equal(message.type, "UPSERT_TRACKER", "The new-tracker form must not change gallery preferences");
+      return { ok: true, tracker: context.AnyDownloadTracker.normalizeTracker({ ...message.tracker, id: "new-tracker" }) };
+    } }
+  };
+  const creator = vm.createContext({ ...context, browser: creatorBrowser,
+    location: { href: "moz-extension://test/popup/popup.html?createTracker=1&sourceTabId=9" } });
+  vm.runInContext(source, creator);
+  creator.ui.cacheElements();
+  creator.ui.wireEvents();
+  creator.ui.applySmartFiltersToControls(Filters.DEFAULT_FILTERS);
+  await assert.rejects(creator.ui.initializeTrackerCreator(), /private windows/);
+  creatorBrowser.extension.inIncognitoContext = false;
+  creatorPrivate = true;
+  await assert.rejects(creator.ui.initializeTrackerCreator(), /private windows/);
+  creatorPrivate = false;
+  sourcePrivate = true;
+  await assert.rejects(creator.ui.initializeTrackerCreator(), /private windows/);
+  assert.equal(creatorStorageReads, 0, "Private creation routes must return before reading regular preferences");
+  assert.equal(creatorMessages.length, 0);
+  sourcePrivate = false;
+  await creator.ui.initializeTrackerCreator();
+  assert.equal(get("tracker-page-field").hidden, false);
+  assert.equal(get("tracker-page-input").value, "https://photos.example/gallery");
+  assert.equal(creator.ui.state.pageUrl, "https://photos.example/gallery");
+  assert.equal(get("tracking-dashboard-button").getAttribute("aria-current"), "page");
+  assert.equal(get("skip-to-content").href, "#tracker-page-input", "The setup skip link targets its visible form");
+  assert.equal(creatorPermissions.length, 0, "Opening setup must never prompt for access or start tracking");
+  assert.equal(creatorMessages.some(message => message.type === "UPSERT_TRACKER"), false);
+  get("tracker-page-input").value = "javascript:alert(1)";
+  get("tracker-page-input").listeners.input();
+  assert.equal(get("tracker-save-button").disabled, true);
+  await creator.ui.saveTracker();
+  assert.equal(creatorPermissions.length, 0, "Invalid URLs cannot trigger permission requests");
+  get("tracker-page-input").listeners.blur();
+  assert.equal(get("tracker-page-input").getAttribute("aria-invalid"), "true");
+  get("tracker-page-input").value = "https://new.example/photos";
+  await get("tracker-page-input").listeners.input();
+  assert.equal(get("tracker-page-input").getAttribute("aria-invalid"), null);
+  assert.equal(get("tracker-save-button").disabled, false);
+  get("tracker-interval-select").value = "360";
+  get("tracker-action-select").value = "review";
+  const creating = creator.ui.saveTracker();
+  assert.equal(creatorPermissions.length, 1, "Start tracking requests site access in the click handler's direct stack");
+  assert.deepEqual(JSON.parse(JSON.stringify(creatorPermissions[0])), { origins: ["https://new.example/*"] });
+  assert.equal(get("tracker-page-input").disabled, true, "The page cannot change during permission approval or a tracker save");
+  get("tracker-page-input").value = "https://different.example/";
+  get("tracker-page-input").listeners.input();
+  get("tracker-page-input").listeners.blur();
+  assert.equal(creator.ui.state.pageUrl, "https://new.example/photos", "Pending-operation input events cannot change the approved page");
+  get("tracker-page-input").value = creator.ui.state.pageUrl;
+  resolveCreatorPermission(true);
+  await creating;
+  const created = creatorMessages.find(message => message.type === "UPSERT_TRACKER").tracker;
+  assert.equal(created.url, "https://new.example/photos");
+  assert.equal(created.intervalMinutes, 360);
+  assert.equal(created.action, "review");
+  creatorExistingTracker = tracker;
+  get("tracker-page-input").value = tracker.url;
+  get("tracker-page-input").listeners.input();
+  get("tracker-page-input").listeners.blur();
+  for (let i = 0; i < 4; i++) await new Promise(setImmediate);
+  assert.equal(creator.ui.state.tracker.id, tracker.id);
+  assert.equal(get("folder-input").value, tracker.folder, "Recognizing an existing tracker restores its destination");
+  assert.equal(get("filename-template-input").value, tracker.filenameTemplate);
+  assert.equal(get("min-width-input").value, "1600");
+  assert.equal(get("orientation-filter-select").value, "landscape");
+  assert.equal(get("tracker-include-text-input").value, "keep");
+  const readsBeforeBlur = creatorMessages.filter(message => message.type === "GET_TRACKER").length;
+  get("tracker-interval-select").value = "1440";
+  get("tracker-page-input").listeners.blur();
+  await new Promise(setImmediate);
+  assert.equal(get("tracker-interval-select").value, "1440", "Returning to an unchanged URL must preserve unsaved form edits");
+  assert.equal(creatorMessages.filter(message => message.type === "GET_TRACKER").length, readsBeforeBlur);
+
+  get("tracker-page-input").value = "https://other.example/";
+  await get("tracker-page-input").listeners.input();
+  get("folder-input").value = "Device defaults";
+  get("filename-template-input").value = "{index}-{filename}";
+  creator.ui.applySmartFiltersToControls(Filters.DEFAULT_FILTERS);
+  deferCreatorLookup = true;
+  get("tracker-page-input").value = tracker.url;
+  const pendingLookup = get("tracker-page-input").listeners.input();
+  assert.equal(get("tracker-save-button").disabled, true, "An existing URL must finish its lookup before the form can save");
+  const requestsBeforeLookup = creatorPermissions.length;
+  await creator.ui.saveTracker();
+  assert.equal(creatorPermissions.length, requestsBeforeLookup, "A direct call cannot bypass a pending tracker lookup");
+  resolveCreatorLookup();
+  deferCreatorLookup = false;
+  await pendingLookup;
+  assert.equal(get("tracker-save-button").disabled, false);
+  assert.equal(get("folder-input").value, tracker.folder);
+  assert.equal(get("action-detail").textContent, `Downloads/${tracker.folder}`);
+  const savingExisting = creator.ui.saveTracker();
+  resolveCreatorPermission(true);
+  await savingExisting;
+  const savedExisting = creatorMessages.filter(message => message.type === "UPSERT_TRACKER").at(-1).tracker;
+  assert.equal(savedExisting.folder, tracker.folder);
+  assert.equal(savedExisting.pageTitle, tracker.pageTitle, "Updating an existing URL preserves its saved page title");
+  assert.equal(savedExisting.filenameTemplate, tracker.filenameTemplate);
+  assert.equal(savedExisting.filters.minWidth, 1600);
+  assert.equal(savedExisting.pagination.mode, "next-link");
+  assert.equal(savedExisting.pagination.maxPages, 3);
+
+  failCreatorLookup = true;
+  get("tracker-page-input").value = "https://unavailable.example/";
+  await get("tracker-page-input").listeners.input();
+  assert.equal(get("tracker-save-button").disabled, true, "A failed lookup must not risk overwriting unknown saved settings");
+  assert.equal(get("tracker-page-retry").hidden, false);
+  failCreatorLookup = false;
+  await get("tracker-page-retry").listeners.click();
+  assert.equal(get("tracker-page-retry").hidden, true);
+  assert.equal(get("tracker-save-button").disabled, false);
+
+  deferCreatorLookup = true;
+  get("tracker-page-input").value = tracker.url;
+  const staleLookup = get("tracker-page-input").listeners.input();
+  const resolveStaleLookup = resolveCreatorLookup;
+  deferCreatorLookup = false;
+  get("tracker-page-input").value = "https://latest.example/";
+  await get("tracker-page-input").listeners.input();
+  resolveStaleLookup();
+  await staleLookup;
+  assert.equal(creator.ui.state.pageUrl, "https://latest.example/");
+  assert.equal(creator.ui.state.tracker, null, "Late lookup results cannot restore a previously selected tracker");
+  get("tracking-dashboard-button").click();
+  assert.equal(new URL(creator.location.href).pathname, "/tracking/tracking.html", "Standalone setup can return to Trackers");
+  assert.equal(new URL(creator.location.href).searchParams.get("sourceTabId"), "9");
   console.log("Popup UI tests passed: selection, media tabs, filter chips, per-file actions, live updates, preview focus, privacy, and navigation.");
 })().catch(error => { console.error(error); process.exitCode = 1; });

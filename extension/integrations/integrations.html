@@ -5,92 +5,93 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>AnyDownload — Integrations</title>
     <link rel="stylesheet" href="../shared/theme.css">
-    <link rel="stylesheet" href="../sync/sync.css">
     <link rel="stylesheet" href="integrations.css">
   </head>
-  <body class="dashboard">
+  <body class="integrations-page">
+    <a class="skip-link" href="#main-content">Skip to integrations</a>
     <div class="workspace-header">
       <div class="app-brand"><img src="../icons/image-downloader-illustrated-v2-96.png" alt="" width="32" height="32"><span>AnyDownload</span></div>
       <nav class="workspace-nav" aria-label="Workspace">
         <a class="nav-link" data-source-link href="../popup/popup.html" hidden><svg aria-hidden="true" viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" rx="2"/><circle cx="7" cy="7" r="1"/><path d="m3 14 4-4 3 3 3-3 4 4"/></svg>Media</a>
         <a class="nav-link" data-source-link href="../history/history.html"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 3v10m-4-4 4 4 4-4M3 13v4h14v-4"/></svg>Downloads</a>
         <a class="nav-link" data-source-link href="../tracking/tracking.html"><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/></svg>Trackers</a>
-        <a class="nav-link" data-source-link href="../sync/sync.html"><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="6" r="3"/><path d="M4 17v-2a6 6 0 0 1 12 0v2"/></svg>Account</a>
-        <a class="nav-link current" data-source-link href="integrations.html" aria-current="page"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M7 2v4m6-4v4M5 6h10v4a5 5 0 0 1-10 0V6m5 9v3"/></svg>Integrations</a>
       </nav>
+      <div class="workspace-utilities" role="group" aria-label="Account and integrations">
+        <a class="utility-button" aria-label="Account" title="Account" data-source-link href="../sync/sync.html"><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="6" r="3"/><path d="M4 17v-2a6 6 0 0 1 12 0v2"/></svg></a>
+        <a class="utility-button current" aria-label="Integrations" title="Integrations" data-source-link href="integrations.html" aria-current="page"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M7 2v4m6-4v4M5 6h10v4a5 5 0 0 1-10 0V6m5 9v3"/></svg></a>
+      </div>
     </div>
-    <main class="page-shell">
+    <main id="main-content" class="page-shell" tabindex="-1">
       <header class="page-header">
-        <div><p class="eyebrow">Your media, connected</p><h1>Integrations</h1><p class="subtitle">Connect your photo library. Send your images straight from Firefox.</p></div>
-        <a class="button-link primary-button" data-source-link href="../upload/upload.html" target="_blank" rel="noopener noreferrer"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 13V3m-4 4 4-4 4 4M3 13v4h14v-4"/></svg>Upload media</a>
-      </header>
-      <nav class="integration-tabs" aria-label="Integrations">
-        <a class="current" data-source-link href="integrations.html" aria-current="page"><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="M7 2v4m6-4v4M5 6h10v4a5 5 0 0 1-10 0V6m5 9v3"/></svg>Connections</a>
-        <a data-source-link href="../upload/upload.html" target="_blank" rel="noopener noreferrer"><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="M10 13V3m-4 4 4-4 4 4M3 13v4h14v-4"/></svg>Uploads</a>
-      </nav>
-      <p id="private-notice" class="card" hidden>Integrations are unavailable in private windows. Open this page in a normal Firefox window.</p>
-      <div id="status" role="status" aria-live="polite"></div>
-      <div id="error" role="alert" hidden></div>
-      <section id="content" hidden>
-        <div class="account-strip">
-          <div><p id="account">Checking your account…</p><p id="signin-note" class="hint">Use your AnyDownload account to save connections across devices.</p></div>
-          <a id="account-link" class="button-link" data-source-link href="../sync/sync.html">Account</a>
+        <h1>Integrations</h1>
+        <div id="page-actions" class="page-actions">
+          <a id="upload-link" class="button-link" data-source-link href="../upload/upload.html" hidden>Uploads</a>
+          <button id="refresh-button" class="icon-button" type="button" aria-label="Refresh connections" title="Refresh connections"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M16 6V2.5M16 2.5h-3.5M16 2.5l-2.4 2.4A6.5 6.5 0 1 0 16 10"/></svg></button>
         </div>
-        <div class="connections-layout">
-          <form id="connection-form" class="card connection-card">
-            <div class="provider-heading">
-              <span class="provider-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m3 16 5-5 5 5 3-3 5 5"/></svg></span>
-              <div><h2>Immich</h2><p class="hint">Your personal photo library</p></div>
-              <span id="connection-count" class="status-badge">No connections</span>
+      </header>
+      <section id="provider-overview" class="provider-overview" aria-labelledby="provider-title">
+        <h2 id="provider-title">Immich</h2>
+        <p>Send images and direct video files to your Immich library or a writable album.</p>
+        <p class="provider-limits">Up to 500 files per upload · 64 MiB per file</p>
+        <p id="provider-prerequisites" class="hint">You need an existing Immich server and an API key with <code>asset.upload</code> permission. For a local server, connect to its network or Tailscale.</p>
+      </section>
+      <p id="page-loading" class="page-loading" role="status">Checking your account and saved servers…</p>
+      <p id="private-notice" class="state-note" hidden>Connect Immich in a normal Firefox window. Integrations and uploads are unavailable in private browsing.</p>
+      <div id="status" role="status" aria-live="polite" aria-atomic="true"></div>
+      <div id="error" role="alert" hidden></div>
+      <div id="load-error-actions" class="state-actions" hidden>
+        <button id="retry-load" type="button">Try again</button>
+        <a id="error-account-link" class="button-link" data-source-link href="../sync/sync.html">Check account</a>
+      </div>
+      <section id="content" hidden>
+        <div id="signin-panel" class="signin-panel" hidden>
+          <p id="signin-note">Sign in to save your server connection and encrypted API key.</p>
+          <a id="account-link" class="button-link primary-button" data-source-link href="../sync/sync.html">Sign in</a>
+        </div>
+        <div id="connection-workspace" hidden>
+          <div id="saved-connections" class="saved-connections" hidden>
+            <label for="connections">Immich server</label>
+            <div class="server-selection">
+              <select id="connections" disabled><option value="">Add server…</option></select>
+              <button id="add-server-button" type="button" hidden>Add server</button>
             </div>
-            <div class="saved-connections">
-              <label for="connections">Connection</label>
-              <select id="connections" aria-describedby="connections-note" disabled><option value="">New Immich connection</option></select>
-              <p id="connections-note" class="hint">Add a server, or choose a saved connection to update its key.</p>
+            <div id="disconnect-section" class="saved-actions" hidden>
+              <span id="saved-key-state" class="hint">API key saved</span>
+              <button id="replace-key-button" type="button" aria-controls="connection-form" aria-expanded="false">Replace key</button>
+              <button id="disconnect" class="danger-button" type="button" title="Delete this saved connection and its encrypted key. Media in Immich is kept." disabled>Disconnect</button>
             </div>
-            <h3 id="form-title">Connect a server</h3>
-            <label for="server-url">Server URL</label>
-            <input id="server-url" type="url" required maxlength="2048" placeholder="http://192.168.0.103:2283" autocomplete="off" spellcheck="false" aria-describedby="server-note" disabled>
-            <p id="server-note" class="hint">Use your Immich address. Local networks and Tailscale work too.</p>
-            <label for="api-key">API key</label>
-            <input id="api-key" type="password" required maxlength="4096" placeholder="Paste your Immich API key" autocomplete="off" spellcheck="false" aria-describedby="key-note" disabled>
-            <p id="key-note" class="hint">Encrypted in your account. Your saved key is never shown again.</p>
+          </div>
+          <form id="connection-form" class="connection-form" aria-labelledby="form-title" hidden>
+            <h2 id="form-title">Connect server</h2>
+            <div id="server-field" class="form-field">
+              <label for="server-url">Server URL</label>
+              <input id="server-url" type="url" required maxlength="2048" placeholder="https://photos.example.com" autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="server-note" disabled>
+              <p id="server-note" class="hint">HTTP, HTTPS, local network and Tailscale addresses are supported.</p>
+            </div>
+            <div class="form-field">
+              <label for="api-key">API key</label>
+              <input id="api-key" type="password" required maxlength="4096" autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="key-note" disabled>
+            </div>
             <details class="key-help">
-              <summary>Which API key permissions do I need?</summary>
-              <p class="hint">Create a key in Immich with <code>asset.upload</code>. For albums, also enable <code>album.read</code>, <code>albumAsset.create</code> and <code>user.read</code>.</p>
+              <summary>Create an Immich API key</summary>
+              <p>Create a key in your Immich account with <code>asset.upload</code>. For albums, also enable <code>album.read</code>, <code>albumAsset.create</code> and <code>user.read</code>.</p>
             </details>
-            <div class="actions">
-              <button id="save" class="primary-button" type="submit" disabled>Test &amp; save connection</button>
-              <button id="cancel" type="button" hidden><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="m5 5 10 10M15 5 5 15"/></svg>Cancel test</button>
-            </div>
-            <div id="disconnect-section" class="disconnect-section" hidden>
-              <button id="disconnect" class="danger-button" type="button" hidden disabled><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="M3 5h14M7 5V3h6v2M5 5l1 12h8l1-12M8 8v6m4-6v6"/></svg>Disconnect &amp; delete key</button>
-              <p class="hint">Uploaded media stays in Immich.</p>
+            <div class="form-actions">
+              <button id="save" class="primary-button" type="submit" disabled>Test &amp; save</button>
+              <button id="cancel" type="button" hidden>Cancel test</button>
+              <button id="cancel-edit" type="button" hidden>Cancel</button>
             </div>
           </form>
-          <aside class="connection-sidebar" aria-label="Uploading to Immich">
-            <section class="card upload-card">
-              <span class="upload-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 15V3M7 8l5-5 5 5M4 15v6h16v-6"/></svg></span>
-              <p class="eyebrow">From page to library</p>
-              <h2>A home for your finds</h2>
-              <p class="hint">Send images and supported videos from a webpage or your device to Immich, with an album of your choice.</p>
-              <a class="button-link" data-source-link href="../upload/upload.html" target="_blank" rel="noopener noreferrer">Open uploads <span aria-hidden="true">→</span></a>
-            </section>
-            <section class="card steps-card">
-              <h2>Your next upload</h2>
-              <ol class="device-steps">
-                <li><span class="step-number" aria-hidden="true">1</span><strong>Connect your library</strong><span>Save your server address and API key.</span></li>
-                <li><span class="step-number" aria-hidden="true">2</span><strong>Choose your media</strong><span>Use Upload selected in the media manager, or choose files from your device.</span></li>
-                <li><span class="step-number" aria-hidden="true">3</span><strong>Upload and follow along</strong><span>Keep the upload view open. Check progress and retry unfinished media there.</span></li>
-              </ol>
-            </section>
-          </aside>
+          <p id="key-note" class="security-note">API keys are encrypted in your account and never shown again. Media uploads directly from Firefox to Immich.</p>
         </div>
-        <details class="privacy-details">
-          <summary>How your connection and media are handled</summary>
-          <p>Tests, album requests and uploads run on this device. Connect to your server’s local network or Tailscale network before uploading. HTTP and HTTPS are supported; an Immich /albums address is normalized to its server.</p>
-          <p>Your account stores the encrypted key and connection settings. Media travels directly from Firefox to Immich.</p>
-        </details>
+      </section>
+      <section id="upload-guide" class="upload-guide" aria-labelledby="upload-guide-title">
+        <h2 id="upload-guide-title">After connecting</h2>
+        <p>In Media, select files, open the arrow beside Download and choose <strong>Upload selected</strong>. Pick Library or an album.</p>
+        <p class="hint">Use Uploads to choose local files. Download Telegram or YouTube media first, then upload the saved files.</p>
+        <div id="upload-guide-actions" class="state-actions" hidden>
+          <a id="media-link" class="button-link" data-source-link href="../popup/popup.html" hidden>Open Media</a>
+        </div>
       </section>
     </main>
     <script src="../shared/navigation.js"></script>

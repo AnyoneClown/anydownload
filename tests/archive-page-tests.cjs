@@ -388,12 +388,12 @@ class FakeDocument {
   constructor(ids) {
     this.elements = new Map(ids.map((id) => [id, new FakeElement()]));
     this.title = "";
-    this.links = [new FakeElement(), new FakeElement()];
+    this.links = Array.from({ length: 5 }, () => new FakeElement());
     this.links.forEach((link) => { link.target = ""; link.title = ""; });
   }
 
   querySelectorAll(selector) {
-    assert.equal(selector, ".workspace-nav a");
+    assert.equal(selector, ".workspace-header a[data-source-link]", "Archive navigation protection includes both main tabs and corner utilities");
     return this.links;
   }
 

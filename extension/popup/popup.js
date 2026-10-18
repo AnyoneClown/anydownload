@@ -706,7 +706,8 @@
   const managerTabMode = Number.isInteger(launchSourceTabId);
   const sidebarMode = launchOptions.sidebar;
   const editTrackerId = new URL(launchUrl).searchParams.get("editTrackerId");
-  const responsiveSurface = managerTabMode || sidebarMode || Boolean(editTrackerId);
+  const createTrackerMode = new URL(launchUrl).searchParams.get("createTracker") === "1";
+  const responsiveSurface = managerTabMode || sidebarMode || Boolean(editTrackerId) || createTrackerMode;
 
   if (sidebarMode) {
     document.documentElement.classList.add("sidebar-panel");
@@ -719,6 +720,8 @@
   }
 
   let filenamePreviewsDirty = true;
+  let trackerCreatorRevision = 0;
+  let trackerCreatorLookup = false;
   let filenamePreviewDateKey = "";
   let filenamePreviewTemplateValue = "";
   let filenamePreviewContext = null;
@@ -865,8 +868,7 @@
 
   function cacheElements() {
     const ids = [
-      "media-workspace", "workspace-frame", "media-button",
-      "workspace-settings-button", "workspace-settings-panel",
+      "media-workspace", "workspace-frame", "media-button", "skip-to-content",
       "collection-actions-button", "collection-actions-panel",
       "download-options-button", "download-options-panel", "archive-selection-help",
       "media-actions-panel", "media-actions-heading",
@@ -934,6 +936,7 @@
       "tracker-button",
       "tracker-action-select",
       "tracker-delete-button",
+      "tracker-destination-field",
       "tracker-download-initial-input",
       "tracker-exclude-patterns-input",
       "tracker-exclude-text-input",
@@ -949,6 +952,9 @@
       "tracker-notify-matches-input",
       "tracker-pagination-mode-select",
       "tracker-panel",
+      "tracker-page-field",
+      "tracker-page-input",
+      "tracker-page-retry",
       "tracker-pause-button",
       "tracker-run-button",
       "tracker-save-button",
@@ -994,6 +1000,11 @@
 
   function setTrackerBusy(busy, status) {
     state.trackerBusy = Boolean(busy);
+    elements["tracker-page-input"].disabled = state.trackerBusy || state.incognito;
+    if (createTrackerMode) {
+      elements["download-settings-button"].disabled = state.trackerBusy;
+      elements["smart-filters-button"].disabled = state.trackerBusy;
+    }
     for (const id of [
       "tracker-save-button",
       "tracker-run-button",
@@ -1071,6 +1082,7 @@
     const available = Boolean(state.pageUrl) && !state.incognito;
     elements["tracker-button"].disabled = state.trackerBusy || !available;
     elements["tracking-dashboard-button"].disabled = state.incognito;
+    elements["tracker-page-input"].disabled = state.trackerBusy || state.incognito;
     elements["tracker-button"].classList.toggle("active", Boolean(tracker));
     elements["tracker-button"].textContent = tracker ? "Tracking" : "Track page";
     elements["tracker-button"].title = state.incognito
@@ -1141,6 +1153,11 @@
         ? "Open this page in a regular window to create a background tracker."
         : "Start tracking to create a baseline. Current matches are skipped unless you opt in above.";
     }
+    if (createTrackerMode) {
+      elements["tracker-save-button"].disabled = state.trackerBusy || !available || trackerCreatorLookup || state.trackerPageUrl !== state.pageUrl;
+      elements["tracker-page-field"].setAttribute("aria-busy", String(trackerCreatorLookup));
+      if (trackerCreatorLookup) elements["tracker-status"].textContent = "Checking for an existing tracker…";
+    }
   }
 
   async function refreshTrackerStatus(force) {
@@ -1156,19 +1173,32 @@
       return;
     }
     const requestedUrl = state.pageUrl;
+    const creatorRevision = trackerCreatorRevision;
     const response = await browser.runtime.sendMessage({
       type: "GET_TRACKER",
       url: requestedUrl
     });
-    if (requestedUrl !== state.pageUrl) {
+    if (requestedUrl !== state.pageUrl || createTrackerMode && creatorRevision !== trackerCreatorRevision) {
       return;
     }
     if (!response || !response.ok) {
       throw new Error(response && response.error || "Firefox could not read the tracker state.");
     }
-    state.tracker = response.tracker || null;
+    const nextTracker = response.tracker || null;
+    const changedTarget = state.trackerPageUrl !== requestedUrl || state.tracker?.id !== nextTracker?.id;
+    state.tracker = nextTracker;
     state.trackerPageUrl = requestedUrl;
-    populateTrackerControls(state.tracker);
+    if (createTrackerMode && state.tracker && changedTarget) {
+      state.pageTitle = state.tracker.pageTitle || hostFromUrl(requestedUrl);
+      elements["folder-input"].value = state.tracker.folder;
+      elements["filename-template-input"].value = state.tracker.filenameTemplate;
+      state.hasStoredFolder = true;
+      applySmartFiltersToControls(state.tracker.filters);
+      updateFilenameTemplateUi();
+      updateSmartFilterButton();
+      elements["action-detail"].textContent = `Downloads/${state.tracker.folder}`;
+    }
+    if (!createTrackerMode || state.tracker && changedTarget) populateTrackerControls(state.tracker);
     updateTrackerUi();
   }
 
@@ -1196,10 +1226,12 @@
   }
 
   async function saveTracker() {
-    if (state.trackerBusy || state.incognito) {
+    if (state.trackerBusy || state.incognito || createTrackerMode && (trackerCreatorLookup || state.trackerPageUrl !== state.pageUrl)) {
       return;
     }
-    const pattern = trackerPermissionPattern(state.pageUrl);
+    const requestedPageUrl = state.pageUrl;
+    const requestedPageTitle = state.pageTitle;
+    const pattern = trackerPermissionPattern(requestedPageUrl);
     const folder = folderStatus();
     const template = requireValidFilenameTemplate();
     if (!pattern || !folder.ok || !template) {
@@ -1230,7 +1262,7 @@
     }
     if (paginationMode === "url-template") {
       try {
-        const base = new URL(state.pageUrl);
+        const base = new URL(requestedPageUrl);
         const candidate = new URL(paginationTemplate.split("{page}").join("2"), base);
         if (candidate.origin !== base.origin || !["http:", "https:"].includes(candidate.protocol)) {
           throw new Error("different origin");
@@ -1259,6 +1291,9 @@
       if (!await permissionPromise) {
         throw new Error("Site access was not granted, so the tracker was not created.");
       }
+      if (state.incognito || state.pageUrl !== requestedPageUrl) {
+        throw new Error("The page changed while permission was requested. Review the page and start tracking again.");
+      }
       const filters = smartFiltersFromControls();
       const includeText = elements["tracker-include-text-input"].value.trim();
       state.smartFilters = filters;
@@ -1266,8 +1301,8 @@
         type: "UPSERT_TRACKER",
         incognito: state.incognito,
         tracker: {
-          url: state.pageUrl,
-          pageTitle: state.pageTitle,
+          url: requestedPageUrl,
+          pageTitle: requestedPageTitle,
           folder: folder.value,
           intervalMinutes: Number(elements["tracker-interval-select"].value),
           filters,
@@ -1297,6 +1332,10 @@
       });
       if (!response || !response.ok) {
         throw new Error(response && response.error || "Firefox could not save the tracker.");
+      }
+      if (state.incognito || state.pageUrl !== requestedPageUrl) {
+        setNotice("Tracker saved for the previous page. Open Trackers to manage it.", "success");
+        return;
       }
       state.tracker = response.tracker || null;
       state.trackerPageUrl = state.pageUrl;
@@ -1562,6 +1601,7 @@
             : `Select ${filename}`
         );
         record.previewButton.setAttribute("aria-label", `Preview ${filename}`);
+        updateRenderedCardActions(record);
         if (record.moreButton) {
           record.moreButton.title = `Actions for ${filename}`;
           record.moreButton.setAttribute("aria-label", `Actions for ${filename}`);
@@ -1570,6 +1610,12 @@
       if (!records.size) {
         renderedNameNodes.delete(url);
       }
+    }
+  }
+
+  function updateRenderedCardActions(record) {
+    for (const button of [record.previewButton, record.moreButton]) {
+      if (button && button.disabled !== state.busy) button.disabled = state.busy;
     }
   }
 
@@ -1584,13 +1630,15 @@
   const navigationWorkspaces = ["media", "history", "tracking", "sync", "integrations"];
   const UPLOAD_ROUTE_ID = /^[a-z0-9_-]{1,128}$/i;
 
-  function showWorkspace(view, route = "") {
+  function showWorkspace(view, route = "", creatingTracker = false) {
     if (!Object.hasOwn(workspaces, view) ||
       state.incognito && ["tracking", "sync", "integrations", "upload"].includes(view)) return;
     const trackerId = view === "tracking" ? route : "";
     if (trackerId && (typeof trackerId !== "string" || trackerId.length > 200)) return;
     const frame = elements["workspace-frame"];
-    const url = new URL(browser.runtime.getURL(trackerId ? "popup/popup.html" : `${view}/${view}.html`));
+    const createTracker = view === "tracking" && creatingTracker === true;
+    if (createTracker && trackerId) return;
+    const url = new URL(browser.runtime.getURL(trackerId || createTracker ? "popup/popup.html" : `${view}/${view}.html`));
     if (view === "upload" && route) {
       if (typeof route !== "string") return;
       const requested = new URLSearchParams(route.startsWith("?") ? route.slice(1) : route);
@@ -1604,13 +1652,15 @@
     url.searchParams.set("embedded", "1");
     if (Number.isInteger(state.sourceTabId)) url.searchParams.set("sourceTabId", state.sourceTabId);
     if (trackerId) url.searchParams.set("editTrackerId", trackerId);
+    if (createTracker) url.searchParams.set("createTracker", "1");
     state.workspace = view;
     elements["media-workspace"].hidden = view !== "media";
     frame.hidden = view === "media";
+    elements["skip-to-content"].href = view === "media" ? "#image-list" : "#workspace-frame";
     if (view === "media") frame.removeAttribute("src");
     else if (frame.src !== url.href) frame.src = url.href;
-    frame.title = trackerId ? "Edit tracker" : workspaces[view][1];
-    document.title = `AnyDownload — ${workspaces[view][1]}`;
+    frame.title = createTracker ? "New tracker" : trackerId ? "Edit tracker" : workspaces[view][1];
+    document.title = `AnyDownload — ${createTracker ? "New tracker" : workspaces[view][1]}`;
     const navigationView = view === "upload"
       ? url.searchParams.has("request") ? "media" : "integrations"
       : view;
@@ -1620,15 +1670,15 @@
       if (key === navigationView) elements[id].setAttribute("aria-current", "page");
       else elements[id].removeAttribute("aria-current");
     }
-    elements["workspace-settings-button"].classList.toggle("current", ["sync", "integrations"].includes(navigationView));
     for (const id of ["smart-filter-panel", "download-settings-panel", "tracker-panel",
-      "workspace-settings-panel", "collection-actions-panel", "download-options-panel", "media-actions-panel"]) {
+      "collection-actions-panel", "download-options-panel", "media-actions-panel"]) {
       if (elements[id].matches(":popover-open")) elements[id].hidePopover();
     }
   }
 
   globalScope.AnyDownloadWorkspace = {
     open: showWorkspace,
+    createTracker: () => showWorkspace("tracking", "", true),
     editTracker: (id) => showWorkspace("tracking", id)
   };
 
@@ -1648,7 +1698,7 @@
   }
 
   function persistSettings(values) {
-    return Boolean(editTrackerId) || state.incognito || browser.extension && browser.extension.inIncognitoContext
+    return Boolean(editTrackerId) || createTrackerMode || state.incognito || browser.extension && browser.extension.inIncognitoContext
       ? Promise.resolve() : writeNormalStorage("set", values);
   }
 
@@ -1763,6 +1813,8 @@
     const nextValue = Boolean(value || browser.extension && browser.extension.inIncognitoContext);
     elements["sync-button"].disabled = nextValue;
     elements["integrations-button"].disabled = nextValue;
+    elements["sync-button"].title = nextValue ? "Account is unavailable in private windows" : "Account and sync";
+    elements["integrations-button"].title = nextValue ? "Integrations are unavailable in private windows" : "External connections";
     if (state.incognito === nextValue) {
       return;
     }
@@ -2182,6 +2234,18 @@
     elements["media-preview-dialog"].showModal();
   }
 
+  function focusCollectionControl(preferred) {
+    const focusKey = preferred && preferred.dataset && preferred.dataset.focusKey;
+    const replacement = focusKey && Array.from(elements["image-list"].querySelectorAll("[data-focus-key]"))
+      .find((node) => node.dataset.focusKey === focusKey && !node.disabled);
+    for (const target of [preferred, replacement, elements["selected-label"], elements["filter-input"]]) {
+      if (target && target.isConnected && !target.disabled && !target.hidden) {
+        target.focus({ preventScroll: true });
+        return;
+      }
+    }
+  }
+
   function currentPreviewImage() {
     return state.images.find((image) => mediaIdentityKey(image) === previewItems[previewIndex]);
   }
@@ -2217,17 +2281,31 @@
         media.preload = "metadata";
         media.playsInline = true;
       } else {
-        media.alt = String(image.alt || "").slice(0, 500);
+        media.alt = String(image.alt || friendlyFilename(image)).slice(0, 500);
       }
-      media.addEventListener("error", () => { if (media.isConnected) elements["media-preview-error"].hidden = false; });
+      const loading = document.createElement("p");
+      loading.className = "field-help preview-loading";
+      loading.textContent = telegram
+        ? `Loading original ${video ? "video" : "photo"} from Telegram…`
+        : `Loading ${video ? "video" : "image"} preview…`;
+      loading.setAttribute("role", "status");
+      stage.setAttribute("aria-busy", "true");
+      const finishLoading = () => {
+        if (!media.isConnected) return;
+        loading.remove();
+        stage.setAttribute("aria-busy", "false");
+      };
+      media.addEventListener(video ? "loadedmetadata" : "load", finishLoading, { once: true });
+      media.addEventListener("error", () => {
+        if (!media.isConnected) return;
+        finishLoading();
+        elements["media-preview-error"].hidden = false;
+      }, { once: true });
       stage.appendChild(media);
+      stage.appendChild(loading);
       if (telegram) {
         const controller = new AbortController();
         telegramPreviewController = controller;
-        const loading = document.createElement("p");
-        loading.className = "field-help";
-        loading.textContent = `Loading original ${video ? "video" : "photo"} from Telegram…`;
-        stage.appendChild(loading);
         if (video && image.previewUrl) media.poster = image.previewUrl;
         const previewTask = { url: image.url, source: image.pageUrl || state.pageUrl,
           mediaType: mediaTypeFor(image), filename: image.filename };
@@ -2239,10 +2317,10 @@
             if (controller.signal.aborted) return;
             telegramPreviewUrl = URL.createObjectURL(blob);
             media.src = telegramPreviewUrl;
-            loading.remove();
           } catch (error) {
             if (!controller.signal.aborted) {
               loading.textContent = error.message || "Telegram preview unavailable.";
+              stage.setAttribute("aria-busy", "false");
             }
           }
         });
@@ -2266,8 +2344,14 @@
   function moveGalleryPreview(offset) {
     const next = previewIndex + offset;
     if (next >= 0 && next < previewItems.length) {
+      const active = document.activeElement;
       previewIndex = next;
       updateGalleryPreview();
+      if (active === elements["preview-previous-button"] && active.disabled) {
+        elements["preview-next-button"].focus({ preventScroll: true });
+      } else if (active === elements["preview-next-button"] && active.disabled) {
+        elements["preview-previous-button"].focus({ preventScroll: true });
+      }
     }
   }
 
@@ -2283,6 +2367,7 @@
       video.load();
     }
     stage.replaceChildren();
+    stage.setAttribute("aria-busy", "false");
   }
 
   function selectImage(image, selected) {
@@ -3133,7 +3218,13 @@
     updateMediaTypeTabs();
     renderActiveFilterChips();
     updateMediaActions();
+    for (const records of renderedNameNodes.values()) {
+      for (const record of records) {
+        if (record.label.isConnected) updateRenderedCardActions(record);
+      }
+    }
     elements["page-label"].title = elements["page-label"].textContent;
+    elements["gallery-status"].title = elements["gallery-status"].textContent;
     scheduleGallerySave();
     const total = state.images.length;
     const selectionBusy = state.busy && !state.liveScanning;
@@ -3156,7 +3247,7 @@
     const folder = folderStatus();
     const template = filenameTemplateStatus();
     const viewTotal = state.showIgnored ? ignoredCount : availableCount;
-    elements["summary-label"].textContent = state.showSelected ? `${visible.length.toLocaleString()} selected files` : hasFilter
+    elements["summary-label"].textContent = state.showSelected ? `${visible.length.toLocaleString()} selected file${visible.length === 1 ? "" : "s"}` : hasFilter
       ? `${visible.length.toLocaleString()} of ${viewTotal.toLocaleString()} ${state.showIgnored ? "ignored" : "available"} shown`
       : state.showIgnored
         ? storedIgnoredCount === ignoredCount
@@ -3191,10 +3282,11 @@
       ? `${ignoredCount.toLocaleString()} ignored here`
       : `${selected.toLocaleString()} selected${hiddenSelected ? ` · ${hiddenSelected.toLocaleString()} hidden` : ""}`;
     elements["selected-label"].setAttribute("aria-pressed", String(state.showSelected));
-    elements["selected-label"].setAttribute("aria-label", state.showSelected ? "Back to collection" : `Review ${selected} selected files`);
+    elements["selected-label"].setAttribute("aria-label", state.showSelected ? "Back to collection"
+      : `Review ${selected.toLocaleString()} selected file${selected === 1 ? "" : "s"}${hiddenSelected ? `, including ${hiddenSelected.toLocaleString()} hidden by filters` : ""}`);
     elements["selected-label"].disabled = state.showIgnored || (!selected && !state.showSelected);
     elements["back-to-collection-button"].hidden = !state.showSelected;
-    elements["action-detail"].textContent = editTrackerId ? `Downloads/${folder.value || ""}` : state.showIgnored
+    elements["action-detail"].textContent = editTrackerId || createTrackerMode ? `Downloads/${folder.value || ""}` : state.showIgnored
       ? storedIgnoredCount === ignoredCount
         ? "Restore media to make it downloadable again"
         : `${storedIgnoredCount.toLocaleString()} rules saved for this site`
@@ -3209,7 +3301,7 @@
           : downloadedCount
             ? `${downloadedCount.toLocaleString()} previously downloaded · check one to download again`
             : "Choose files to download";
-    const warning = hiddenSelected ? `Download includes ${hiddenSelected} files hidden by your filters. Review selected before downloading.` : "";
+    const warning = hiddenSelected ? `Download includes ${hiddenSelected.toLocaleString()} file${hiddenSelected === 1 ? "" : "s"} hidden by your filters. Review selected before downloading.` : "";
     elements["selection-warning"].textContent = warning;
     elements["selection-warning"].hidden = state.showIgnored || !warning;
     elements["download-button"].textContent = selected === 1
@@ -3255,10 +3347,11 @@
     return state.images.find((image) => mediaIdentityKey(image) === mediaActionTarget.identity) || null;
   }
 
-  function closeMediaActions() {
+  function closeMediaActions(restoreFocus = false) {
     hidePanel("media-actions-panel");
     mediaActionTarget = null;
     if (mediaActionsOpener) mediaActionsOpener.setAttribute("aria-expanded", "false");
+    if (restoreFocus) focusCollectionControl(mediaActionsOpener);
   }
 
   function updateMediaActions() {
@@ -3281,6 +3374,7 @@
   }
 
   function openMediaActions(image, opener) {
+    if (state.busy) return;
     if (mediaActionsOpener) mediaActionsOpener.setAttribute("aria-expanded", "false");
     mediaActionTarget = { identity: mediaIdentityKey(image), generation: sourcePageGeneration,
       incognito: state.incognito, sourceTabId: state.sourceTabId };
@@ -3325,7 +3419,7 @@
     previewButton.title = `Preview ${video ? "video" : "image"}`;
     previewButton.setAttribute("aria-label", `Preview ${friendlyFilename(image)}`);
     previewButton.disabled = state.busy;
-    previewButton.addEventListener("click", () => openGalleryPreview(image));
+    previewButton.addEventListener("click", () => openGalleryPreview(image, previewButton));
 
     const thumbnailFrame = document.createElement("div");
     thumbnailFrame.className = `thumbnail-frame${video ? " video" : ""}`;
@@ -3426,6 +3520,7 @@
     more.setAttribute("aria-label", `Actions for ${initialFilename}`);
     more.setAttribute("aria-expanded", "false");
     more.setAttribute("aria-controls", "media-actions-panel");
+    more.disabled = state.busy;
     more.addEventListener("click", () => openMediaActions(image, more));
     for (const record of nameRecords) {
       if (record.checkbox === checkbox) record.moreButton = more;
@@ -3618,7 +3713,7 @@
       }
       elements["image-list"].appendChild(empty);
       updateSummary(visible);
-      if (focusedKey) elements["selected-label"].focus({ preventScroll: true });
+      if (focusedKey) focusCollectionControl();
       return;
     }
 
@@ -3632,7 +3727,7 @@
     if (focusedKey) {
       const target = Array.from(elements["image-list"].querySelectorAll("[data-focus-key]"))
         .find((node) => node.dataset.focusKey === focusedKey && !node.disabled);
-      (target || elements["selected-label"]).focus({ preventScroll: true });
+      focusCollectionControl(target);
     }
   }
 
@@ -5608,9 +5703,9 @@
       });
     }
     for (const [panel, trigger] of [
-      ["workspace-settings-panel", "workspace-settings-button"],
       ["collection-actions-panel", "collection-actions-button"],
-      ["download-options-panel", "download-options-button"]
+      ["download-options-panel", "download-options-button"],
+      ["download-settings-panel", "download-settings-button"]
     ]) {
       elements[panel].addEventListener("toggle", () => {
         elements[trigger].setAttribute("aria-expanded", String(elements[panel].matches(":popover-open")));
@@ -5621,6 +5716,12 @@
       if (mediaActionsOpener) mediaActionsOpener.setAttribute("aria-expanded", String(open));
       if (!open) mediaActionTarget = null;
     });
+    elements["media-actions-panel"].addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeMediaActions(true);
+      }
+    });
     elements["media-action-preview-button"].addEventListener("click", () => {
       const image = currentMediaActionImage();
       const opener = mediaActionsOpener;
@@ -5629,7 +5730,7 @@
     });
     elements["media-action-download-button"].addEventListener("click", () => {
       const image = currentMediaActionImage();
-      closeMediaActions();
+      closeMediaActions(true);
       if (image && !state.busy && !galleryCollection && !isImageIgnored(image) && downloadStatusFor(image) !== "queued") {
         return requestDownloads([image], { allowRedownload: downloadStatusFor(image) === "downloaded" });
       }
@@ -5692,8 +5793,7 @@
       previewItems = [];
       const opener = previewOpener;
       previewOpener = null;
-      if (opener && opener.isConnected && !opener.disabled) opener.focus({ preventScroll: true });
-      else elements["filter-input"].focus({ preventScroll: true });
+      focusCollectionControl(opener);
     });
     for (const view of ["grid", "list"]) {
       elements[`${view}-view-button`].addEventListener("click", () => {
@@ -5718,7 +5818,19 @@
     });
     for (const view of navigationWorkspaces) {
       const id = workspaces[view][0];
-      elements[id].addEventListener("click", () => showWorkspace(view));
+      elements[id].addEventListener("click", () => {
+        if (editTrackerId || createTrackerMode) {
+          if (globalScope.parent?.AnyDownloadWorkspace && new URL(launchUrl).searchParams.get("embedded") === "1") {
+            globalScope.parent.AnyDownloadWorkspace.open(view);
+          } else {
+            const url = new URL(browser.runtime.getURL(view === "media" ? "popup/popup.html" : `${view}/${view}.html`));
+            if (Number.isInteger(launchSourceTabId)) url.searchParams.set("sourceTabId", launchSourceTabId);
+            globalScope.location.href = url.href;
+          }
+          return;
+        }
+        showWorkspace(view);
+      });
     }
     elements["tracker-panel"].addEventListener("toggle", () => {
       const open = elements["tracker-panel"].matches(":popover-open");
@@ -5879,7 +5991,7 @@
     const tracker = response && response.ok && Array.isArray(response.trackers) && response.trackers.find((item) => item.id === editTrackerId);
     if (!tracker || !Gallery.pageUrl(tracker.url)) throw new Error("This tracker no longer exists. Open Trackers to choose another one.");
     document.documentElement.classList.add("tracker-editor");
-    state.incognito = false;
+    setIncognitoContext(false);
     state.tracker = tracker;
     state.pageUrl = tracker.url;
     state.siteKey = Core.siteKeyForUrl(tracker.url);
@@ -5903,6 +6015,95 @@
     elements["tracker-interval-select"].focus();
   }
 
+  async function updateTrackerCreatorUrl() {
+    if (state.trackerBusy) return;
+    const url = Gallery.pageUrl(elements["tracker-page-input"].value.trim());
+    if (url || !elements["tracker-page-input"].value.trim()) elements["tracker-page-input"].removeAttribute("aria-invalid");
+    if (state.pageUrl === url && (!url || state.trackerPageUrl === url || trackerCreatorLookup)) return;
+    if (state.pageUrl !== url) {
+      state.tracker = null;
+      state.trackerPageUrl = "";
+    }
+    state.pageUrl = url;
+    state.siteKey = url ? Core.siteKeyForUrl(url) : "";
+    state.pageTitle = url ? hostFromUrl(url) : "";
+    const revision = ++trackerCreatorRevision;
+    trackerCreatorLookup = Boolean(url);
+    elements["tracker-page-retry"].hidden = true;
+    updateTrackerUi();
+    if (!url) return;
+    try {
+      await refreshTrackerStatus(true);
+    } catch (_error) {
+      if (revision === trackerCreatorRevision) {
+        elements["tracker-page-retry"].hidden = false;
+        setNotice("Could not check saved trackers. Retry before saving this page.", "error");
+      }
+    } finally {
+      if (revision === trackerCreatorRevision) {
+        trackerCreatorLookup = false;
+        updateTrackerUi();
+      }
+    }
+  }
+
+  async function initializeTrackerCreator() {
+    const current = await browser.tabs.getCurrent();
+    if (browser.extension?.inIncognitoContext || current?.incognito) {
+      throw new Error("Trackers are unavailable in private windows.");
+    }
+    let source;
+    if (Number.isInteger(launchSourceTabId)) {
+      try { source = await browser.tabs.get(launchSourceTabId); } catch (_error) { /* A URL can still be entered when the source tab has closed. */ }
+      if (source?.incognito) throw new Error("Trackers are unavailable in private windows.");
+    }
+    document.documentElement.classList.add("tracker-editor", "tracker-creator");
+    setIncognitoContext(false);
+    elements["skip-to-content"].href = "#tracker-page-input";
+    state.busy = false;
+    state.tracker = null;
+    elements["page-label"].textContent = "Add tracker";
+    elements["gallery-status"].textContent = "Choose a page, check interval, and action for new media.";
+    elements["tracker-page-field"].hidden = false;
+    elements["tracker-page-input"].value = Gallery.pageUrl(source?.url) || "";
+    elements["tracker-panel"].removeAttribute("popover");
+    elements["tracker-destination-field"].hidden = false;
+    elements["tracker-destination-field"].appendChild(elements["download-settings-button"]);
+    try {
+      const stored = await browser.storage.local.get(["destinationFolder", "filenameTemplate", "smartFilters"]);
+      if (stored.destinationFolder) { elements["folder-input"].value = stored.destinationFolder; state.hasStoredFolder = true; }
+      const template = Templates.validate(stored.filenameTemplate);
+      if (template.ok) elements["filename-template-input"].value = template.value;
+      applySmartFiltersToControls(stored.smartFilters);
+    } catch (_error) { /* The form defaults are sufficient when preferences cannot be read. */ }
+    elements["tracker-page-input"].addEventListener("input", updateTrackerCreatorUrl);
+    elements["tracker-page-retry"].addEventListener("click", () => {
+      setNotice("");
+      return updateTrackerCreatorUrl();
+    });
+    elements["tracker-page-input"].addEventListener("blur", () => {
+      if (state.trackerBusy) return;
+      updateTrackerCreatorUrl();
+      const invalid = Boolean(elements["tracker-page-input"].value.trim()) && !state.pageUrl;
+      elements["tracker-page-input"].setAttribute("aria-invalid", String(invalid));
+      if (invalid) {
+        elements["tracker-status"].textContent = "Enter a full HTTP or HTTPS page URL without a username or password.";
+        elements["tracker-status"].classList.add("error");
+      }
+    });
+    await updateTrackerCreatorUrl();
+    updateTrackerUi();
+    updateFilenameTemplateUi();
+    elements["action-detail"].textContent = `Downloads/${folderStatus().value || ""}`;
+    for (const view of navigationWorkspaces) {
+      const button = elements[workspaces[view][0]];
+      button.classList.toggle("current", view === "tracking");
+      if (view === "tracking") button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
+    }
+    elements["tracker-page-input"].focus();
+  }
+
   async function initialize() {
     cacheElements();
     applySmartFiltersToControls(Filters.DEFAULT_FILTERS);
@@ -5912,6 +6113,11 @@
     updateSmartFilterButton();
     updateInstagramCollectionFilterUi();
     updateTrackerUi();
+    if (createTrackerMode) {
+      wireEvents();
+      await initializeTrackerCreator();
+      return;
+    }
     if (editTrackerId) {
       wireEvents();
       await initializeTrackerEditor();

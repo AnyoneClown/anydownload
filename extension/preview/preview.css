@@ -10,6 +10,7 @@ body {
   grid-template-rows: auto minmax(0, 1fr) auto;
   color: var(--ink);
   background: var(--canvas);
+  line-height: 1.5;
 }
 
 .preview-header {
@@ -32,14 +33,15 @@ body {
   gap: 3px;
 }
 
-.title-copy strong,
+.title-copy h1,
 .title-copy span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.title-copy strong {
+.title-copy h1 {
+  margin: 0;
   font-size: 15px;
   letter-spacing: -.01em;
 }
@@ -64,12 +66,18 @@ body {
   text-decoration: none;
   font-size: 12px;
   font-weight: 680;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease;
 }
 
 .header-actions {
   display: flex;
+  flex: none;
   flex-wrap: wrap;
+  max-width: 100%;
   gap: 8px;
+  justify-content: flex-end;
 }
 
 .header-button svg {
@@ -82,8 +90,19 @@ body {
   stroke-width: 1.7;
 }
 
-.header-button:hover,
+.header-button:hover:not(:disabled),
 .header-button:focus-visible {
+  border-color: var(--brand);
+  color: var(--brand-ink);
+  background: var(--brand-soft);
+}
+
+.header-button:disabled {
+  cursor: default;
+  opacity: .55;
+}
+
+.size-toggle[data-actual-size="true"] {
   border-color: var(--brand);
   color: var(--brand-ink);
   background: var(--brand-soft);
@@ -95,14 +114,15 @@ body {
   min-width: 0;
   min-height: 0;
   padding: 24px;
+  container-type: size;
   overflow: auto;
   place-items: center;
   background-color: var(--canvas);
   background-image:
-    linear-gradient(45deg, color-mix(in srgb, var(--line) 42%, transparent) 25%, transparent 25%),
-    linear-gradient(-45deg, color-mix(in srgb, var(--line) 42%, transparent) 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, color-mix(in srgb, var(--line) 42%, transparent) 75%),
-    linear-gradient(-45deg, transparent 75%, color-mix(in srgb, var(--line) 42%, transparent) 75%);
+    linear-gradient(45deg, color-mix(in srgb, var(--line) 28%, transparent) 25%, transparent 25%),
+    linear-gradient(-45deg, color-mix(in srgb, var(--line) 28%, transparent) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, color-mix(in srgb, var(--line) 28%, transparent) 75%),
+    linear-gradient(-45deg, transparent 75%, color-mix(in srgb, var(--line) 28%, transparent) 75%);
   background-position: 0 0, 0 12px, 12px -12px, -12px 0;
   background-size: 24px 24px;
 }
@@ -126,8 +146,8 @@ body {
 .image-button img,
 .preview-video {
   display: block;
-  max-width: calc(100vw - 48px);
-  max-height: calc(100vh - 151px);
+  max-width: 100cqw;
+  max-height: 100cqh;
   border: 1px solid color-mix(in srgb, var(--line-strong) 70%, transparent);
   border-radius: 3px;
   box-shadow: 0 20px 60px rgb(20 31 27 / 22%);
@@ -159,7 +179,7 @@ body {
 
 .state-message {
   position: absolute;
-  max-width: 520px;
+  max-width: min(520px, calc(100% - 32px));
   padding: 11px 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
@@ -167,6 +187,7 @@ body {
   background: var(--surface);
   box-shadow: var(--shadow-sm);
   text-align: center;
+  overflow-wrap: anywhere;
 }
 
 .state-message.error {
@@ -198,13 +219,19 @@ body {
     padding: 8px;
   }
 
+  .title-copy {
+    flex: 1 1 100%;
+  }
+
+  .header-actions {
+    justify-content: flex-start;
+  }
+
   .preview-stage {
     padding: 14px;
   }
 
-  .image-button img,
-  .preview-video {
-    max-width: calc(100vw - 28px);
-    max-height: calc(100vh - 137px);
+  .preview-footer {
+    padding: 8px 12px;
   }
 }

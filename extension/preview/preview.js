@@ -12,6 +12,7 @@
     name: document.getElementById("image-name"),
     original: document.getElementById("original-link"),
     source: document.getElementById("source-link"),
+    sizeToggle: document.getElementById("size-toggle"),
     stage: document.getElementById("preview-stage"),
     footer: document.getElementById("preview-footer"),
     video: document.getElementById("preview-video")
@@ -24,6 +25,9 @@
     elements.error.textContent = message;
     elements.error.hidden = false;
     elements.meta.textContent = "Preview unavailable";
+    elements.stage.setAttribute("aria-busy", "false");
+    elements.sizeToggle.hidden = true;
+    elements.footer.textContent = "Return to the source page to open a fresh preview, or open the original file if available.";
   }
 
   function formatDuration(value) {
@@ -66,6 +70,8 @@
     elements.image.addEventListener("load", () => {
       elements.loading.hidden = true;
       elements.imageButton.disabled = false;
+      elements.sizeToggle.disabled = false;
+      elements.stage.setAttribute("aria-busy", "false");
       elements.meta.textContent = `${elements.image.naturalWidth.toLocaleString()} × ${elements.image.naturalHeight.toLocaleString()} pixels`;
     }, { once: true });
     elements.image.addEventListener("error", () => {
@@ -77,6 +83,7 @@
   function showVideo(urlResult, payload, validateUrl) {
     elements.stage.classList.add("video-mode");
     elements.imageButton.hidden = true;
+    elements.sizeToggle.hidden = true;
     elements.video.hidden = false;
     elements.video.setAttribute("aria-label", payload.alt || payload.name || "Video preview");
     elements.loading.textContent = "Loading video…";
@@ -89,6 +96,7 @@
 
     elements.video.addEventListener("loadedmetadata", () => {
       elements.loading.hidden = true;
+      elements.stage.setAttribute("aria-busy", "false");
       const details = [];
       if (elements.video.videoWidth > 0 && elements.video.videoHeight > 0) {
         details.push(`${elements.video.videoWidth.toLocaleString()} × ${elements.video.videoHeight.toLocaleString()} pixels`);
@@ -176,6 +184,7 @@
     const name = String(payload.name || `${typeLabel} preview`).slice(0, 180);
     const alt = String(payload.alt || name).slice(0, 500);
     elements.name.textContent = name;
+    elements.name.title = name;
     document.title = `${name} — ${typeLabel} preview`;
 
     const telegram = globalThis.AnyDownloadTelegram;
@@ -207,10 +216,18 @@
     }
   }
 
-  elements.imageButton.addEventListener("click", () => {
+  function toggleSize() {
     const actualSize = elements.stage.classList.toggle("actual-size");
     elements.imageButton.setAttribute("aria-pressed", String(actualSize));
-  });
+    elements.sizeToggle.setAttribute("data-actual-size", String(actualSize));
+    elements.sizeToggle.textContent = actualSize ? "Fit to window" : "Actual size";
+    elements.footer.textContent = actualSize
+      ? "Showing actual size. Scroll to explore the image. Click the image or choose Fit to window to zoom out."
+      : "Image fits the window. Click the image or choose Actual size to zoom in.";
+  }
+
+  elements.imageButton.addEventListener("click", toggleSize);
+  elements.sizeToggle.addEventListener("click", toggleSize);
 
   loadPreview().catch((error) => {
     showError(error && error.message ? error.message : String(error));

@@ -4,6 +4,25 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.23.0] - 2026-10-18
+
+### Changed
+
+- Simplify Account and Integrations to compact account/sync controls and server setup, with small Account and Integrations buttons at the top right beside the three main tabs.
+- Add useful first-use guidance and direct setup actions to Trackers and Integrations, including URL-based tracker setup, explicit Add server, and clear upload prerequisites and limits.
+- Replace Downloads and Trackers dashboard tiles with compact work lists, contextual controls, real transfer results and schedules, and optional statistics or rule details. Hide empty queue/review sections and remove repeated category headings.
+- Refine the media manager with clearer collection headings, more readable filenames and metadata, consistent controls, stronger focus and field boundaries, and polished light/dark states.
+- Improve narrow Sidebar and landscape layouts, filter explanations, selection controls, and download settings.
+- Add clear loading, empty, and failure guidance across Downloads, Trackers, Account, and Integrations, with labeled filters, per-file progress, and readable mobile details.
+- Fit standalone previews to the available window space and add a visible Actual size / Fit to window action. Improve archive results, upload preparation feedback, and the Sidebar fallback.
+
+### Fixed
+
+- Preserve keyboard focus through media updates, preview navigation, and action-menu dismissal; keep disclosure states and loading announcements accessible.
+- Keep busy media-card actions disabled consistently, prevent filtered selection controls from overlapping Sort, and preserve keyboard access to embedded workspaces.
+- Preserve existing tracker settings during URL-based setup, wait for saved settings before saving, and keep the approved site URL fixed during permission requests.
+- Preserve deliberate keyboard focus changes when slow integration actions finish.
+
 ## [1.22.2] - 2026-10-16
 
 ### Changed

@@ -189,6 +189,51 @@
     return "Success";
   }
 
+  function actionLabel(tracker) {
+    return tracker && tracker.action === "review" ? "Review"
+      : tracker && tracker.action === "notify" ? "Notify" : "Download";
+  }
+
+  function trackerDomain(value) {
+    try {
+      return new URL(value).host;
+    } catch (_error) {
+      return String(value || "");
+    }
+  }
+
+  function nextCheckAt(tracker) {
+    return tracker && tracker.enabled
+      ? Math.max(count(tracker.nextRunAt), count(tracker.backoffUntil)) : 0;
+  }
+
+  function latestActivity(tracker) {
+    const activity = tracker && tracker.activity;
+    return Array.isArray(activity) && activity.length ? activity[activity.length - 1] : null;
+  }
+
+  function activityOutcome(record) {
+    if (count(record.reviewed)) return `${count(record.reviewed).toLocaleString()} added to review`;
+    if (count(record.queued)) return `${count(record.queued).toLocaleString()} queued`;
+    if (count(record.discovered)) return `${count(record.discovered).toLocaleString()} new`;
+    return "";
+  }
+
+  function describeLastResult(tracker) {
+    const record = latestActivity(tracker);
+    const partial = record && record.status === "partial";
+    if (tracker && tracker.lastError && !partial || record && record.status === "error") return "Failed";
+    if (record && record.status === "baseline") {
+      return "Baseline recorded · no action";
+    }
+    if (record && record.status === "skipped") return record.message || "Skipped";
+    if (!record && !(tracker && tracker.lastSuccessAt)) return "";
+    const outcome = activityOutcome(record || {
+      reviewed: tracker.lastReviewed, queued: tracker.lastQueued, discovered: tracker.lastDiscovered
+    });
+    return partial ? `Partial${outcome ? ` · ${outcome}` : ""}` : outcome || "No new media";
+  }
+
   function formatDate(value) {
     const date = new Date(Number(value));
     if (!Number.isFinite(date.getTime()) || Number(value) <= 0) {
@@ -209,44 +254,27 @@
     const selectedReviewIds = new Set();
     let trackers = [];
     let reviews = [];
-    let maxTrackers = 20;
     let refreshing = false;
+    let loaded = false;
     let refreshPending = false;
     let globalBusy = false;
     let privateContext = false;
+    let contextReady = false;
     let reviewResult = "";
     const expandedActivity = new Set();
+    const expandedDetails = new Set();
 
     function cacheElements() {
       for (const id of [
-        "active-detail",
-        "active-stat",
-        "dashboard-subtitle",
-        "dismiss-selected-button",
-        "download-selected-button",
-        "empty-detail",
-        "empty-state",
-        "empty-title",
-        "error-banner",
-        "issues-detail",
-        "issues-stat",
-        "pause-all-button",
-        "pending-detail",
-        "pending-stat",
-        "refresh-button",
-        "review-count",
-        "review-empty",
-        "review-heading",
-        "review-list",
-        "review-select-all",
-        "review-status",
-        "review-tracker-filter",
-        "resume-all-button",
-        "search-input",
-        "status-filter",
-        "total-detail",
-        "total-stat",
-        "tracker-list"
+        "tracker-heading", "tracker-summary", "tracker-tools", "tracker-list",
+        "dismiss-selected-button", "download-selected-button",
+        "empty-detail", "empty-state", "empty-title", "error-banner",
+        "empty-actions", "empty-setup", "create-tracker-button", "reset-filters-button",
+        "retry-trackers-button", "open-regular-window-button", "header-create-tracker-button",
+        "pause-all-button", "refresh-button", "resume-all-button",
+        "review-count", "review-empty", "review-heading", "review-section", "review-link",
+        "review-list", "review-select-all", "review-status", "review-tools",
+        "review-tracker-filter", "search-input", "status-filter"
       ]) {
         elements[id] = document.getElementById(id);
       }
@@ -255,6 +283,40 @@
     function setError(message) {
       elements["error-banner"].textContent = message || "";
       elements["error-banner"].hidden = !message;
+    }
+
+    async function createTracker() {
+      if (!contextReady || privateContext) return;
+      const buttons = [elements["create-tracker-button"], elements["header-create-tracker-button"]];
+      for (const button of buttons) button.disabled = true;
+      setError("");
+      try {
+        if (root.frameElement && typeof root.parent?.AnyDownloadWorkspace?.createTracker === "function") {
+          await root.parent.AnyDownloadWorkspace.createTracker();
+          return;
+        }
+        const url = new URL(browser.runtime.getURL("popup/popup.html"));
+        url.searchParams.set("createTracker", "1");
+        const source = new URL(root.location && root.location.href || url.href).searchParams.get("sourceTabId");
+        if (/^\d+$/.test(source || "") && Number.isSafeInteger(Number(source))) url.searchParams.set("sourceTabId", source);
+        await browser.tabs.create({ active: true, url: url.href });
+      } catch (_error) {
+        setError("Could not open tracker setup. Try Add tracker again.");
+      } finally {
+        for (const button of buttons) button.disabled = false;
+      }
+    }
+
+    async function openRegularWindow() {
+      if (!contextReady || !privateContext || typeof browser.windows?.create !== "function") return;
+      elements["open-regular-window-button"].disabled = true;
+      try {
+        await browser.windows.create({ incognito: false, url: browser.runtime.getURL("tracking/tracking.html") });
+      } catch (_error) {
+        setError("Could not open a regular window. Open AnyDownload from a regular Firefox window.");
+      } finally {
+        elements["open-regular-window-button"].disabled = false;
+      }
     }
 
     async function resolveIncognitoContext() {
@@ -358,6 +420,7 @@
           trackers = trackers.filter((item) => item.id !== tracker.id);
           reviews = reviews.filter((item) => item.trackerId !== tracker.id);
           expandedActivity.delete(tracker.id);
+          expandedDetails.delete(tracker.id);
         } else {
           mergeTracker(response.tracker);
         }
@@ -382,95 +445,121 @@
       header.className = "tracker-header";
       const copy = document.createElement("div");
       copy.className = "tracker-copy";
-      const title = document.createElement("strong");
-      title.className = "tracker-title";
-      title.textContent = tracker.pageTitle || tracker.url || "Tracked page";
-      title.title = title.textContent;
-      const url = document.createElement("span");
-      url.className = "tracker-url";
-      url.textContent = tracker.url || "";
-      url.title = tracker.url || "";
-      copy.append(title, url);
+      const openButton = createButton(tracker.pageTitle || trackerDomain(tracker.url) || "Tracked page", "tracker-title", () => openTrackedPage(tracker));
+      openButton.id = `${card.id}-open`;
+      openButton.title = `Open ${tracker.url || "tracked page"}`;
+      const domain = document.createElement("span");
+      domain.className = "tracker-domain";
+      domain.textContent = trackerDomain(tracker.url);
+      copy.append(openButton, domain);
       const pill = document.createElement("span");
       pill.className = `status-pill ${status}`;
-      pill.textContent = status === "issue" ? "Needs attention" : status === "active" ? "Active" : "Paused";
-      header.append(copy, pill);
-
-      const details = document.createElement("div");
-      details.className = "tracker-details";
-      details.append(
-        createDetail("Schedule", intervalLabel(tracker.intervalMinutes)),
-        createDetail("Destination", `Downloads/${tracker.folder || ""}`),
-        createDetail("Action", describeAction(tracker)),
-        createDetail("Matching", describeMatching(tracker)),
-        createDetail("Pagination", describePagination(tracker))
-      );
-
-      const result = document.createElement("p");
-      result.className = `tracker-result${tracker.lastError ? " error" : ""}`;
-      const reliability = [];
-      if (tracker.autoPausedReason) {
-        reliability.push("Automatically paused");
-      } else if (Number(tracker.backoffUntil) > Date.now()) {
-        reliability.push(`Retry scheduled ${formatDate(tracker.backoffUntil)}`);
-      }
-      if (count(tracker.consecutiveErrors)) {
-        reliability.push(`${count(tracker.consecutiveErrors)} consecutive error${count(tracker.consecutiveErrors) === 1 ? "" : "s"}`);
-      }
-      const lastRun = tracker.lastRunAt || tracker.lastSuccessAt;
-      const pagesChecked = count(tracker.lastPagesChecked) || 1;
-      const actionResult = tracker.action === "review"
-        ? `${count(tracker.lastReviewed).toLocaleString()} added to review · ${count(tracker.pendingReviewCount).toLocaleString()} pending`
-        : tracker.action === "notify"
-          ? `${count(tracker.lastDiscovered).toLocaleString()} notified · nothing queued`
-          : `${count(tracker.lastQueued).toLocaleString()} queued`;
-      result.textContent = tracker.lastError
-        ? `Last check ${formatDate(lastRun)} reported an issue: ${tracker.lastError}${reliability.length ? ` · ${reliability.join(" · ")}` : ""}`
-        : tracker.lastSuccessAt
-          ? `Checked ${formatDate(lastRun)} · ${pagesChecked} page${pagesChecked === 1 ? "" : "s"} · ${count(tracker.lastFound).toLocaleString()} matched · ${actionResult} · ${formatDuration(tracker.lastDurationMs)}`
-          : "Waiting for the first successful check.";
+      pill.textContent = tracker.enabled ? status === "issue" ? "Needs attention" : "Active"
+        : tracker.autoPausedReason ? "Automatically paused" : "Paused";
+      if (!tracker.enabled && tracker.lastError) pill.textContent += " · issue";
 
       const actions = document.createElement("div");
       actions.className = "tracker-actions";
-      const openButton = createButton("Open page", "tracker-button", () => openTrackedPage(tracker));
-      const editButton = createButton("Edit tracker", "tracker-button", () => editTracker(tracker));
       const runButton = createButton(busy ? "Checking…" : "Run now", "tracker-button", () =>
         performTrackerAction("RUN_TRACKER", tracker)
       );
-      const toggleButton = createButton(
-        tracker.enabled ? "Pause" : "Resume",
-        "tracker-button",
-        () => performTrackerAction("SET_TRACKER_ENABLED", tracker, { enabled: !tracker.enabled })
+      const toggleButton = createButton(tracker.enabled ? "Pause" : "Resume", "tracker-button", () =>
+        performTrackerAction("SET_TRACKER_ENABLED", tracker, { enabled: !tracker.enabled })
       );
+      const expanded = expandedDetails.has(tracker.id);
+      const detailsButton = createButton("Details", "tracker-button details-button", () => {
+        if (expandedDetails.has(tracker.id)) expandedDetails.delete(tracker.id);
+        else expandedDetails.add(tracker.id);
+        render();
+      });
+      for (const [action, button] of Object.entries({ run: runButton, toggle: toggleButton, "details-toggle": detailsButton })) {
+        button.id = `${card.id}-${action}`;
+      }
+      detailsButton.setAttribute("aria-expanded", String(expanded));
+      detailsButton.setAttribute("aria-controls", `${card.id}-details`);
+      for (const button of [openButton, runButton, toggleButton]) button.disabled = busy || globalBusy;
+      actions.append(runButton, toggleButton, detailsButton);
+      header.append(copy, pill, actions);
+
+      const facts = document.createElement("div");
+      facts.className = "tracker-facts";
+      const next = nextCheckAt(tracker);
+      const nextText = !tracker.enabled ? "Paused" : busy ? "Checking…"
+        : next ? next <= Date.now() ? "Due" : formatDate(next) : "Not scheduled";
+      const nextFact = createDetail("Next check", nextText);
+      nextFact.className = "tracker-fact";
+      nextFact.id = `${card.id}-next-check`;
+      if (next) nextFact.title = formatDate(next);
+      const record = latestActivity(tracker);
+      const completedAt = record && (record.finishedAt || record.startedAt) || (!tracker.lastError && tracker.lastSuccessAt);
+      const lastFact = createDetail("Last check", completedAt ? formatDate(completedAt) : tracker.lastError ? "—" : "Not checked");
+      lastFact.className = "tracker-fact";
+      lastFact.id = `${card.id}-last-check`;
+      const resultText = describeLastResult(tracker);
+      if (resultText && !tracker.lastError) {
+        const result = document.createElement("small");
+        result.className = `tracker-result${tracker.lastError ? " error" : ""}`;
+        result.textContent = resultText;
+        lastFact.append(result);
+      }
+      const actionFact = createDetail("Action", actionLabel(tracker));
+      actionFact.className = "tracker-fact";
+      facts.append(nextFact, lastFact, actionFact);
+      card.append(header, facts);
+      if (tracker.lastError) {
+        const error = document.createElement("p");
+        error.className = "tracker-error";
+        error.textContent = `${record && record.status === "partial" && resultText !== "Partial" ? `${resultText} · ` : ""}${tracker.lastError}`;
+        card.append(error);
+      }
+
+      const panel = document.createElement("div");
+      panel.className = "tracker-details-panel";
+      panel.id = `${card.id}-details`;
+      panel.hidden = !expanded;
+      const details = document.createElement("div");
+      details.className = "tracker-details";
+      details.append(
+        createDetail("Page", tracker.url || ""),
+        createDetail("Schedule", intervalLabel(tracker.intervalMinutes)),
+        createDetail("Folder", `Downloads/${tracker.folder || ""}`),
+        createDetail("Matching", describeMatching(tracker)),
+        createDetail("Pagination", describePagination(tracker))
+      );
+      if (tracker.autoPausedReason) details.append(createDetail("Pause reason", tracker.autoPausedReason));
+      if (count(tracker.consecutiveErrors)) details.append(createDetail("Consecutive errors", count(tracker.consecutiveErrors).toLocaleString()));
+      if (record) {
+        details.append(createDetail("Last check", `${count(record.found)} matched · ${count(record.pagesChecked)} page${count(record.pagesChecked) === 1 ? "" : "s"} · ${formatDuration(record.durationMs)}`));
+        if (record.message) details.append(createDetail("Last result", record.message));
+      }
+      const detailActions = document.createElement("div");
+      detailActions.className = "detail-actions";
+      const editButton = createButton("Edit tracker", "tracker-button", () => editTracker(tracker));
       const removeButton = createButton("Remove", "tracker-button danger-button", () =>
         performTrackerAction("DELETE_TRACKER", tracker)
       );
+      editButton.id = `${card.id}-edit`;
+      removeButton.id = `${card.id}-remove`;
+      editButton.disabled = busy || globalBusy;
+      removeButton.disabled = busy || globalBusy;
+      detailActions.append(editButton);
       const activity = Array.isArray(tracker.activity) ? tracker.activity : [];
-      const historyButton = createButton(
-        `Activity (${activity.length})`,
-        "tracker-button activity-button",
-        () => {
-          if (expandedActivity.has(tracker.id)) {
-            expandedActivity.delete(tracker.id);
-          } else {
-            expandedActivity.add(tracker.id);
-          }
+      if (activity.length) {
+        const historyButton = createButton(`Activity (${activity.length})`, "tracker-button activity-button", () => {
+          if (expandedActivity.has(tracker.id)) expandedActivity.delete(tracker.id);
+          else expandedActivity.add(tracker.id);
           render();
-        }
-      );
-      historyButton.setAttribute("aria-expanded", String(expandedActivity.has(tracker.id)));
-      historyButton.disabled = activity.length === 0;
-      for (const [action, button] of Object.entries({ open: openButton, edit: editButton, run: runButton, toggle: toggleButton, remove: removeButton, activity: historyButton })) {
-        button.id = `${card.id}-${action}`;
+        });
+        historyButton.id = `${card.id}-activity`;
+        historyButton.setAttribute("aria-expanded", String(expandedActivity.has(tracker.id)));
+        historyButton.setAttribute("aria-controls", `${card.id}-activity-list`);
+        detailActions.append(historyButton);
       }
-      for (const button of [openButton, editButton, runButton, toggleButton, removeButton]) {
-        button.disabled = busy || globalBusy;
-      }
-      actions.append(historyButton, openButton, editButton, runButton, toggleButton, removeButton);
-      card.append(header, details, result, actions);
-
+      detailActions.append(removeButton);
+      panel.append(details, detailActions);
       if (expandedActivity.has(tracker.id) && activity.length) {
         const history = document.createElement("ol");
+        history.id = `${card.id}-activity-list`;
         history.className = "activity-list";
         for (const record of activity.slice().reverse()) {
           const row = document.createElement("li");
@@ -481,18 +570,13 @@
           activityPill.className = `activity-status ${record.status || "error"}`;
           activityPill.textContent = activityStatusLabel(record.status);
           const date = document.createElement("time");
-          date.dateTime = new Date(Number(record.startedAt) || 0).toISOString();
-          date.textContent = formatDate(record.startedAt);
+          date.dateTime = new Date(Number(record.finishedAt || record.startedAt) || 0).toISOString();
+          date.textContent = formatDate(record.finishedAt || record.startedAt);
           heading.append(activityPill, date);
           const metrics = document.createElement("p");
-          const actionMetrics = count(record.reviewed)
-            ? `${count(record.reviewed)} reviewed`
-            : count(record.queued)
-              ? `${count(record.queued)} queued`
-              : count(record.discovered)
-                ? `${count(record.discovered)} notified`
-                : "0 acted on";
-          metrics.textContent = `${count(record.pagesChecked)} page${count(record.pagesChecked) === 1 ? "" : "s"} · ${count(record.found)} matched · ${count(record.discovered)} new · ${actionMetrics} · ${formatDuration(record.durationMs)} · ${record.reason || "alarm"}`;
+          const actionMetrics = record.status === "baseline" ? "no action"
+            : activityOutcome(record) || (["error", "skipped"].includes(record.status) ? "no action" : "No new media");
+          metrics.textContent = `${count(record.pagesChecked)} page${count(record.pagesChecked) === 1 ? "" : "s"} · ${count(record.found)} matched · ${actionMetrics} · ${formatDuration(record.durationMs)} · ${record.reason || "alarm"}`;
           row.append(heading, metrics);
           if (record.message) {
             const message = document.createElement("p");
@@ -502,8 +586,9 @@
           }
           history.append(row);
         }
-        card.append(history);
+        panel.append(history);
       }
+      card.append(panel);
       return card;
     }
 
@@ -511,6 +596,8 @@
       if (!items.length || globalBusy || refreshing || privateContext) {
         return;
       }
+      const sourceButton = elements[action === "approve" ? "download-selected-button" : "dismiss-selected-button"];
+      const restoreFocus = document.activeElement === sourceButton;
       globalBusy = true;
       for (const review of items) reviewBusyIds.add(review.id);
       reviewResult = "";
@@ -550,6 +637,9 @@
         reviewBusyIds.clear();
         globalBusy = false;
         render();
+        if (restoreFocus && (!document.activeElement || document.activeElement === sourceButton || document.activeElement === document.body)) {
+          (!sourceButton.hidden ? sourceButton : elements[elements["review-section"].hidden ? "tracker-heading" : "review-heading"]).focus({ preventScroll: true });
+        }
         if (refreshPending) await refreshTrackers(true);
       }
     }
@@ -586,9 +676,13 @@
         image.alt = "";
         image.loading = "lazy";
         image.referrerPolicy = "no-referrer";
+        image.addEventListener("error", () => {
+          preview.replaceChildren();
+          preview.textContent = "No preview";
+        }, { once: true });
         preview.append(image);
-      } else if (review.mediaType !== "video") {
-        preview.textContent = "Media";
+      } else {
+        preview.textContent = review.mediaType === "video" ? "Video" : "No preview";
       }
 
       const copy = document.createElement("div");
@@ -598,17 +692,14 @@
       title.title = title.textContent;
       const sourceTracker = trackers.find((tracker) => tracker.id === review.trackerId);
       const source = document.createElement("span");
-      source.textContent = `${sourceTracker && sourceTracker.pageTitle || review.pageTitle || "Tracked page"} · ${formatDate(review.detectedAt)}`;
-      const url = document.createElement("span");
-      url.className = "review-url";
-      url.textContent = review.url || "";
-      url.title = review.url || "";
+      source.textContent = `${sourceTracker && sourceTracker.pageTitle || review.pageTitle || "Removed tracker"}${review.detectedAt ? ` · ${formatDate(review.detectedAt)}` : ""}`;
+      source.title = review.url || "";
       const destination = document.createElement("span");
       destination.className = "review-destination";
       destination.textContent = sourceTracker
         ? `Destination: Downloads/${sourceTracker.folder || ""}`
         : "Tracker removed — dismiss this item";
-      copy.append(title, source, url, destination);
+      copy.append(title, source, destination);
 
       const actions = document.createElement("div");
       actions.className = "review-actions";
@@ -629,6 +720,7 @@
         button.id = `${card.id}-${action}`;
       }
       open.disabled = busy || globalBusy;
+      approve.hidden = !sourceTracker;
       approve.disabled = busy || globalBusy || refreshing || !sourceTracker;
       dismiss.disabled = busy || globalBusy || refreshing;
       actions.append(open, approve, dismiss);
@@ -664,12 +756,18 @@
       selectAll.indeterminate = selectedVisible > 0 && selectedVisible < visible.length;
       selectAll.disabled = privateContext || globalBusy || !visible.length;
       for (const id of ["download-selected-button", "dismiss-selected-button"]) {
+        elements[id].hidden = !selectedCount;
         elements[id].disabled = privateContext || globalBusy || refreshing || !selectedCount;
       }
       elements["review-count"].textContent = `${visible.length.toLocaleString()}${filter.value !== "all" ? ` of ${reviews.length.toLocaleString()}` : ""} item${visible.length === 1 ? "" : "s"}`;
       const hidden = selectedCount - selectedVisible;
-      elements["review-status"].textContent = `${reviewResult ? `${reviewResult} ` : ""}${selectedCount} selected${hidden ? ` (${hidden} hidden by the tracker filter)` : ""}.`;
-      elements["review-empty"].hidden = visible.length > 0;
+      elements["review-status"].textContent = `${reviewResult ? `${reviewResult} ` : ""}${selectedCount ? `${selectedCount} selected${hidden ? ` (${hidden} hidden by the tracker filter)` : ""}.` : ""}`;
+      elements["review-status"].hidden = !elements["review-status"].textContent;
+      elements["review-section"].hidden = !reviews.length || privateContext;
+      elements["review-tools"].hidden = !reviews.length || privateContext;
+      elements["review-tracker-filter"].hidden = trackerIds.length < 2;
+      elements["review-empty"].hidden = visible.length > 0 || !reviews.length;
+      elements["review-empty"].textContent = "No items from this tracker. Choose All trackers to view the full inbox.";
       elements["review-list"].replaceChildren(...visible.map(renderReviewItem));
     }
 
@@ -693,64 +791,75 @@
       const focused = document.activeElement;
       const focusedId = focused && (focused.getAttribute("data-focus-control") || focused.id);
       const focusedCard = focused && focused.closest(".tracker-item, .review-item");
+      const focusedReviewControl = focused && ["review-select-all", "review-tracker-filter", "download-selected-button", "dismiss-selected-button", "review-heading"].includes(focused.id);
       const summary = summarizeTrackers(trackers, reviews);
-      elements["total-stat"].textContent = summary.total.toLocaleString();
-      elements["total-detail"].textContent = `${Math.max(0, maxTrackers - summary.total).toLocaleString()} of ${maxTrackers.toLocaleString()} slots available`;
-      elements["active-stat"].textContent = summary.active.toLocaleString();
-      elements["active-detail"].textContent = summary.active
-        ? `${summary.paused.toLocaleString()} paused`
-        : "No scheduled checks";
-      elements["issues-stat"].textContent = summary.issues.toLocaleString();
-      elements["issues-detail"].textContent = summary.issues
-        ? `${summary.issues.toLocaleString()} tracker${summary.issues === 1 ? "" : "s"} reported an error`
-        : "No recent errors";
-      elements["pending-stat"].textContent = summary.pending.toLocaleString();
-      elements["pending-detail"].textContent = summary.pending
-        ? `${summary.pending.toLocaleString()} item${summary.pending === 1 ? "" : "s"} awaiting approval`
-        : "Review inbox is empty";
-      elements["dashboard-subtitle"].textContent = summary.total
-        ? `${summary.active.toLocaleString()} active of ${summary.total.toLocaleString()} tracked page${summary.total === 1 ? "" : "s"}`
-        : "No pages are being monitored yet";
-
+      const counts = [];
+      if (summary.active) counts.push(`${summary.active.toLocaleString()} active`);
+      if (summary.paused) counts.push(`${summary.paused.toLocaleString()} paused`);
+      if (summary.issues) counts.push(`${summary.issues.toLocaleString()} issue${summary.issues === 1 ? "" : "s"}`);
+      elements["tracker-summary"].textContent = counts.join(" · ");
+      elements["tracker-summary"].hidden = !loaded || privateContext || !counts.length;
+      elements["review-link"].hidden = !reviews.length || privateContext;
+      elements["review-link"].textContent = `${reviews.length.toLocaleString()} to review`;
+      elements["review-link"].setAttribute("aria-label", `${reviews.length.toLocaleString()} item${reviews.length === 1 ? "" : "s"} to review. Go to review inbox.`);
+      elements["tracker-tools"].hidden = !trackers.length || privateContext;
+      elements["header-create-tracker-button"].hidden = !loaded || !trackers.length || privateContext;
+      elements["pause-all-button"].hidden = !summary.active || privateContext;
+      elements["resume-all-button"].hidden = !summary.paused || privateContext;
       elements["pause-all-button"].disabled = globalBusy || refreshing || summary.active === 0;
       elements["resume-all-button"].disabled = globalBusy || refreshing || summary.paused === 0;
-      elements["refresh-button"].disabled = refreshing || globalBusy;
+      elements["refresh-button"].disabled = refreshing || globalBusy || privateContext;
+      elements["refresh-button"].setAttribute("aria-busy", String(refreshing));
       elements["search-input"].disabled = privateContext;
       elements["status-filter"].disabled = privateContext;
-      if (privateContext) {
-        elements["pause-all-button"].disabled = true;
-        elements["resume-all-button"].disabled = true;
-        elements["refresh-button"].disabled = true;
-        elements["dashboard-subtitle"].textContent = "Background tracking is unavailable in private windows";
-      }
 
       renderReviews();
       const visible = sortedVisibleTrackers();
       elements["tracker-list"].replaceChildren(...visible.map(renderTracker));
-      const hasTrackers = summary.total > 0;
-      const hasFilter = elements["status-filter"].value !== "all" || elements["search-input"].value.trim();
+      elements["tracker-list"].hidden = !visible.length;
       elements["empty-state"].hidden = visible.length > 0;
-      elements["empty-title"].textContent = hasTrackers && hasFilter
-        ? "No trackers match this view"
-        : privateContext ? "Tracking is unavailable here" : "No tracked pages yet";
-      elements["empty-detail"].textContent = hasTrackers && hasFilter
-        ? "Change the search text or status filter to see other trackers."
-        : privateContext
-          ? "Open this dashboard from a regular Firefox window to view and manage persistent trackers."
-          : "Open AnyDownload on a webpage, choose Track page, and save its schedule.";
+      const filtered = summary.total > 0;
+      const loadFailed = !loaded && Boolean(elements["error-banner"].textContent);
+      const firstUse = loaded && !filtered && !privateContext;
+      const filterEmpty = loaded && filtered && !visible.length && !privateContext;
+      const normalWindowAvailable = privateContext && typeof browser.windows?.create === "function";
+      elements["empty-state"].setAttribute("data-state", privateContext ? "private" : !loaded ? loadFailed ? "error" : "loading" : filtered ? "filtered" : "first-use");
+      elements["empty-title"].textContent = privateContext ? "Trackers are unavailable in private windows."
+        : !loaded ? loadFailed ? "Could not load trackers" : "Loading trackers…"
+        : filtered ? "No matching trackers" : "Check a page for new media";
+      elements["empty-detail"].textContent = privateContext ? "Open AnyDownload in a regular Firefox window to create and manage trackers."
+        : !loaded ? loadFailed ? "Your saved pages could not be read. Retry to load them." : "Reading saved pages and pending reviews."
+        : filtered ? `${summary.total.toLocaleString()} saved page${summary.total === 1 ? "" : "s"}. Clear the search and status filters to show them.`
+        : "Save a webpage and check it on a schedule for new images or videos. Checks run while Firefox is open.";
+      elements["empty-detail"].hidden = !elements["empty-detail"].textContent;
+      elements["create-tracker-button"].hidden = !firstUse;
+      elements["reset-filters-button"].hidden = !filterEmpty;
+      elements["retry-trackers-button"].hidden = !loadFailed || privateContext;
+      elements["retry-trackers-button"].disabled = refreshing;
+      elements["open-regular-window-button"].hidden = !normalWindowAvailable;
+      elements["empty-actions"].hidden = !(firstUse || filterEmpty || loadFailed && !privateContext || normalWindowAvailable);
+      elements["empty-setup"].hidden = !firstUse;
       if (focusedCard) {
         const replacement = document.getElementById(focusedId);
         const fallback = document.getElementById(focusedCard.id) ||
-          elements[focusedCard.className === "review-item" ? "review-heading" : "search-input"];
+          (focusedCard.className === "review-item" && !elements["review-section"].hidden
+            ? elements["review-heading"] : elements["tracker-heading"]);
         if ((!replacement || replacement.disabled) && fallback.id === focusedCard.id) {
           fallback.setAttribute("data-focus-control", focusedId);
         }
         (replacement && !replacement.disabled ? replacement : fallback).focus({ preventScroll: true });
+      } else if (focused && (focused.hidden || focusedReviewControl && elements["review-section"].hidden)) {
+        const counterpart = focused.id === "pause-all-button" ? elements["resume-all-button"]
+          : focused.id === "resume-all-button" ? elements["pause-all-button"] : null;
+        const target = counterpart && !counterpart.hidden ? counterpart
+          : focusedReviewControl && !elements["review-section"].hidden
+            ? elements["review-heading"] : elements["tracker-heading"];
+        target.focus({ preventScroll: true });
       }
     }
 
     async function refreshTrackers(preserveError = false) {
-      if (privateContext) {
+      if (!contextReady || privateContext) {
         return;
       }
       if (refreshing || globalBusy) {
@@ -768,7 +877,7 @@
         }
         trackers = response.trackers;
         reviews = Array.isArray(response.reviews) ? response.reviews : [];
-        maxTrackers = Math.max(1, count(response.maxTrackers) || 20);
+        loaded = true;
       } catch (error) {
         if (!preserveError || !elements["error-banner"].textContent) {
           setError(error && error.message ? error.message : String(error));
@@ -786,6 +895,8 @@
       if (globalBusy || refreshing) {
         return;
       }
+      const sourceButton = elements[enabled ? "resume-all-button" : "pause-all-button"];
+      const restoreFocus = document.activeElement === sourceButton;
       globalBusy = true;
       setError("");
       render();
@@ -803,6 +914,10 @@
       } finally {
         globalBusy = false;
         render();
+        if (restoreFocus && (!document.activeElement || document.activeElement === sourceButton || document.activeElement === document.body)) {
+          const counterpart = elements[enabled ? "pause-all-button" : "resume-all-button"];
+          (!sourceButton.hidden ? sourceButton : !counterpart.hidden ? counterpart : elements["tracker-heading"]).focus({ preventScroll: true });
+        }
         if (refreshPending) await refreshTrackers(true);
       }
     }
@@ -811,6 +926,16 @@
       elements["refresh-button"].addEventListener("click", () => refreshTrackers());
       elements["pause-all-button"].addEventListener("click", () => setAllTrackersEnabled(false));
       elements["resume-all-button"].addEventListener("click", () => setAllTrackersEnabled(true));
+      elements["create-tracker-button"].addEventListener("click", createTracker);
+      elements["header-create-tracker-button"].addEventListener("click", createTracker);
+      elements["open-regular-window-button"].addEventListener("click", openRegularWindow);
+      elements["retry-trackers-button"].addEventListener("click", () => refreshTrackers());
+      elements["reset-filters-button"].addEventListener("click", () => {
+        elements["search-input"].value = "";
+        elements["status-filter"].value = "all";
+        render();
+        elements["search-input"].focus({ preventScroll: true });
+      });
       elements["search-input"].addEventListener("input", render);
       elements["status-filter"].addEventListener("change", render);
       elements["review-tracker-filter"].addEventListener("change", render);
@@ -845,17 +970,19 @@
       cacheElements();
       wireEvents();
       privateContext = await resolveIncognitoContext();
+      contextReady = true;
       render();
-      if (privateContext) {
-        setError("Background trackers use persistent storage and cannot be managed from a private window.");
-        return;
-      }
+      if (privateContext) return;
       refreshTrackers();
     }, { once: true });
   }
 
   return Object.freeze({
+    actionLabel,
     activityStatusLabel,
+    describeLastResult,
+    nextCheckAt,
+    trackerDomain,
     describeAction,
     describeFilters,
     describeMatching,

@@ -669,7 +669,7 @@
     }
     let controller = new AbortController();
     let retryRequest = null;
-    const workspaceLinks = Array.from(documentObject.querySelectorAll(".workspace-nav a"), (link) => ({
+    const workspaceLinks = Array.from(documentObject.querySelectorAll(".workspace-header a[data-source-link]"), (link) => ({
       link,
       target: link.target,
       title: link.title
@@ -712,6 +712,7 @@
       elements["byte-count"].textContent = formatBytes(state.imageBytes + activeBytes);
       elements["job-progress"].max = Math.max(1, state.total);
       elements["job-progress"].value = Math.min(state.processed, state.total);
+      elements["job-progress"].ariaValueText = `${state.processed} of ${state.total} selected images processed`;
     }
 
     function showFatal(message) {
@@ -774,7 +775,8 @@
           const showButton = documentObject.createElement("button");
           showButton.className = "show-file-button";
           showButton.type = "button";
-          showButton.textContent = "Show";
+          showButton.textContent = "Show file";
+          showButton.ariaLabel = `Show ${displayName} in Downloads`;
           showButton.addEventListener("click", () => {
             if (typeof browserObject.downloads.show === "function") {
               browserObject.downloads.show(downloadId).catch(() => undefined);

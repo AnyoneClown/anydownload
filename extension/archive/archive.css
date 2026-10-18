@@ -1,6 +1,6 @@
 html,
 body {
-  min-width: 320px;
+  min-width: 280px;
   min-height: 100%;
   margin: 0;
 }
@@ -8,6 +8,7 @@ body {
 body {
   color: var(--ink);
   background: var(--canvas);
+  line-height: 1.5;
 }
 
 button {
@@ -60,7 +61,7 @@ h1 {
   margin: 0;
   font-size: clamp(29px, 5vw, 40px);
   font-weight: 780;
-  line-height: 1.02;
+  line-height: 1.13;
   letter-spacing: -.035em;
 }
 
@@ -102,13 +103,14 @@ h2 {
 .quiet-button,
 .show-file-button {
   flex: none;
+  min-height: 44px;
   padding: 8px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   color: var(--ink);
   background: var(--surface-raised);
   font-weight: 680;
-  transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease, transform 120ms ease;
+  transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease;
 }
 
 .danger-button {
@@ -122,10 +124,6 @@ button:focus-visible {
   border-color: var(--brand);
   color: var(--brand-ink);
   background: var(--brand-soft);
-}
-
-button:hover:not(:disabled) {
-  transform: translateY(-1px);
 }
 
 button:disabled {
@@ -191,7 +189,7 @@ progress::-moz-progress-bar {
   display: block;
   margin-bottom: 5px;
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 760;
   letter-spacing: .06em;
   text-transform: uppercase;
@@ -213,9 +211,14 @@ progress::-moz-progress-bar {
 
 .current-box strong {
   display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+
+.stats > div:last-child dd {
+  overflow-wrap: anywhere;
+  white-space: normal;
+  font-size: 13px;
 }
 
 .fatal-card {
@@ -270,9 +273,11 @@ progress::-moz-progress-bar {
 .result-copy strong,
 .result-copy span {
   display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+
+.result-copy strong {
+  font-size: 14px;
 }
 
 .result-copy span {
@@ -323,8 +328,11 @@ progress::-moz-progress-bar {
     padding-top: 20px;
   }
 
-  .stats,
   .results-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -345,13 +353,24 @@ progress::-moz-progress-bar {
   }
 
   .status-row,
-.section-heading {
+  .section-heading {
     align-items: flex-start;
   }
 
-  .stats,
-  .results-grid {
+  .stats {
+    gap: 8px;
+  }
+
+  .stats > div {
+    padding: 12px;
+  }
+
+  .result-item {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .show-file-button {
+    justify-self: start;
   }
 }
 

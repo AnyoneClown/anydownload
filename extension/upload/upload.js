@@ -253,6 +253,7 @@
       elements["local-files"].disabled = busy;
       elements["start-button"].hidden = Boolean(job);
       elements["start-button"].disabled = busy || !selectedConnection() || !items.length;
+      elements["start-label"].textContent = busy && !job ? "Preparing upload…" : "Upload media";
       elements["retry-button"].hidden = !job || job.status === "complete";
       const selectedMedia = job ? job.items : items;
       const mediaKind = selectedMedia.some((item) => item.mediaType === "video")
@@ -330,6 +331,7 @@
         const remove = document.createElement("button");
         remove.type = "button";
         remove.textContent = "Remove record";
+        remove.ariaLabel = `Remove upload record: ${mediaLabel(saved)} to Immich, ${date.textContent}`;
         remove.disabled = busy && job?.id === saved.id;
         remove.addEventListener("click", () => act(async () => {
           await locks.request(`upload:${saved.id}`, { ifAvailable: true }, async (lock) => {
@@ -558,6 +560,7 @@
             combined.throwIfAborted();
             render();
             elements["progress-panel"].scrollIntoView({ block: "start" });
+            elements["progress-heading"].focus?.({ preventScroll: true });
             await Uploads.run(runningJob, { credential, signal: combined, provider, fetchImage,
               onChange: async (changed, changedItem, durable) => {
                 if (durable !== false) await store.save(changed);

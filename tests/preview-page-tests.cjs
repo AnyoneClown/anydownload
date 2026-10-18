@@ -6,6 +6,7 @@ const path = require("path");
 const vm = require("vm");
 const Core = require("../extension/shared/core.js");
 const source = fs.readFileSync(path.join(__dirname, "../extension/preview/preview.js"), "utf8");
+const html = fs.readFileSync(path.join(__dirname, "../extension/preview/preview.html"), "utf8");
 const id = "preview-test-1234";
 const key = `imagePreview:${id}`;
 const now = 1789228800000;
@@ -36,12 +37,26 @@ async function openPreview({ session = {}, cache = new Map(), clock = now, searc
     document: {
       getElementById(name) {
         if (!elements.has(name)) {
+          const markup = html.match(new RegExp(`<[^>]+\\bid="${name}"[^>]*>`));
+          assert.ok(markup, `The preview page must contain ${name}`);
+          const attributes = Object.fromEntries([...markup[0].matchAll(/\s([\w-]+)="([^"]*)"/g)]
+            .map((match) => [match[1], match[2]]));
+          const classes = new Set((attributes.class || "").split(/\s+/).filter(Boolean));
           elements.set(name, {
-            hidden: true,
-            textContent: "",
-            attributes: {},
+            hidden: /\shidden(?=[\s>])/.test(markup[0]),
+            disabled: /\sdisabled(?=[\s>])/.test(markup[0]),
+            textContent: name === "size-toggle" ? html.match(/id="size-toggle"[^>]*>([^<]*)</)[1] : "",
+            attributes,
             listeners: {},
-            classList: { add() {}, toggle() { return true; } },
+            classList: {
+              add(...names) { names.forEach((name) => classes.add(name)); },
+              contains(name) { return classes.has(name); },
+              toggle(name) {
+                if (classes.has(name)) { classes.delete(name); return false; }
+                classes.add(name);
+                return true;
+              }
+            },
             addEventListener(type, listener) { this.listeners[type] = listener; },
             setAttribute(name, value) { this.attributes[name] = value; }
           });
@@ -89,6 +104,52 @@ async function openPreview({ session = {}, cache = new Map(), clock = now, searc
   assert.equal(cache.size, 1, "Only one payload may be retained per tab");
   assert.equal(first.elements.get("source-link").href, payload.sourceUrl);
 
+  const image = first.elements.get("preview-image");
+  const imageButton = first.elements.get("image-button");
+  const sizeToggle = first.elements.get("size-toggle");
+  const stage = first.elements.get("preview-stage");
+  const footer = first.elements.get("preview-footer");
+  assert.equal(imageButton.disabled, true, "Image zoom is unavailable before the image loads");
+  assert.equal(sizeToggle.disabled, true, "The toolbar zoom action is unavailable before the image loads");
+  assert.equal(sizeToggle.hidden, false, "The disabled zoom action remains discoverable while loading");
+  assert.equal(imageButton.attributes["aria-pressed"], "false");
+  assert.equal(sizeToggle.textContent, "Actual size");
+  assert.equal(stage.classList.contains("actual-size"), false);
+  image.naturalWidth = 1800;
+  image.naturalHeight = 1200;
+  image.listeners.load();
+  assert.equal(imageButton.disabled, false);
+  assert.equal(sizeToggle.disabled, false, "The toolbar action must enable only after a usable image loads");
+  assert.equal(stage.attributes["aria-busy"], "false");
+  assert.equal(first.elements.get("loading-message").hidden, true);
+
+  function assertZoomState(actualSize) {
+    assert.equal(stage.classList.contains("actual-size"), actualSize, "The rendered image size must match the control state");
+    assert.equal(imageButton.attributes["aria-pressed"], String(actualSize));
+    assert.equal(imageButton.attributes["aria-label"], "Actual image size", "The toggle keeps a stable accessible name");
+    assert.equal(sizeToggle.attributes["data-actual-size"], String(actualSize));
+    assert.equal(sizeToggle.textContent, actualSize ? "Fit to window" : "Actual size", "The toolbar names the next zoom action");
+    assert.match(footer.textContent, actualSize ? /Showing actual size/ : /Image fits the window/);
+    assert.equal(sizeToggle.attributes["aria-pressed"], undefined,
+      "The changing-label toolbar action must not also present itself as a pressed-state toggle");
+  }
+  sizeToggle.listeners.click();
+  assertZoomState(true);
+  imageButton.listeners.click();
+  assertZoomState(false);
+  imageButton.listeners.click();
+  assertZoomState(true);
+  sizeToggle.listeners.click();
+  assertZoomState(false);
+
+  const failedImage = await openPreview({ session: { [key]: payload } });
+  assert.equal(failedImage.elements.get("size-toggle").hidden, false);
+  failedImage.elements.get("preview-image").listeners.error();
+  assert.equal(failedImage.elements.get("size-toggle").hidden, true, "An image error must remove its unavailable zoom action");
+  assert.equal(failedImage.elements.get("image-button").hidden, true);
+  assert.equal(failedImage.elements.get("preview-stage").attributes["aria-busy"], "false");
+  assert.match(failedImage.elements.get("error-message").textContent, /could not load this image/);
+
   const reloaded = await openPreview({ session, cache });
   assert.equal(reloaded.elements.get("preview-image").src, payload.url, "Reload must reuse the tab's unexpired payload");
   let prevented = false;
@@ -112,6 +173,7 @@ async function openPreview({ session = {}, cache = new Map(), clock = now, searc
   assert.match(expired.elements.get("error-message").textContent, /expired/);
   assert.equal(cache.size, 0, "Expired tab data must be removed");
   assert.equal(expired.elements.get("source-link").href, payload.sourceUrl, "Expired previews must still offer a way back");
+  assert.equal(expired.elements.get("size-toggle").hidden, true, "An expired preview must not offer image zoom");
 
   const invalidSource = await openPreview({ session: { [key]: { ...payload, sourceUrl: "javascript:alert(1)" } } });
   assert.equal(invalidSource.elements.get("source-link").hidden, true);
@@ -123,6 +185,8 @@ async function openPreview({ session = {}, cache = new Map(), clock = now, searc
   const video = await openPreview({ session: { [key]: { ...payload, url: "https://cdn.example.test/clip.mp4", mediaType: "video" } } });
   assert.equal(video.elements.get("preview-video").src, "https://cdn.example.test/clip.mp4");
   assert.equal(video.elements.get("preview-video").hidden, false);
+  assert.equal(video.elements.get("size-toggle").hidden, true, "Video previews use their native controls instead of image zoom");
+  assert.equal(video.elements.get("image-button").hidden, true);
   const telegramUrl = "https://web.telegram.org/k/?anydownload_telegram=1&peer=-123&mid=2&id=777&kind=video";
   const telegram = await openPreview({ session: { [key]: { ...payload, url: telegramUrl,
     sourceUrl: "https://web.telegram.org/k/#-123", mediaType: "video", incognito: true } } });

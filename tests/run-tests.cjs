@@ -64,7 +64,7 @@ const trackingJs = fs.readFileSync(path.join(root, "tracking/tracking.js"), "utf
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.name, "AnyDownload — Page Media Downloader");
-assert.equal(manifest.version, "1.22.2");
+assert.equal(manifest.version, "1.23.0");
 assert.equal(manifest.action.default_title, "Download page media");
 assert.equal(Core.MAX_BATCH_TOTAL_URL_LENGTH, 2000000);
 assert.deepEqual(manifest.permissions.sort(), ["activeTab", "alarms", "downloads", "menus", "notifications", "scripting", "storage"]);
@@ -173,7 +173,7 @@ assert.match(popupCss, /html\.responsive-surface \.app-shell\s*\{[^}]*height:\s*
 assert.match(popupCss, /\.image-list\s*\{[^}]*overflow-x:\s*hidden;/s);
 assert.match(popupCss, /\.action-bar\s*\{[^}]*min-width:\s*0;/s);
 for (const panel of ["download-settings-panel", "tracker-panel", "smart-filter-panel",
-  "workspace-settings-panel", "collection-actions-panel", "download-options-panel"]) {
+  "collection-actions-panel", "download-options-panel"]) {
   assert.match(popupHtml, new RegExp(`id="${panel}"[^>]*popover`));
   assert.match(popupHtml, new RegExp(`popovertarget="${panel}"`));
 }
@@ -189,12 +189,12 @@ const popupWorkspaceNav = popupHtml.match(/<nav\b[^>]*class="workspace-nav"[^>]*
 for (const controlId of ["media-button", "history-button", "tracking-dashboard-button"]) {
   assert.match(popupWorkspaceNav, new RegExp(`id="${controlId}"[^>]*class="nav-link(?: [^"]*)?"`), `${controlId} must be in the main navigation`);
 }
-const popupPanel = id => popupHtml.match(new RegExp(`<section\\b[^>]*id="${id}"[^>]*>([\\s\\S]*?)</section>`))?.[1] || "";
-for (const controlId of ["sync-button", "integrations-button"]) {
-  assert.doesNotMatch(popupWorkspaceNav, new RegExp(`id="${controlId}"`), `${controlId} belongs in workspace settings`);
-  assert.match(popupPanel("workspace-settings-panel"), new RegExp(`id="${controlId}"`));
+const popupUtilities = popupHtml.match(/<div\b[^>]*class="workspace-utilities"[^>]*>([\s\S]*?)<\/div>/)?.[1] || "";
+for (const [controlId, label] of [["sync-button", "Account"], ["integrations-button", "Integrations"]]) {
+  assert.doesNotMatch(popupWorkspaceNav, new RegExp(`id="${controlId}"`), `${label} is a utility, not a main tab`);
+  assert.match(popupUtilities, new RegExp(`id="${controlId}"[^>]*class="utility-button"[^>]*aria-label="${label}"`));
 }
-assert.match(popupHtml, /id="workspace-settings-button"[^>]*popovertarget="workspace-settings-panel"/);
+const popupPanel = id => popupHtml.match(new RegExp(`<section\\b[^>]*id="${id}"[^>]*>([\\s\\S]*?)</section>`))?.[1] || "";
 assert.match(popupHtml, /<iframe\b[^>]*id="workspace-frame"[^>]*title="[^"]+"[^>]*hidden/);
 assert.match(trackingHtml, /data-source-link href="\.\.\/integrations\/integrations\.html"/,
   "The standalone Trackers dashboard must also offer Integrations");
@@ -574,7 +574,9 @@ assert.match(historyHtml, /<title>AnyDownload — Downloads<\/title>/);
 assert.match(historyHtml, /id="completed-stat"/);
 assert.match(historyHtml, /id="bytes-stat"/);
 assert.match(historyHtml, /id="success-stat"/);
-assert.match(historyHtml, /id="queue-stat"/);
+assert.match(historyHtml, /id="queue-section"/);
+assert.match(historyHtml, /<details\b[^>]*id="statistics-panel"/);
+assert.match(historyHtml, /id="job-list"/);
 assert.match(historyHtml, /id="pause-all-button"/);
 assert.match(historyHtml, /id="resume-all-button"/);
 assert.match(historyHtml, /id="cancel-pending-button"/);
@@ -599,16 +601,15 @@ assert.match(historyJs, /type:\s*"GET_DOWNLOAD_DASHBOARD"/);
 assert.match(historyJs, /type:\s*"DOWNLOAD_QUEUE_ACTION"/);
 assert.match(historyJs, /performDownloadsAction\(\s*"show",\s*\[task\.downloadId\]/s);
 assert.match(historyJs, /performDownloadsAction\(\s*"showDefaultFolder"/s);
-assert.match(historyCss, /\.stats-grid\s*\{[^}]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\);/s);
-assert.match(historyCss, /@media\s*\(max-width:\s*800px\)/);
+
 assert.match(historyHtml, /href="\.\.\/tracking\/tracking\.html"><svg\b[^>]*>[\s\S]*?<\/svg>Trackers<\/a>/);
 
 assert.match(trackingHtml, /^<!doctype html>/i, "Tracking dashboard must use standards mode");
 assert.match(trackingHtml, /<title>AnyDownload — Tracking<\/title>/);
-assert.match(trackingHtml, /id="total-stat"/);
-assert.match(trackingHtml, /id="active-stat"/);
-assert.match(trackingHtml, /id="issues-stat"/);
-assert.match(trackingHtml, /id="pending-stat"/);
+assert.match(trackingHtml, /id="tracker-summary"/);
+assert.match(trackingHtml, /id="tracker-tools"/);
+assert.match(trackingHtml, /id="review-section"/);
+assert.match(trackingHtml, /id="tracker-list"/);
 assert.match(trackingHtml, /id="review-status"[^>]*role="status"/);
 assert.match(trackingJs, /TRACKER_REVIEW_ACTION/);
 assert.doesNotMatch(trackingHtml, /id="(?:tracker-list|review-list)"[^>]*aria-live/);
@@ -635,7 +636,6 @@ assert.match(trackingJs, /"DELETE_TRACKER"/);
 assert.match(trackingJs, /activity-list/);
 assert.match(trackingJs, /Automatically paused/);
 assert.doesNotMatch(trackingJs, /\.innerHTML\s*=/);
-assert.match(trackingCss, /\.stats-grid\s*\{[^}]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\);/s);
 assert.match(trackingCss, /\.activity-list\s*\{/);
 assert.match(trackingCss, /@media\s*\(max-width:\s*560px\)/);
 

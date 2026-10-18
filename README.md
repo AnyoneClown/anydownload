@@ -20,7 +20,7 @@ To load it in your existing Firefox profile:
 
 Use **All / Images / Videos** above the gallery to narrow the collection. Advanced filters appear as removable chips; filtering preserves your selection, and the footer identifies selected files hidden by filters.
 
-Use **Download** for individual files, or its arrow menu for an image-only ZIP or an Immich upload. Each card's **More** menu offers download and ignore/restore actions. **Settings** contains Account and Integrations. **Page actions** contains tracking, scan options, and **Clear collection and rescan…**, which resets the saved collection while keeping downloaded files and history.
+Use **Download** for individual files, or its arrow menu for an image-only ZIP or an Immich upload. Each card's **More** menu offers download and ignore/restore actions. The three main tabs are **Media**, **Downloads**, and **Trackers**; the small buttons at the top right open **Account** and **Integrations**. In **Trackers**, choose **Add tracker** to enter a page URL and set its check interval and action. **Page actions** contains tracking for the current page, scan options, and **Clear collection and rescan…**, which resets the saved collection while keeping downloaded files and history.
 
 The same manager opens in the Firefox Sidebar, with a compact list at narrow widths.
 

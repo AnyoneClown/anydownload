@@ -7,26 +7,30 @@
     <link rel="stylesheet" href="../shared/theme.css">
     <link rel="stylesheet" href="tracking.css">
   </head>
-  <body class="dashboard">
+  <body class="tracker-page">
+    <a class="skip-link" href="#main-content">Skip to trackers</a>
     <div class="workspace-header">
       <div class="app-brand"><img src="../icons/image-downloader-illustrated-v2-96.png" alt="" width="32" height="32"><span>AnyDownload</span></div>
       <nav class="workspace-nav" aria-label="Workspace">
         <a class="nav-link" data-source-link href="../popup/popup.html" hidden><svg aria-hidden="true" viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" rx="2"/><circle cx="7" cy="7" r="1"/><path d="m3 14 4-4 3 3 3-3 4 4"/></svg>Media</a>
         <a class="nav-link" data-source-link href="../history/history.html"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 3v10m-4-4 4 4 4-4M3 13v4h14v-4"/></svg>Downloads</a>
         <a class="nav-link current" data-source-link href="../tracking/tracking.html" aria-current="page"><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/></svg>Trackers</a>
-        <a class="nav-link" data-source-link href="../sync/sync.html"><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="6" r="3"/><path d="M4 17v-2a6 6 0 0 1 12 0v2"/></svg>Account</a>
-        <a class="nav-link" data-source-link href="../integrations/integrations.html"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M7 2v4m6-4v4M5 6h10v4a5 5 0 0 1-10 0V6m5 9v3"/></svg>Integrations</a>
       </nav>
+      <div class="workspace-utilities" role="group" aria-label="Account and integrations">
+        <a class="utility-button" aria-label="Account" title="Account" data-source-link href="../sync/sync.html"><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="6" r="3"/><path d="M4 17v-2a6 6 0 0 1 12 0v2"/></svg></a>
+        <a class="utility-button" aria-label="Integrations" title="Integrations" data-source-link href="../integrations/integrations.html"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M7 2v4m6-4v4M5 6h10v4a5 5 0 0 1-10 0V6m5 9v3"/></svg></a>
+      </div>
     </div>
-    <main class="page-shell">
+    <main id="main-content" class="page-shell" tabindex="-1">
       <header class="page-header">
         <div class="header-copy">
-          <p class="eyebrow">Background monitoring</p>
-          <h1>Trackers</h1>
-          <p id="dashboard-subtitle" class="subtitle" role="status">Loading background trackers…</p>
+          <h1 id="tracker-heading" tabindex="-1">Trackers</h1>
+          <p id="tracker-summary" class="tracker-summary" role="status" hidden></p>
+          <a id="review-link" class="review-link" href="#review-heading" hidden></a>
         </div>
         <div class="header-actions">
-          <button id="refresh-button" class="icon-button" type="button" aria-label="Refresh trackers" title="Refresh trackers">
+          <button id="header-create-tracker-button" class="primary-button" type="button" hidden>Add tracker</button>
+          <button id="refresh-button" class="icon-button" type="button" aria-label="Refresh trackers" title="Refresh trackers" disabled>
             <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M16 6V2.5M16 2.5h-3.5M16 2.5l-2.4 2.4A6.5 6.5 0 1 0 16 10"/></svg>
           </button>
         </div>
@@ -34,73 +38,14 @@
 
       <div id="error-banner" class="error-banner" role="alert" hidden></div>
 
-      <section class="stats-grid" aria-label="Tracker statistics">
-        <article class="stat-card">
-          <span>Tracked pages</span>
-          <strong id="total-stat">0</strong>
-          <small id="total-detail">Up to 20 trackers</small>
-        </article>
-        <article class="stat-card">
-          <span>Active</span>
-          <strong id="active-stat">0</strong>
-          <small id="active-detail">No scheduled checks</small>
-        </article>
-        <article class="stat-card">
-          <span>Needs attention</span>
-          <strong id="issues-stat">0</strong>
-          <small id="issues-detail">No recent errors</small>
-        </article>
-        <article class="stat-card">
-          <span>Pending review</span>
-          <strong id="pending-stat">0</strong>
-          <small id="pending-detail">Review inbox is empty</small>
-        </article>
-      </section>
-
-      <section class="card review-card" aria-labelledby="review-heading">
-        <div class="section-heading">
-          <div>
-            <p class="section-label">Approval inbox</p>
-            <h2 id="review-heading" tabindex="-1">Pending review</h2>
-          </div>
-          <span id="review-count" class="review-count">0 items</span>
-        </div>
-        <p class="review-intro">Download items to their tracker's destination, or dismiss them without downloading. Items remain local to this Firefox profile.</p>
-        <div class="review-tools">
-          <label>
-            <span class="visually-hidden">Filter review items by tracker</span>
-            <select id="review-tracker-filter"><option value="all">All trackers</option></select>
-          </label>
-          <label class="review-select-all"><input id="review-select-all" type="checkbox"> Select visible</label>
-          <div class="bulk-actions">
-            <button id="download-selected-button" class="tracker-button approve-button" type="button" disabled><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="M10 3v10m-4-4 4 4 4-4M3 13v4h14v-4"/></svg>Download selected</button>
-            <button id="dismiss-selected-button" class="tracker-button" type="button" disabled><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="m5 5 10 10M15 5 5 15"/></svg>Dismiss selected</button>
-          </div>
-        </div>
-        <p id="review-status" class="review-intro" role="status"></p>
-        <div id="review-empty" class="review-empty">No tracker matches are waiting for review.</div>
-        <div id="review-list" class="review-list"></div>
-      </section>
-
-      <section class="card tracker-card" aria-labelledby="trackers-heading">
-        <div class="section-heading">
-          <div>
-            <p class="section-label">Background monitoring</p>
-            <h2 id="trackers-heading">Tracked pages</h2>
-          </div>
-          <div class="bulk-actions">
-            <button id="pause-all-button" class="quiet-button" type="button"><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="M7 4v12m6-12v12"/></svg>Pause all</button>
-            <button id="resume-all-button" class="quiet-button" type="button"><svg class="button-icon" aria-hidden="true" viewBox="0 0 20 20"><path d="m6 3 10 7-10 7V3Z"/></svg>Resume all</button>
-          </div>
-        </div>
-
-        <div class="tracker-tools">
+      <section class="tracker-section" aria-label="Tracked pages">
+        <div id="tracker-tools" class="tracker-tools" hidden>
           <label class="search-field">
             <span class="visually-hidden">Search tracked pages</span>
             <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg>
-            <input id="search-input" type="search" placeholder="Search title, URL, folder, or filter…" autocomplete="off">
+            <input id="search-input" type="search" placeholder="Search trackers" autocomplete="off" maxlength="500">
           </label>
-          <label>
+          <label class="status-field">
             <span class="visually-hidden">Filter trackers by status</span>
             <select id="status-filter">
               <option value="all">All trackers</option>
@@ -109,14 +54,51 @@
               <option value="issues">Needs attention</option>
             </select>
           </label>
+          <div class="bulk-actions">
+            <button id="pause-all-button" type="button" hidden disabled>Pause all</button>
+            <button id="resume-all-button" type="button" hidden disabled>Resume all</button>
+          </div>
         </div>
-
-        <div id="empty-state" class="empty-state" hidden>
-          <strong id="empty-title">No tracked pages yet</strong>
-          <p id="empty-detail">Open AnyDownload on a webpage and choose <b>Track page</b> to set a schedule.</p>
+        <div id="empty-state" class="empty-state">
+          <h2 id="empty-title">Loading trackers…</h2>
+          <p id="empty-detail">Reading saved pages and pending reviews.</p>
+          <div id="empty-actions" class="empty-actions" hidden>
+            <button id="create-tracker-button" class="primary-button" type="button" hidden>Add tracker</button>
+            <button id="reset-filters-button" type="button" hidden>Clear filters</button>
+            <button id="retry-trackers-button" type="button" hidden>Retry</button>
+            <button id="open-regular-window-button" type="button" hidden>Open in regular window</button>
+          </div>
+          <div id="empty-setup" class="empty-setup" hidden>
+            <ol class="setup-steps">
+              <li><strong>Add a page.</strong> Enter its URL in tracker setup.</li>
+              <li><strong>Set a schedule and action.</strong> Review new matches here, get a notification, or download them automatically.</li>
+            </ol>
+            <p class="workflow-note">Review lets you approve or dismiss new matches. By default, the first check records a baseline without taking action.</p>
+            <p class="supported-note"><strong>Page support:</strong> Media must appear in the page’s HTML. Trackers do not run page JavaScript or replay infinite scrolling.</p>
+          </div>
         </div>
-        <div id="tracker-list" class="tracker-list"></div>
+        <div id="tracker-list" class="tracker-list" hidden></div>
       </section>
+
+      <section id="review-section" class="review-section" aria-labelledby="review-heading" hidden>
+        <div class="section-heading">
+          <h2 id="review-heading" tabindex="-1">Review <span id="review-count" class="review-count"></span></h2>
+        </div>
+        <div id="review-tools" class="review-tools">
+          <label class="review-select-all"><input id="review-select-all" type="checkbox"> Select visible</label>
+          <label class="review-filter">
+            <span class="visually-hidden">Filter review items by tracker</span>
+            <select id="review-tracker-filter"><option value="all">All trackers</option></select>
+          </label>
+          <div class="bulk-actions">
+            <button id="download-selected-button" class="approve-button" type="button" hidden disabled>Download selected</button>
+            <button id="dismiss-selected-button" type="button" hidden disabled>Dismiss selected</button>
+          </div>
+        </div>
+        <p id="review-empty" class="review-empty" hidden></p>
+        <div id="review-list" class="review-list"></div>
+      </section>
+      <p id="review-status" class="action-status" role="status" hidden></p>
     </main>
 
     <script src="../shared/navigation.js"></script>
