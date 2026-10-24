@@ -1731,7 +1731,9 @@ async function run() {
         id: "42", user: { username: "alice", pk: "42" }, items: [video]
       } } })]
     }, {}, async url => { rejectedRequests.push(url); return { ok: false }; });
-    assert.equal(rejectedRequests.length, 1, "An unavailable metadata endpoint must not trigger retries");
+    assert.deepEqual(rejectedRequests.map(url => new URL(url).pathname), [
+      "/api/v1/feed/reels_media/", "/graphql/query/"
+    ], "Unavailable story metadata gets one bounded web-viewer fallback, then stops");
     assert.equal(rejected.images[0].mediaType, "video");
     let realVideoRequests = 0;
     const realVideo = await scan("https://www.instagram.com/stories/alice/102/", {
@@ -1963,6 +1965,99 @@ async function run() {
     assert.ok(requests.every((item) =>
       item.init.headers["X-IG-App-ID"] === "936619743392459"
     ));
+  }
+
+  // Instagram's legacy story endpoint can return 500 for a story that its web
+  // viewer can read. The owner-scoped GraphQL fallback also works while the
+  // independent highlight requests succeed, and keeps failure feedback visible.
+  for (const storyResponse of ["ok", "http-error", "graphql-error"]) {
+    const storyAvailable = storyResponse === "ok";
+    const requests = [];
+    const result = await scan("https://www.instagram.com/alice/", {
+      cookie: "csrftoken=fixture-story-token; sessionid=do-not-copy",
+      scripts: [script({ data: { user: { pk: "42", username: "alice" } } })]
+    }, { includeRelated: true, includeProfilePosts: false }, async (url, init) => {
+      const parsed = new URL(url);
+      requests.push({ url, init });
+      if (parsed.pathname === "/api/v1/highlights/42/highlights_tray/") {
+        return jsonResponse(url, { tray: [{
+          id: "highlight:777", title: "Trips", user: { username: "alice" }
+        }] });
+      }
+      if (parsed.pathname === "/api/v1/feed/reels_media/") {
+        if (parsed.searchParams.get("reel_ids") === "42") {
+          return { ...jsonResponse(url, { status: "fail" }, { ok: false }), status: 500 };
+        }
+        assert.equal(parsed.searchParams.get("reel_ids"), "highlight:777");
+        return jsonResponse(url, { reels: { "highlight:777": {
+          id: "highlight:777", title: "Trips", user: { username: "alice" },
+          items: [imageNode("901", "https://scontent.cdninstagram.com/trip.jpg")]
+        } } });
+      }
+      assert.equal(parsed.pathname, "/graphql/query/");
+      assert.equal(init.method, "POST");
+      const body = new URLSearchParams(init.body);
+      assert.equal(body.get("doc_id"), "28449850404637481");
+      assert.deepEqual(JSON.parse(body.get("variables")), {
+        reel_ids_arr: ["42"],
+        __relay_internal__pv__PolarisCommunityNoteStoriesLabelEnabledrelayprovider: true
+      });
+      assert.equal(init.headers["X-CSRFToken"], "fixture-story-token");
+      if (storyResponse === "graphql-error") {
+        return jsonResponse(url, { data: null, errors: [{ message: "Story query unavailable" }] });
+      }
+      return jsonResponse(url, { data: { xdt_api__v1__feed__reels_media: {
+        reels_media: [{
+          id: "42", reel_type: "user_reel", user: { pk: "42", username: "alice" },
+          items: [
+            imageNode("902", "https://scontent.cdninstagram.com/graphql-story.jpg"),
+            videoNode("903", "https://scontent.cdninstagram.com/graphql-story.mp4",
+              "https://scontent.cdninstagram.com/graphql-story-poster.jpg"),
+            { ...imageNode("904", "https://scontent.cdninstagram.com/foreign-story.jpg"),
+              user: { username: "bob" } }
+          ]
+        }, {
+          id: "99", user: { username: "bob" },
+          items: [imageNode("905", "https://scontent.cdninstagram.com/foreign-reel.jpg")]
+        }]
+      } } }, { ok: storyAvailable });
+    });
+    assert.deepEqual(result.images.map((item) => item.url), storyAvailable ? [
+      "https://scontent.cdninstagram.com/graphql-story.jpg",
+      "https://scontent.cdninstagram.com/graphql-story.mp4",
+      "https://scontent.cdninstagram.com/trip.jpg"
+    ] : ["https://scontent.cdninstagram.com/trip.jpg"]);
+    assert.equal(requests.length, 4, "Only the failed active-story request gets a fallback");
+    assert.ok(requests.every(({ init }) => init.credentials === "include"));
+    assert.ok(!JSON.stringify(result).includes("fixture-story-token"));
+    assert.ok(!JSON.stringify(requests).includes("do-not-copy"));
+    if (storyAvailable) {
+      assert.deepEqual(result.images[0].instagramCollections, [{
+        type: "story", id: "alice", title: "", owner: "alice"
+      }]);
+      assert.equal(result.images[1].mediaType, "video");
+      assert.deepEqual(result.warnings, []);
+    } else {
+      assert.ok(result.warnings.some(warning => /active story could not be read/i.test(warning)),
+        "Successful highlights must not hide a failed active-story collection");
+    }
+  }
+
+  // A fallback story query shares the existing request budget.
+  {
+    const requests = [];
+    const result = await scan("https://www.instagram.com/alice/", {
+      scripts: [script({ user: { pk: "42", username: "alice" } })]
+    }, {
+      includeProfilePosts: false, includeStories: true, includeHighlights: false, maxDocuments: 1
+    }, async (url) => {
+      requests.push(url);
+      return jsonResponse(url, {}, { ok: false });
+    });
+    assert.equal(requests.length, 1);
+    assert.equal(new URL(requests[0]).pathname, "/api/v1/feed/reels_media/");
+    assert.equal(result.images.length, 0);
+    assert.ok(result.warnings.some(warning => /safety limit/i.test(warning)));
   }
 
   // HTML anchor fallbacks keep the originating profile owner and collection

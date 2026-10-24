@@ -4,6 +4,12 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.23.1] - 2026-10-24
+
+### Fixed
+
+- Retry Instagram active-story collection through the web story viewer's owner-scoped GraphQL query when the legacy endpoint fails, and show a story-specific failure even when highlights load successfully.
+
 ## [1.23.0] - 2026-10-18
 
 ### Changed

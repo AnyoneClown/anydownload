@@ -113,6 +113,7 @@
     const INSTAGRAM_POST_QUERY_DOC_ID = "27852811784380813";
     const INSTAGRAM_PROFILE_QUERY_DOC_ID = "7898261790222653";
     const INSTAGRAM_REELS_QUERY_DOC_ID = "7845543455542541";
+    const INSTAGRAM_STORIES_QUERY_DOC_ID = "28449850404637481";
     const MAX_COLLECTION_MEMBERSHIPS = 16;
     const MAX_FETCH_CONCURRENCY = 3;
     const INSTAGRAM_SCRIPT_MARKER = /["'](?:carousel_media|carouselMedia|contentUrl|content_url|display_resources|display_uri|displayUri|display_url|edge_owner_to_timeline_media|edge_sidecar_to_children|image_url|image_versions2|is_video|media_code|media_type|playback_url|polaris_ordered_timeline_connection|polarisOrderedTimelineConnection|reel_id|reels_media|shortcode|shortcode_media|thumbnailUrl|timeline_media|video_url|video_versions|xdt_[a-z0-9_]+)["']\s*:/i;
@@ -3128,7 +3129,27 @@
     async function fetchReelCollection(reelId, purpose) {
       const endpoint = new URL("/api/v1/feed/reels_media/", route.pageUrl);
       endpoint.searchParams.set("reel_ids", safeText(reelId, 200));
-      return fetchInstagramJson(endpoint.href, purpose, false);
+      const fetched = await fetchInstagramJson(endpoint.href, purpose, false);
+      if (fetched || !normalizedProfilePk(reelId)) {
+        return fetched;
+      }
+      // The legacy endpoint can fail for an accessible active story even when
+      // highlight requests succeed. Use the same owner-scoped query as the web
+      // story viewer, within the existing request, response and session bounds.
+      const fallback = await fetchInstagramJson(
+        new URL("/graphql/query/", route.pageUrl).href,
+        purpose, false, FETCH_TIMEOUT_MS, {
+          docId: INSTAGRAM_STORIES_QUERY_DOC_ID,
+          variables: {
+            reel_ids_arr: [reelId],
+            __relay_internal__pv__PolarisCommunityNoteStoriesLabelEnabledrelayprovider: true
+          }
+        }
+      );
+      const collection = safeProperty(
+        safeProperty(fallback && fallback.value, "data"), "xdt_api__v1__feed__reels_media"
+      );
+      return Array.isArray(safeProperty(collection, "reels_media")) ? fallback : null;
     }
 
     async function collectProfileStoriesAndHighlights(pk) {
@@ -3195,6 +3216,8 @@
             fetched.url,
             false
           );
+        } else if (boundedRequests[index].purpose === "active-story") {
+          warnings.add("Instagram's active story could not be read with the current browser session. Open the story and retry collecting it.");
         }
       }
     }
