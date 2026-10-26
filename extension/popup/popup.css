@@ -246,47 +246,6 @@ svg {
   margin-bottom: 18px;
 }
 
-.instagram-panel {
-  margin-bottom: 16px;
-  padding: 14px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-}
-
-.instagram-fetch-controls,
-.instagram-progress-heading,
-.instagram-progress-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.instagram-fetch-controls { align-items: flex-end; }
-.instagram-fetch-controls .compact-field { flex: 1 1 160px; min-width: 0; max-width: 340px; }
-.instagram-panel select { width: 100%; min-width: 0; min-height: 44px; }
-.instagram-panel button { min-height: 44px; white-space: normal; }
-.instagram-panel .field-help { margin: 8px 0 0; }
-.instagram-progress { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
-.instagram-panel[data-running="true"] .instagram-progress { margin-top: 0; padding-top: 0; border-top: 0; }
-.instagram-progress-heading { justify-content: space-between; }
-.instagram-progress-heading > strong { font-size: 13px; overflow-wrap: anywhere; }
-.instagram-progress-actions { gap: 4px; }
-.instagram-progress[data-running="true"] .instagram-progress-heading > strong { color: var(--brand-ink); }
-.instagram-progress-counts { display: flex; flex-wrap: wrap; gap: 6px 20px; color: var(--ink-muted); }
-.instagram-progress-counts strong { color: var(--ink); font-size: 18px; font-variant-numeric: tabular-nums; }
-.instagram-panel .instagram-browse-field { display: flex; flex-direction: row; align-items: center; gap: 12px; margin-top: 12px; }
-.instagram-browse-field > span { flex: none; }
-.instagram-browse-field select { flex: 1; }
-
-@container (max-width: 420px) {
-  .instagram-panel { padding: 10px; }
-  .instagram-fetch-controls .compact-field { flex-basis: 100%; max-width: none; }
-  .instagram-fetch-controls > button { flex: 1; }
-  .instagram-panel .instagram-browse-field { align-items: stretch; flex-direction: column; gap: 6px; }
-}
-
 .context-copy {
   flex: 1;
   min-width: 0;

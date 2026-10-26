@@ -64,7 +64,7 @@ const trackingJs = fs.readFileSync(path.join(root, "tracking/tracking.js"), "utf
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.name, "AnyDownload — Page Media Downloader");
-assert.equal(manifest.version, "1.24.0");
+assert.equal(manifest.version, "1.24.1");
 assert.equal(manifest.action.default_title, "Download page media");
 assert.equal(Core.MAX_BATCH_TOTAL_URL_LENGTH, 2000000);
 assert.deepEqual(manifest.permissions.sort(), ["activeTab", "alarms", "downloads", "menus", "notifications", "scripting", "storage"]);
@@ -262,8 +262,7 @@ for (const removedTopActionId of ["bulk-download-button", "archive-download-butt
 assert.doesNotMatch(popupCss, /\.bulk-download-button\b/);
 assert.doesNotMatch(popupCss, /\.archive-download-button\b/);
 assert.match(popupHtml, /id="sidebar-follow-button"[^>]*hidden>Enable auto-follow<\/button>/);
-assert.match(popupHtml, /id="instagram-panel"[^>]*hidden>/);
-assert.match(popupHtml, /id="instagram-collections-button"[^>]*>Fetch highlights<\/button>/);
+assert.match(popupHtml, /id="instagram-collections-button"[^>]*hidden>Stories &amp; highlights<\/button>/);
 assert.match(popupHtml, /id="instagram-collection-filter-select"/);
 for (const collectionFilter of ["all", "posts", "story", "highlights"]) {
   assert.match(
@@ -440,6 +439,8 @@ assert.match(popupJs, /fapFolderCollectionSucceeded/);
 assert.match(popupJs, /collectInstagramMediaFromPage/);
 assert.match(popupJs, /world:\s*"MAIN",\s*func:\s*collectInstagramMediaFromPage/);
 assert.match(popupJs, /includeProfilePosts:\s*!settings\.instagramCollections/);
+assert.match(popupJs, /includeStories:\s*Boolean\(settings\.instagramCollections\)/);
+assert.match(popupJs, /includeHighlights:\s*Boolean\(settings\.instagramCollections\)/);
 assert.match(popupJs, /Instagram\.canCollectRelated\(state\.pageUrl\)/);
 assert.match(popupJs, /Instagram\.routeKeyForUrl\(tab\.url\)/);
 assert.match(
@@ -447,6 +448,7 @@ assert.match(
   /if \(instagramRouteKey && !settings\.instagramCollections && !injectionResults\)\s*\{[\s\S]*handled:\s*true,[\s\S]*images:\s*\[\]/
 );
 assert.match(popupJs, /Instagram stories and highlights could not be collected; the existing results were kept/);
+assert.match(popupJs, /scanPage\(\{ instagramCollections: true, preserveSelection: true \}\)/);
 assert.match(
   popupJs,
   /const scanned = await scanPage\(\);\s*refreshQueueBadge\(\);\s*startQueueBadgePolling\(\);\s*if \(scanned\)\s*\{\s*await startLiveCapture\(\{ skipInitialScan: true, quiet: true \}\);/

@@ -44,46 +44,6 @@
             <button id="collection-actions-button" class="icon-button" type="button" popovertarget="collection-actions-panel" aria-expanded="false" aria-controls="collection-actions-panel" aria-label="Page actions" title="Page actions"><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="4" cy="10" r="1"/><circle cx="10" cy="10" r="1"/><circle cx="16" cy="10" r="1"/></svg></button>
           </div>
         </div>
-        <section id="instagram-panel" class="instagram-panel" aria-label="Instagram fetching" hidden>
-          <div class="instagram-fetch-controls">
-            <label id="instagram-fetch-field" class="compact-field">
-              <span>Fetch from this profile</span>
-              <select id="instagram-fetch-scope" aria-describedby="instagram-fetch-help">
-                <option value="highlights">Highlights</option>
-                <option value="story">Active story</option>
-                <option value="collections">Stories &amp; highlights</option>
-                <option value="posts">Posts &amp; reels</option>
-              </select>
-            </label>
-            <button id="instagram-collections-button" class="secondary-button" type="button">Fetch highlights</button>
-          </div>
-          <p id="instagram-fetch-help" class="field-help">Fetching stories or highlights may count as a view on Instagram.</p>
-          <div id="instagram-progress" class="instagram-progress" hidden>
-            <div class="instagram-progress-heading">
-              <strong id="instagram-progress-phase">Reading the page…</strong>
-              <div class="instagram-progress-actions">
-                <button id="instagram-stop-button" class="secondary-button" type="button">Stop fetching</button>
-                <button id="instagram-restart-button" class="text-button" type="button" title="Clear the saved website collection and restart this fetch">Clear &amp; refetch</button>
-              </div>
-            </div>
-            <div class="instagram-progress-counts">
-              <span id="instagram-post-metric"><strong id="instagram-post-count">0</strong> posts fetched</span>
-              <span><strong id="instagram-media-count">0</strong> media files</span>
-              <span id="instagram-highlight-metric" hidden><strong id="instagram-highlight-count">0</strong> highlights checked</span>
-            </div>
-            <p id="instagram-progress-detail" class="field-help"></p>
-            <p id="instagram-progress-announcement" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></p>
-          </div>
-          <label id="instagram-collection-filter-field" class="compact-field instagram-browse-field" hidden>
-            <span>Show in collection</span>
-            <select id="instagram-collection-filter-select">
-              <option value="all">All profile media</option>
-              <option value="posts">Posts &amp; reels</option>
-              <option value="story">Active story</option>
-              <option value="highlights">All highlights</option>
-            </select>
-          </label>
-        </section>
         <div class="search-toolbar">
           <div class="media-type-tabs" role="group" aria-label="Media type">
             <button id="media-type-any-button" type="button" aria-pressed="true">All</button>
@@ -112,6 +72,15 @@
             <span>Photos only</span>
           </label>
           <p id="photos-only-help" class="field-help photos-only-help">Hide likely icons, logos, avatars, and tracking pixels.</p>
+          <label id="instagram-collection-filter-field" class="compact-field" hidden>
+            <span>Instagram collection</span>
+            <select id="instagram-collection-filter-select">
+              <option value="all">All profile media</option>
+              <option value="posts">Posts only</option>
+              <option value="story">Current story only</option>
+              <option value="highlights">All highlights</option>
+            </select>
+          </label>
           <label class="compact-field format-filter-field">
             <span>Format</span>
             <select id="format-filter-select">
@@ -157,6 +126,7 @@
           </div>
         </div>
         <div class="filter-toolbar">
+          <button id="instagram-collections-button" class="text-button instagram-collections-button" type="button" title="Collect the profile owner's active story and highlights" hidden>Stories &amp; highlights</button>
           <button id="sidebar-follow-button" class="text-button sidebar-follow-button" type="button" title="Allow the Sidebar to follow every active webpage" hidden>Enable auto-follow</button>
         </div>
       </section>

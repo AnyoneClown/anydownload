@@ -81,7 +81,6 @@ class Element {
   append(...nodes) { this.children.push(...nodes); }
   appendChild(node) { this.append(node); return node; }
   replaceChildren(...nodes) { this.children = nodes; }
-  get options() { return this.children; }
   contains() { return true; }
   matches(selector) { return selector === ":popover-open" && this.popoverOpen === true; }
   showPopover() { this.popoverOpen = true; }
@@ -100,7 +99,6 @@ function popupHarness(stored = { local: [], session: [] }) {
   let timerId = 0;
   let scrolls = 0;
   const fetchedPages = [];
-  const scriptCalls = [];
   let continuePagination = false;
   let profilePages = null;
   let sourceImages = [photo("one")];
@@ -190,9 +188,6 @@ function popupHarness(stored = { local: [], session: [] }) {
       },
       scripting: {
         async executeScript({ func, args }) {
-          scriptCalls.push({ func: func.name, args });
-          if (func.name === "controlCollection") return [{ result: null }];
-          const instagramImages = func.name === "collectFromPage" ? sourceImages : null;
           if (func.name === "scrollPage") {
             scrolls += 1;
             if (profilePages) {
@@ -219,17 +214,13 @@ function popupHarness(stored = { local: [], session: [] }) {
             await wait;
           }
           if (scanError) throw new Error("Scan failed");
-          return [{ frameId: 0, result: { handled: true, images: instagramImages || sourceImages,
-            pageUrl: tab.url, pageTitle: tab.title, warnings: [], progress: instagramImages ? {
-              phase: "complete", posts: args[0].includeProfilePosts ? instagramImages.length : 0,
-              media: instagramImages.length
-            } : undefined } }];
+          return [{ frameId: 0, result: { images: sourceImages, pageUrl: tab.url, pageTitle: tab.title, warnings: [] } }];
         }
       }
     }
   };
   vm.createContext(context);
-  for (const file of ["core", "filters", "templates", "tracker", "download-ledger", "gallery", "instagram"]) {
+  for (const file of ["core", "filters", "templates", "tracker", "download-ledger", "gallery"]) {
     vm.runInContext(fs.readFileSync(`${__dirname}/../extension/shared/${file}.js`, "utf8"), context);
   }
   context.ImageDownloaderCollector = function collectImagesFromPage(options, parsed) {
@@ -241,7 +232,6 @@ function popupHarness(stored = { local: [], session: [] }) {
   vm.runInContext(source.replace('  document.addEventListener("DOMContentLoaded",', `
     globalThis.testPopup = {
       state, elements, scanPage, saveCurrentGallery, clearSiteGallery, undoClearSiteGallery, collectGallery,
-      refreshMedia, acceptInstagramProgress,
       stopGalleryCollection, resetSidebarPageState, beginSidebarTransition, handleGalleryStorageChanges,
       renderedDownloadItems, wireSourceTabLifecycle, mergeScanResults, wireEvents, renderImages, makeImageRow, filteredImages,
       prepare() { cacheElements(); applySmartFiltersToControls(Filters.DEFAULT_FILTERS); }
@@ -254,7 +244,7 @@ function popupHarness(stored = { local: [], session: [] }) {
   elements.get("filename-template-input").value = "{page-title}-{index}-{filename}";
   elements.get("backgrounds-input").checked = true;
   return {
-    popup, tab, stored, elements, fetchedPages, scriptCalls,
+    popup, tab, stored, elements, fetchedPages,
     enableNextPages() { continuePagination = true; },
     setProfilePages(pages, sourceUrl) {
       profilePages = pages;
@@ -421,68 +411,6 @@ async function checkRefreshMedia() {
       "A failed clear preserves media; a failed scan must not resurrect cleared media");
     assert.match(harness.elements.get("notice").textContent, /failed/);
     assert.equal(harness.popup.state.busy, false);
-  }
-}
-
-async function checkInstagramRestartAndUndo() {
-  for (const incognito of [false, true]) {
-    const harness = popupHarness();
-    const { popup, elements, tab, scriptCalls } = harness;
-    const instagramSite = "https://www.instagram.com";
-    tab.url = `${instagramSite}/alice/`;
-    tab.incognito = incognito;
-    const area = incognito ? "session" : "local";
-    const otherArea = incognito ? "local" : "session";
-    const item = name => ({ ...photo(name), pageUrl: tab.url });
-    harness.setImages([item("saved")]);
-    await popup.scanPage();
-    popup.wireEvents();
-    assert.equal(elements.get("instagram-panel").hidden, false);
-
-    let releaseOld;
-    harness.setImages([item("stale")]);
-    const oldStarted = harness.delayScan(new Promise(resolve => { releaseOld = resolve; }));
-    const oldScan = popup.scanPage({ instagramCollections: true, instagramFetchScope: "highlights" });
-    await oldStarted;
-    const oldRun = scriptCalls.filter(call => call.func === "collectFromPage").at(-1).args[0];
-    assert.equal(oldRun.includeHighlights, true);
-    assert.equal(oldRun.includeStories, false, "Highlights can be fetched independently of the active story");
-    assert.equal(oldRun.includeProfilePosts, false);
-    assert.equal(elements.get("refresh-media-button").disabled, false);
-    assert.equal(elements.get("instagram-restart-button").textContent, "Restart fetch");
-    popup.acceptInstagramProgress({ phase: "highlights", posts: 0, media: 12,
-      highlightsTotal: 4, highlightsChecked: 2, highlightsLoaded: 2 });
-    assert.equal(elements.get("instagram-media-count").textContent, "12");
-    assert.equal(elements.get("instagram-highlight-count").textContent, "2 / 4");
-    assert.match(elements.get("instagram-progress-announcement").textContent, /12 media files/);
-
-    let releaseNew;
-    harness.setImages([item("fresh")]);
-    const newStarted = harness.delayScan(new Promise(resolve => { releaseNew = resolve; }));
-    const restarting = popup.refreshMedia();
-    await newStarted;
-    assert.ok(scriptCalls.some(call => call.func === "controlCollection" &&
-      call.args[0] === oldRun.runId && call.args[1] === "cancel"));
-    assert.equal(scriptCalls.filter(call => call.func === "collectFromPage").at(-1).args[0].includeHighlights, true,
-      "Restart repeats the active scope");
-    releaseOld();
-    assert.equal(await oldScan, false);
-    assert.equal(popup.state.busy, true, "A stale scan's finally cannot unlock the new scan");
-    assert.equal(popup.state.images.length, 0, "Old responses cannot repopulate the cleared gallery");
-    assert.equal(elements.get("undo-clear-button").disabled, false, "Undo stays available while refetching");
-    await popup.undoClearSiteGallery();
-    assert.deepEqual(Array.from(popup.state.images, image => image.url), [item("saved").url],
-      "Undo cancels the in-flight refetch and restores the previous collection");
-    releaseNew();
-    await restarting;
-    assert.deepEqual(Array.from(popup.state.images, image => image.url), [item("saved").url]);
-    assert.deepEqual(Gallery.getSite(harness.stored[area], instagramSite).records.map(image => image.url), [item("saved").url]);
-    assert.deepEqual(harness.stored[otherArea], [], "Restart and Undo preserve private/normal storage separation");
-
-    harness.setImages([item("finished")]);
-    await popup.refreshMedia();
-    assert.deepEqual(Array.from(popup.state.images, image => image.url), [item("finished").url]);
-    assert.equal(elements.get("instagram-stop-button").hidden, true);
   }
 }
 
@@ -866,7 +794,6 @@ function checkScrolling() {
 (async () => {
   await checkPopup();
   await checkRefreshMedia();
-  await checkInstagramRestartAndUndo();
   await checkSelectionDuringScan();
   await checkSavedCollectionView();
   await checkFixedPageLimit();

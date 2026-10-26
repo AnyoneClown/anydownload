@@ -4,6 +4,12 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.24.1] - 2026-10-26
+
+### Changed
+
+- Revert the Instagram fetching changes introduced in 1.24.0, restoring the interface and collection behavior from 1.23.2. Publish the rollback under a newer version so existing installations can receive it as an update.
+
 ## [1.24.0] - 2026-10-26
 
 ### Changed
