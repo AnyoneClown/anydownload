@@ -4,6 +4,8 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.24.0] - 2026-10-26
+
 ### Changed
 
 - Add visible Instagram fetch controls for highlights, active stories, and posts/reels, with live post and media counts, highlight progress, and collection filters with file counts.
