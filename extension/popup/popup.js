@@ -775,6 +775,8 @@
     filenamePreviewByUrl: new Map(),
     instagramCollectionMode: false,
     instagramCollectionFilter: "all",
+    instagramProgress: null,
+    instagramLastScope: "posts",
     liveCapture: false,
     liveScanning: false,
     pageScopeKey: "",
@@ -819,6 +821,8 @@
   let renderGeneration = 0;
   let sidebarFollowGeneration = 0;
   let sourcePageGeneration = 0;
+  let activeScan = null;
+  let scanSequence = 0;
   let sidebarFollowTimer = null;
   let sidebarFollowRequest = null;
   let sidebarFollowRunning = false;
@@ -918,6 +922,21 @@
       "instagram-collection-filter-field",
       "instagram-collection-filter-select",
       "instagram-collections-button",
+      "instagram-panel",
+      "instagram-fetch-field",
+      "instagram-fetch-scope",
+      "instagram-fetch-help",
+      "instagram-restart-button",
+      "instagram-progress",
+      "instagram-progress-phase",
+      "instagram-progress-detail",
+      "instagram-progress-announcement",
+      "instagram-post-count",
+      "instagram-post-metric",
+      "instagram-media-count",
+      "instagram-highlight-metric",
+      "instagram-highlight-count",
+      "instagram-stop-button",
       "media-type-filter-select",
       "notice",
       "page-label",
@@ -1883,6 +1902,7 @@
   }
 
   function resetSidebarPageState(label, notice, noticeType) {
+    discardInstagramScan();
     saveCurrentGallery();
     stopGalleryCollection();
     galleryContext = null;
@@ -1897,6 +1917,8 @@
     state.pageUrl = "";
     state.pageScopeKey = "";
     state.instagramCollectionFilter = "all";
+    state.instagramProgress = null;
+    state.instagramLastScope = "posts";
     updateInstagramCollectionFilterUi();
     state.showIgnored = false;
     state.siteKey = "";
@@ -1935,7 +1957,8 @@
   }
 
   function scanSourceStillCurrent(settings, generation) {
-    return generation === sourcePageGeneration && sidebarScanStillCurrent(settings);
+    return generation === sourcePageGeneration && sidebarScanStillCurrent(settings) &&
+      (!settings.scanRun || settings.scanRun === activeScan);
   }
 
   async function sourceTabForScan(options) {
@@ -2757,17 +2780,22 @@
     }
 
     const highlights = new Map();
+    const counts = new Map([["all", state.images.length]]);
     for (const image of state.images) {
+      const groups = new Set();
       for (const collection of normalizedInstagramCollections(image.instagramCollections)) {
+        groups.add(collection.type === "post" ? "posts" : collection.type === "story" ? "story" : "highlights");
+        if (collection.type === "highlight") groups.add(`highlight:${collection.id}`);
         if (collection.type === "highlight" && !highlights.has(collection.id)) {
           highlights.set(collection.id, collection.title || `Highlight ${highlights.size + 1}`);
         }
       }
+      for (const group of groups) counts.set(group, (counts.get(group) || 0) + 1);
     }
     const optionDefinitions = [
       ["all", "All profile media"],
-      ["posts", "Posts only"],
-      ["story", "Current story only"],
+      ["posts", "Posts & reels"],
+      ["story", "Active story"],
       ["highlights", "All highlights"],
       ...Array.from(highlights, ([id, title]) => [`highlight:${id}`, title])
     ];
@@ -2775,7 +2803,7 @@
     select.replaceChildren(...optionDefinitions.map(([value, label]) => {
       const option = document.createElement("option");
       option.value = value;
-      option.textContent = label;
+      option.textContent = `${label} · ${counts.get(value) || 0} files`;
       return option;
     }));
     state.instagramCollectionFilter = optionDefinitions.some(([value]) => value === previous)
@@ -2981,11 +3009,13 @@
     renderImages();
   }
 
-  function resetCollectionView() {
+  function resetCollectionView(options) {
     state.showSelected = false;
     state.galleryPage = 0;
-    clearedGallery = null;
-    elements["gallery-undo"].hidden = true;
+    if (!(options && options.keepUndo)) {
+      clearedGallery = null;
+      elements["gallery-undo"].hidden = true;
+    }
     if (elements["media-preview-dialog"].open) elements["media-preview-dialog"].close();
   }
 
@@ -3738,11 +3768,12 @@
     }
     const collecting = Boolean(galleryCollection);
     elements["refresh-media-button"].hidden = collecting;
-    elements["refresh-media-button"].disabled = state.busy || !galleryContext || !Number.isInteger(state.sourceTabId);
+    const restartable = Boolean(activeScan && activeScan.instagram);
+    elements["refresh-media-button"].disabled = state.busy && !restartable || !galleryContext || !Number.isInteger(state.sourceTabId);
     elements["stop-gallery-button"].hidden = !collecting;
     elements["clear-gallery-button"].disabled = collecting || state.busy || !state.images.length;
     elements["gallery-undo"].hidden = !clearedGallery || clearedGallery.context !== galleryContext || clearedGallery.epoch !== galleryContext.epoch;
-    elements["undo-clear-button"].disabled = collecting || state.busy;
+    elements["undo-clear-button"].disabled = collecting || state.busy && !restartable;
     if (!collecting) {
       elements["gallery-status"].textContent = state.siteKey
         ? `${hostFromUrl(state.siteKey)} · ${state.images.length.toLocaleString()} collected · ${state.incognito ? "private session only" : "saved on this device"}`
@@ -3830,6 +3861,7 @@
       return;
     }
     if (gallery.epoch !== context.epoch) {
+      discardInstagramScan();
       stopGalleryCollection();
       stopLiveCapture();
       sourcePageGeneration += 1;
@@ -3888,10 +3920,12 @@
       throw new Error(result && result.error || "Firefox could not restore this website's gallery.");
     }
     const gallery = Gallery.normalizeSite(result.gallery);
-    galleryContext = {
+    const restoredContext = {
       siteKey, incognito: Boolean(tab.incognito), epoch: gallery.epoch, pending: 0,
       sent: new Map(gallery.records.map((record) => [Gallery.recordKey(record), JSON.stringify(record)]))
     };
+    galleryContext = sameContext && galleryContext.epoch === gallery.epoch
+      ? Object.assign(galleryContext, restoredContext) : restoredContext;
     state.siteKey = siteKey;
     state.pageUrl = tab.url;
     state.pageTitle = tab.title || hostFromUrl(tab.url);
@@ -3945,17 +3979,22 @@
   }
 
   async function refreshMedia() {
-    if (state.busy || galleryCollection || !galleryContext || !Number.isInteger(state.sourceTabId)) return;
+    if (galleryCollection || !galleryContext || !Number.isInteger(state.sourceTabId)) return;
+    if (state.busy && !(activeScan && activeScan.instagram)) return;
     const context = galleryContext;
     const sourceTabId = state.sourceTabId;
     const pageUrl = state.pageUrl;
+    const instagramFetchScope = activeScan && activeScan.instagram ? activeScan.scope
+      : Instagram && Instagram.canCollectRelated(pageUrl) ? state.instagramLastScope : "posts";
+    if (activeScan && activeScan.instagram) discardInstagramScan();
     const cleared = await clearSiteGallery({ refresh: true });
     if (!cleared || galleryContext !== context || state.sourceTabId !== sourceTabId || state.pageUrl !== pageUrl) return;
 
     state.explicitRedownloads.clear();
-    resetCollectionView();
+    resetCollectionView({ keepUndo: true });
     const generation = sourcePageGeneration;
-    const scanned = await scanPage({ pinnedSource: true });
+    const scanned = await scanPage({ pinnedSource: true, instagramFetchScope,
+      instagramCollections: instagramFetchScope !== "posts" });
     if (scanned && generation === sourcePageGeneration) {
       if (!state.scanWarnings.length) {
         setNotice(`Media refreshed. Found ${state.images.length.toLocaleString()} item${state.images.length === 1 ? "" : "s"} on the current page.`, "success");
@@ -3966,7 +4005,9 @@
 
   async function undoClearSiteGallery() {
     const undo = clearedGallery;
-    if (!undo || state.busy || galleryCollection || undo.context !== galleryContext || undo.epoch !== galleryContext.epoch) return;
+    if (!undo || galleryCollection || undo.context !== galleryContext || undo.epoch !== galleryContext.epoch) return;
+    if (state.busy && !(activeScan && activeScan.instagram)) return;
+    if (activeScan && activeScan.instagram) discardInstagramScan();
     state.busy = true;
     updateSummary();
     try {
@@ -4174,6 +4215,7 @@
       pinnedSource: false,
       live: false,
       instagramCollections: false,
+      instagramFetchScope: "posts",
       tabId: null,
       sidebarFollow: false,
       sidebarGeneration: null
@@ -4182,6 +4224,11 @@
       return false;
     }
     const scanSourceGeneration = sourcePageGeneration;
+    const scanRun = { id: `instagram-${Date.now()}-${++scanSequence}-${Math.random().toString(36).slice(2)}`,
+      generation: scanSourceGeneration, instagram: false, timer: null, stopping: false,
+      tabId: null, scope: settings.instagramFetchScope };
+    activeScan = scanRun;
+    settings.scanRun = scanRun;
 
     let previousImages = state.images;
     const previousByIdentity = new Map();
@@ -4207,6 +4254,7 @@
         throw new Error("No active page was found.");
       }
       scanTab = tab;
+      scanRun.tabId = tab.id;
       if (!scanSourceStillCurrent(settings, scanSourceGeneration)) {
         return false;
       }
@@ -4258,20 +4306,24 @@
       );
 
       if (instagramPage) {
-        if (settings.instagramCollections) {
-          elements["page-label"].textContent = "Collecting Instagram stories and highlights…";
-        } else if (Instagram.canCollectRelated(tab.url)) {
-          elements["page-label"].textContent = "Collecting all profile posts, carousel slides, and reels…";
-        }
+        scanRun.instagram = true;
+        if (settings.instagramCollections && scanRun.scope === "posts") scanRun.scope = "collections";
+        state.instagramLastScope = scanRun.scope;
+        state.instagramProgress = { phase: "page", posts: 0, media: 0,
+          highlightsTotal: 0, highlightsChecked: 0, highlightsLoaded: 0, highlightsFailed: 0 };
+        updateInstagramCollectionsButton();
+        updateGalleryControls();
+        scheduleInstagramProgress(scanRun);
         try {
           const instagramResults = await browser.scripting.executeScript({
             target: { tabId: tab.id },
             world: "MAIN",
             func: collectInstagramMediaFromPage,
             args: [{
+              runId: scanRun.id,
               includeProfilePosts: !settings.instagramCollections,
-              includeStories: Boolean(settings.instagramCollections),
-              includeHighlights: Boolean(settings.instagramCollections),
+              includeStories: settings.instagramCollections && ["story", "collections"].includes(scanRun.scope),
+              includeHighlights: settings.instagramCollections && ["highlights", "collections"].includes(scanRun.scope),
               maxItems: MAX_DISCOVERED_IMAGES,
               maxDocuments: settings.instagramCollections ? 32 : 512,
               maxDocumentBytes: 4000000,
@@ -4281,10 +4333,14 @@
           });
           const firstInstagramResult = instagramResults && instagramResults[0];
           const instagramResult = firstInstagramResult && firstInstagramResult.result;
+          scanRun.fetchFinished = true;
+          clearTimeout(scanRun.timer);
+          if (!scanSourceStillCurrent(settings, scanSourceGeneration)) return false;
           if (instagramResult && instagramResult.handled && Array.isArray(instagramResult.images)) {
             injectionResults = instagramResults;
             instagramCollectionSucceeded = Boolean(settings.instagramCollections);
             instagramProfileCollection = instagramResult.profileCollection;
+            acceptInstagramProgress(instagramResult.progress);
           } else if (settings.instagramCollections) {
             const detail = firstInstagramResult && firstInstagramResult.error
               ? ` (${firstInstagramResult.error})`
@@ -4292,10 +4348,15 @@
             instagramWarning = `Instagram stories and highlights could not be collected; the existing results were kept.${detail}`;
           }
         } catch (error) {
+          scanRun.fetchFinished = true;
+          clearTimeout(scanRun.timer);
+          if (!scanSourceStillCurrent(settings, scanSourceGeneration)) return false;
           instagramWarning = settings.instagramCollections
             ? `Instagram stories and highlights could not be collected; the existing results were kept. (${error.message || error})`
             : `Instagram-specific collection was unavailable. (${error.message || error})`;
         }
+      } else {
+        state.instagramProgress = null;
       }
 
       const instagramRouteKey = instagramPage &&
@@ -4569,6 +4630,7 @@
       } catch (error) {
         merged.warnings.push(`Completed-download status is temporarily unavailable: ${error.message || error}`);
       }
+      if (!scanSourceStillCurrent(settings, scanSourceGeneration)) return false;
 
       if (!state.hasStoredFolder) {
         const safeHost = Core.sanitizePathSegment(hostname, "page");
@@ -4588,8 +4650,10 @@
           "success"
         );
       } else if (instagramCollectionSucceeded && merged.images.length && !merged.warnings.length) {
+        const scopeLabels = { story: "the active story", highlights: "available highlights",
+          collections: "the active story and available highlights" };
         setNotice(
-          "Collected the active story and available highlights with the current Instagram session.",
+          `Collected ${scopeLabels[scanRun.scope] || scopeLabels.collections} with the current Instagram session.`,
           "success"
         );
       } else if (fapFolderCollectionSucceeded && !merged.warnings.length) {
@@ -4645,19 +4709,28 @@
         setNotice(`${guidance} (${message})`, "error");
       }
     } finally {
-      state.liveScanning = false;
-      state.busy = false;
-      renderImages();
-      if (succeeded) {
-        await saveCurrentGallery();
-      }
-      if (succeeded && state.trackerPageUrl !== state.pageUrl) {
-        refreshTrackerStatus().catch((error) => {
-          console.error("AnyDownload could not load the tracker for this page.", error);
+      clearTimeout(scanRun.timer);
+      if (scanRun.instagram) controlInstagramRun(scanRun, "release");
+      if (activeScan === scanRun) {
+        activeScan = null;
+        state.liveScanning = false;
+        state.busy = false;
+        if (scanRun.instagram && state.instagramProgress &&
+          !["complete", "partial", "cancelled"].includes(state.instagramProgress.phase)) {
+          state.instagramProgress.phase = "error";
+        }
+        renderImages();
+        if (succeeded) {
+          await saveCurrentGallery();
+        }
+        if (succeeded && state.trackerPageUrl !== state.pageUrl) {
+          refreshTrackerStatus().catch((error) => {
+            console.error("AnyDownload could not load the tracker for this page.", error);
+            updateTrackerUi();
+          });
+        } else {
           updateTrackerUi();
-        });
-      } else {
-        updateTrackerUi();
+        }
       }
     }
     return succeeded;
@@ -5119,6 +5192,66 @@
     return finishArchiveDownload(images, folder, permissionPromise, template.value);
   }
 
+  function acceptInstagramProgress(raw) {
+    if (!raw || typeof raw !== "object") return;
+    const phases = ["page", "posts", "reels", "carousels", "highlights", "stories", "complete", "partial", "cancelled", "error"];
+    if (!phases.includes(raw.phase)) return;
+    const progress = { phase: raw.phase };
+    for (const key of ["posts", "media", "requests", "highlightsTotal", "highlightsChecked", "highlightsLoaded", "highlightsFailed"]) {
+      progress[key] = Number.isSafeInteger(raw[key]) && raw[key] >= 0 ? Math.min(raw[key], 100000) : 0;
+    }
+    progress.story = ["idle", "checked", "unavailable"].includes(raw.story) ? raw.story : "idle";
+    state.instagramProgress = progress;
+    updateInstagramCollectionsButton();
+  }
+
+  async function controlInstagramRun(run, action) {
+    try {
+      const result = await browser.scripting.executeScript({ target: { tabId: run.tabId },
+        world: "MAIN", func: Instagram.controlCollection, args: [run.id, action] });
+      return result && result[0] && result[0].result;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function scheduleInstagramProgress(run) {
+    run.timer = setTimeout(async () => {
+      if (activeScan !== run || run.fetchFinished) return;
+      if (run.generation !== sourcePageGeneration) {
+        await controlInstagramRun(run, "cancel");
+        return;
+      }
+      const progress = await controlInstagramRun(run, "status");
+      if (activeScan !== run || run.fetchFinished || run.generation !== sourcePageGeneration) return;
+      if (progress) acceptInstagramProgress(progress);
+      scheduleInstagramProgress(run);
+    }, 600);
+  }
+
+  function discardInstagramScan() {
+    const run = activeScan;
+    if (!run || !run.instagram) return;
+    clearTimeout(run.timer);
+    activeScan = null;
+    sourcePageGeneration += 1;
+    downloadStatusGeneration += 1;
+    state.busy = false;
+    state.liveScanning = false;
+    state.instagramProgress = null;
+    stopLiveCapture();
+    controlInstagramRun(run, "cancel");
+  }
+
+  async function stopInstagramScan() {
+    const run = activeScan;
+    if (!run || !run.instagram || run.stopping) return;
+    run.stopping = true;
+    stopLiveCapture();
+    updateInstagramCollectionsButton();
+    await controlInstagramRun(run, "cancel");
+  }
+
   function updateInstagramCollectionsButton() {
     const button = elements["instagram-collections-button"];
     if (!button) {
@@ -5134,11 +5267,55 @@
     } catch (_error) {
       instagramPage = false;
     }
+    const instagramRoute = Boolean(Instagram && Instagram.routeKeyForUrl(state.pageUrl));
+    elements["instagram-panel"].hidden = !instagramRoute || Boolean(editTrackerId);
+    elements["instagram-fetch-field"].hidden = !instagramPage;
+    elements["instagram-fetch-help"].hidden = !instagramPage;
     button.hidden = !instagramPage;
     button.disabled = state.busy;
-    button.textContent = state.instagramCollectionMode
-      ? "Refresh stories & highlights"
-      : "Stories & highlights";
+    const labels = { highlights: "Fetch highlights", story: "Fetch active story",
+      collections: "Fetch stories & highlights", posts: "Fetch posts & reels" };
+    button.textContent = labels[elements["instagram-fetch-scope"].value] || labels.highlights;
+    elements["instagram-fetch-scope"].disabled = state.busy;
+    const run = activeScan && activeScan.instagram ? activeScan : null;
+    const running = Boolean(run && !run.fetchFinished);
+    elements["instagram-panel"].dataset.running = String(running);
+    elements["instagram-fetch-field"].hidden = !instagramPage || running;
+    elements["instagram-fetch-help"].hidden = !instagramPage || running;
+    button.hidden = !instagramPage || running;
+    const restart = elements["instagram-restart-button"];
+    restart.disabled = !galleryContext || !Number.isInteger(state.sourceTabId) || state.busy && !run;
+    restart.textContent = run ? "Restart fetch" : "Clear & refetch";
+    const progress = state.instagramProgress;
+    elements["instagram-progress"].hidden = !progress;
+    if (!progress) return;
+    const phases = { page: "Reading the page…", posts: "Fetching posts…", reels: "Fetching reels…",
+      carousels: "Resolving carousel slides…", highlights: "Fetching highlights…", stories: "Fetching active story…",
+      complete: "Fetch complete", partial: "Fetch finished with some gaps", cancelled: "Fetching stopped", error: "Fetch unavailable" };
+    const status = run && run.stopping ? "Stopping — keeping media already found…" : phases[progress.phase];
+    elements["instagram-progress"].dataset.running = String(running);
+    elements["instagram-progress-phase"].textContent = status;
+    elements["instagram-post-count"].textContent = (progress.posts || 0).toLocaleString();
+    elements["instagram-post-metric"].hidden = state.instagramLastScope !== "posts";
+    elements["instagram-media-count"].textContent = (progress.media || 0).toLocaleString();
+    elements["instagram-highlight-metric"].hidden = !progress.highlightsTotal;
+    elements["instagram-highlight-count"].textContent = `${progress.highlightsChecked || 0} / ${progress.highlightsTotal || 0}`;
+    const detail = state.instagramLastScope === "posts" ? [`${progress.posts || 0} posts fetched`] : [];
+    detail.push(`${progress.media || 0} media files`);
+    if (progress.highlightsTotal) detail.push(`${progress.highlightsLoaded || 0} highlights loaded`, `${progress.highlightsFailed || 0} unavailable`);
+    if (progress.story === "unavailable") detail.push("Active story unavailable");
+    elements["instagram-progress-detail"].textContent = progress.highlightsTotal
+      ? `${progress.highlightsLoaded || 0} highlights loaded · ${progress.highlightsFailed || 0} unavailable`
+      : progress.story === "unavailable" ? "Active story unavailable. Open it on Instagram and try again."
+        : state.instagramLastScope === "posts" ? "Includes carousel photos and videos."
+          : "Fetching uses your current Instagram session.";
+    const message = `${status} ${detail.join(" · ")}`;
+    if (elements["instagram-progress-announcement"].textContent !== message) elements["instagram-progress-announcement"].textContent = message;
+    const stopButton = elements["instagram-stop-button"];
+    const restoreFocus = !running && document.activeElement === stopButton;
+    stopButton.hidden = !running;
+    stopButton.disabled = Boolean(run && run.stopping);
+    if (restoreFocus && !restart.disabled) restart.focus({ preventScroll: true });
   }
 
   function stopLiveCapture(message, type) {
@@ -5253,6 +5430,7 @@
   }
 
   async function startLiveCapture(options) {
+    if (state.instagramProgress && state.instagramProgress.phase === "cancelled") return false;
     if (state.liveCapture) {
       if (liveCaptureTimer === null) {
         scheduleLiveCapturePoll(liveCaptureGeneration);
@@ -5307,12 +5485,11 @@
   }
 
   async function collectInstagramCollections() {
-    if (!window.confirm(
-      "Collect the profile owner's active story and exposed highlights? Instagram may record story access as a view."
-    )) {
-      return;
-    }
-    await scanPage({ instagramCollections: true, preserveSelection: true });
+    const scope = elements["instagram-fetch-scope"].value || "highlights";
+    if (state.busy || !["posts", "highlights", "story", "collections"].includes(scope)) return;
+    stopLiveCapture();
+    await scanPage({ instagramCollections: scope !== "posts", instagramFetchScope: scope,
+      pinnedSource: true, preserveSelection: true });
   }
 
   function cancelScheduledSidebarFollow() {
@@ -5853,6 +6030,9 @@
       elements["sidebar-follow-button"].addEventListener("click", requestSidebarFollowPermission);
     }
     elements["instagram-collections-button"].addEventListener("click", collectInstagramCollections);
+    elements["instagram-fetch-scope"].addEventListener("change", updateInstagramCollectionsButton);
+    elements["instagram-stop-button"].addEventListener("click", stopInstagramScan);
+    elements["instagram-restart-button"].addEventListener("click", refreshMedia);
     elements["filter-input"].addEventListener("input", scheduleFilterRender);
     elements["folder-input"].addEventListener("input", updateSummary);
     elements["filename-template-button"].addEventListener("click", () => {

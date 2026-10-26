@@ -4,6 +4,12 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- Add visible Instagram fetch controls for highlights, active stories, and posts/reels, with live post and media counts, highlight progress, and collection filters with file counts.
+- Allow an Instagram fetch to be stopped or restarted while running, and allow Undo to restore the cleared collection during refetching. Abort pending requests and reject superseded results while preserving private-session isolation.
+- Process Instagram post and highlight responses incrementally within the existing concurrency and safety limits, release parsed responses earlier, avoid duplicate profile-object processing and successful highlight-page requests, and yield between long script-parsing batches.
+
 ## [1.23.2] - 2026-10-26
 
 ### Fixed

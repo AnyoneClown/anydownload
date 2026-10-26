@@ -68,6 +68,31 @@
     return routeKeyForUrl(value).startsWith("instagram:profile:");
   }
 
+  // Like collectFromPage, this runs in the page's MAIN world. Only the caller's
+  // token can inspect or stop its run; no media or session credentials are polled.
+  function controlCollection(runId, action) {
+    const run = globalThis.__anydownloadInstagramRun;
+    if (!run || run.id !== runId) return null;
+    if (action === "cancel" && typeof run.cancel === "function") run.cancel();
+    if (action === "release") {
+      delete globalThis.__anydownloadInstagramRun;
+      return null;
+    }
+    const progress = run.progress;
+    if (!progress || typeof progress !== "object") return null;
+    // MAIN-world globals can be modified by the page. Return a bounded
+    // snapshot instead of serializing arbitrary page-owned objects.
+    const snapshot = {
+      phase: typeof progress.phase === "string" ? progress.phase.slice(0, 30) : "",
+      story: typeof progress.story === "string" ? progress.story.slice(0, 30) : ""
+    };
+    for (const key of ["posts", "media", "requests", "highlightsTotal", "highlightsChecked", "highlightsLoaded", "highlightsFailed"]) {
+      snapshot[key] = Number.isSafeInteger(progress[key]) && progress[key] >= 0
+        ? Math.min(progress[key], 100000) : 0;
+    }
+    return snapshot;
+  }
+
   // This function is passed directly to browser.scripting.executeScript(). Keep
   // every helper inside its body: Firefox serializes the function and does not
   // carry this module's outer closure into the source tab.
@@ -125,12 +150,14 @@
     const domMediaCache = new WeakMap();
     const exactRouteStatusCache = new WeakMap();
     const ownerCache = new WeakMap();
+    const processedProfilePosts = new WeakSet();
     const warnings = new Set();
     const found = new Map();
     const foundRecordKeysByUrl = new Map();
     const owners = new Set();
     const profilePks = new Set();
     const profilePosts = new Map();
+    const collectedPostIds = new Set();
     const highlightDescriptors = new Map();
     const visitedDocuments = new Set();
     const queuedDocuments = [];
@@ -150,6 +177,15 @@
     let profileAnchorCache = null;
     let profileTimelineComplete = false;
     let profileReelsComplete = !settings.includeProfileReels;
+    let cancelled = false;
+    const activeRequests = new Set();
+    const relatedRead = new Set();
+    const loadedHighlights = new Set();
+    const failedHighlights = new Set();
+    const relatedProgress = { total: 0, checked: 0, loaded: 0, failed: 0, story: "idle" };
+    let progressPhase = "page";
+    let progressDetail = "";
+    let progressRun = null;
     let utf8Encoder = null;
     try {
       utf8Encoder = typeof TextEncoder === "function" ? new TextEncoder() : null;
@@ -202,16 +238,27 @@
       return text.length;
     }
 
-    async function mapWithConcurrency(values, worker, rawConcurrency) {
+    async function mapWithConcurrency(values, worker, consume, rawConcurrency) {
       const items = Array.isArray(values) ? values : [];
-      const results = new Array(items.length);
       let cursor = 0;
+      let commitTail = Promise.resolve();
 
       async function runWorker() {
-        while (cursor < items.length) {
+        while (cursor < items.length && !cancelled && !itemLimitReached &&
+          !payloadLimitReached && remainingCollectionTime()) {
           const index = cursor;
           cursor += 1;
-          results[index] = await worker(items[index], index);
+          const previous = commitTail;
+          let committed;
+          commitTail = new Promise((resolve) => { committed = resolve; });
+          try {
+            const result = await worker(items[index], index);
+            await previous;
+            if (!cancelled) consume(result, items[index]);
+            publishProgress();
+          } finally {
+            committed();
+          }
         }
       }
 
@@ -220,7 +267,6 @@
         boundedInteger(rawConcurrency, MAX_FETCH_CONCURRENCY, 1, MAX_FETCH_CONCURRENCY)
       );
       await Promise.all(Array.from({ length: concurrency }, () => runWorker()));
-      return results;
     }
 
     function instagramHttpUrl(value, baseUrl) {
@@ -431,6 +477,40 @@
     }
     if (route.kind === "unsupported") {
       return emptyResult(false);
+    }
+
+    function publishProgress(phase, detail) {
+      if (phase) progressPhase = phase;
+      if (detail !== undefined) progressDetail = safeText(detail, 120);
+      const progress = {
+        phase: progressPhase, detail: progressDetail,
+        posts: collectedPostIds.size, media: found.size,
+        requests: fetchedDocumentCount,
+        highlightsTotal: relatedProgress.total, highlightsChecked: relatedProgress.checked,
+        highlightsLoaded: relatedProgress.loaded, highlightsFailed: relatedProgress.failed,
+        story: relatedProgress.story
+      };
+      if (progressRun) progressRun.progress = progress;
+      return progress;
+    }
+
+    const runId = safeText(options.runId, 80);
+    if (/^[a-z0-9-]{16,80}$/i.test(runId)) {
+      // One bounded active run per tab. Superseding a manager also releases
+      // pending responses from its old run instead of accumulating page state.
+      const previous = globalThis.__anydownloadInstagramRun;
+      if (previous && typeof previous.cancel === "function") previous.cancel();
+      progressRun = {
+        id: runId,
+        cancel() {
+          cancelled = true;
+          for (const controller of activeRequests) controller.abort();
+          publishProgress("cancelled", "");
+        },
+        progress: null
+      };
+      globalThis.__anydownloadInstagramRun = progressRun;
+      publishProgress();
     }
 
     function usernameFrom(value) {
@@ -815,6 +895,9 @@
         return;
       }
       target.push(membership);
+      if (membership.type === "post" && (!route.username || membership.owner === route.username)) {
+        collectedPostIds.add(membership.id);
+      }
     }
 
     function collectionMembershipFor(object, sourceRoute, collectionKind, collectionTitle) {
@@ -867,7 +950,7 @@
     }
 
     function addRecord(url, details) {
-      if (!url) {
+      if (!url || cancelled) {
         return;
       }
       details = details && typeof details === "object" ? details : {};
@@ -986,6 +1069,7 @@
     function clearIncompleteExactRecords() {
       found.clear();
       foundRecordKeysByUrl.clear();
+      collectedPostIds.clear();
       totalPayloadLength = 0;
       itemLimitReached = false;
       payloadLimitReached = false;
@@ -1340,10 +1424,12 @@
       if (!settings.includeProfilePosts || !object || typeof object !== "object") {
         return;
       }
+      if (processedProfilePosts.has(object)) return;
       const owner = ownerFromObject(object);
       if (!owner || owner !== expectedUsername) {
         return;
       }
+      processedProfilePosts.add(object);
       registerMatchingProfile(safeProperty(object, "user") || safeProperty(object, "owner"), expectedUsername);
       const id = objectIdentifier(object) || objectId(object);
       const shortcode = objectIdentifier(object);
@@ -1474,6 +1560,17 @@
           }
           const countBefore = found.size;
           addMediaContainer(object, baseUrl, kind, forceItems, sourceRoute);
+          if (["story", "highlight"].includes(sourceRoute.kind)) {
+            const items = objectList(safeProperty(object, "items"));
+            if (items.length && items.every((item) =>
+              matchesExpectedOwner(item, sourceRoute.username) && hasDownloadableMedia(item)) &&
+              !safeProperty(object, "more_available") &&
+              !(positiveNumber(safeProperty(object, "media_count")) > items.length) &&
+              !itemLimitReached && !payloadLimitReached) {
+              relatedRead.add(sourceRoute.kind === "highlight"
+                ? `highlight:${sourceRoute.highlightId}` : `story:${sourceRoute.username}`);
+            }
+          }
           if ((sourceRoute.kind === "post" || sourceRoute.kind === "reel") &&
             exactShortcodeMatches(sourceRoute.shortcode) && found.size > countBefore) {
             exactStructuredPostComplete = exactStructuredPostComplete ||
@@ -1487,6 +1584,7 @@
 
       function walk(value, depth, parentKey, isRoot) {
         if (
+          cancelled ||
           jsonNodeLimitReached ||
           hasCompleteExactCollection(sourceRoute) ||
           depth > MAX_JSON_DEPTH ||
@@ -1875,9 +1973,17 @@
       }
     }
 
-    function processScripts(scripts, sourceRoute, baseUrl) {
+    async function processScripts(scripts, sourceRoute, baseUrl) {
       const countBefore = found.size;
+      let lastYieldAt = Date.now();
       for (const script of scripts.slice(0, MAX_SCRIPTS_PER_DOCUMENT)) {
+        if (cancelled || !remainingCollectionTime()) break;
+        if (Date.now() - lastYieldAt >= 12 && typeof setTimeout === "function") {
+          publishProgress();
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          lastYieldAt = Date.now();
+          if (cancelled) break;
+        }
         const scriptBytes = byteLength(script.text);
         if (scriptBytes > settings.maxDocumentBytes) {
           documentLimitReached = true;
@@ -1907,8 +2013,8 @@
       return found.size - countBefore;
     }
 
-    function processCurrentDocument() {
-      const added = processScripts(currentScripts(), route, route.pageUrl);
+    async function processCurrentDocument() {
+      const added = await processScripts(currentScripts(), route, route.pageUrl);
       if (!added) {
         addMetaFallback(currentMetaMap(), route, route.pageUrl, route.kind);
       }
@@ -1999,6 +2105,7 @@
     }
 
     function remainingCollectionTime() {
+      if (cancelled) return 0;
       const remaining = Math.max(0, COLLECTION_TIMEOUT_MS - (Date.now() - collectionStartedAt));
       if (!remaining) collectionTimeLimitReached = true;
       return remaining;
@@ -2027,6 +2134,7 @@
       let timer = null;
       try {
         controller = typeof AbortController === "function" ? new AbortController() : null;
+        if (controller) activeRequests.add(controller);
         if (controller && typeof setTimeout === "function") {
           timer = setTimeout(() => controller.abort(), timeoutMs);
         }
@@ -2056,6 +2164,7 @@
           return null;
         }
         const body = await readResponseText(response);
+        if (cancelled) return null;
         if (!body.ok) {
           documentLimitReached = documentLimitReached || body.tooLarge;
           return null;
@@ -2065,6 +2174,7 @@
         noteUnavailable();
         return null;
       } finally {
+        activeRequests.delete(controller);
         remainingCollectionTime();
         if (timer !== null && typeof clearTimeout === "function") {
           clearTimeout(timer);
@@ -2107,6 +2217,7 @@
       let timer = null;
       try {
         controller = typeof AbortController === "function" ? new AbortController() : null;
+        if (controller) activeRequests.add(controller);
         if (controller && typeof setTimeout === "function") {
           timer = setTimeout(() => controller.abort(), timeoutMs);
         }
@@ -2150,6 +2261,7 @@
           return null;
         }
         const responseBody = await readResponseText(response);
+        if (cancelled) return null;
         if (!responseBody.ok) {
           documentLimitReached = documentLimitReached || responseBody.tooLarge;
           return null;
@@ -2168,6 +2280,7 @@
         noteUnavailable();
         return null;
       } finally {
+        activeRequests.delete(controller);
         remainingCollectionTime();
         if (timer !== null && typeof clearTimeout === "function") {
           clearTimeout(timer);
@@ -2304,7 +2417,7 @@
           const finalRoute = parseRoute(exactDocument.url);
           if (["post", "reel"].includes(finalRoute.kind) &&
             exactShortcodeMatches(finalRoute.shortcode)) {
-            const added = processScripts(
+            const added = await processScripts(
               scriptsFromHtml(exactDocument.text),
               route,
               exactDocument.url
@@ -2383,8 +2496,8 @@
     function processRuntimeData() {
       const exactRoute = ["post", "reel"].includes(route.kind);
       const storyRoute = ["story", "highlight"].includes(route.kind);
-      const complete = () => exactRoute ? exactStructuredPostComplete : !storyRoute &&
-        (settings.includeProfilePosts ? itemLimitReached || payloadLimitReached : Boolean(profilePk()));
+      const complete = () => cancelled || (exactRoute ? exactStructuredPostComplete : !storyRoute &&
+        (settings.includeProfilePosts ? itemLimitReached || payloadLimitReached : Boolean(profilePk())));
       if ((!exactRoute && !storyRoute && route.kind !== "profile") || complete()) {
         return;
       }
@@ -2799,18 +2912,6 @@
         (!postRoute.username || postRoute.username === route.username) ? postRoute : null;
     }
 
-    function collectedProfilePostIds() {
-      const ids = new Set();
-      for (const record of found.values()) {
-        for (const collection of record.instagramCollections) {
-          if (collection.type === "post" && collection.owner === route.username) {
-            ids.add(collection.id);
-          }
-        }
-      }
-      return ids;
-    }
-
     function profilePostIsComplete(shortcode) {
       const post = profilePosts.get(shortcode);
       if (!post || !post.complete) return false;
@@ -2829,7 +2930,7 @@
       if (route.kind !== "profile" || !settings.includeProfilePosts) {
         return;
       }
-      const visitedPosts = collectedProfilePostIds();
+      const visitedPosts = new Set(collectedPostIds);
       for (const anchor of profileAnchors()) {
         if (itemLimitReached || payloadLimitReached) {
           break;
@@ -2871,7 +2972,7 @@
 
     async function collectProfileGridPosts() {
       if (route.kind !== "profile" || !settings.includeProfilePosts ||
-        itemLimitReached || payloadLimitReached) {
+        cancelled || itemLimitReached || payloadLimitReached) {
         return;
       }
       const visitedPosts = new Set();
@@ -3045,17 +3146,14 @@
       if (boundedRequests.length < requests.length) {
         documentLimitReached = true;
       }
-      const fetchedPosts = await mapWithConcurrency(
+      await mapWithConcurrency(
         boundedRequests,
         fetchPost,
+        (fetched) => {
+          if (fetched) addProfilePost(fetched.item, fetched.url, route.username);
+        },
         MAX_FETCH_CONCURRENCY
       );
-      for (let index = 0; index < boundedRequests.length; index += 1) {
-        const fetched = fetchedPosts[index];
-        if (fetched) {
-          addProfilePost(fetched.item, fetched.url, route.username);
-        }
-      }
     }
 
     function orderProfileCarouselRecords() {
@@ -3173,6 +3271,7 @@
             break;
           }
         }
+        publishProgress();
         const next = page.nextMaxId;
         if (!page.paginationKnown) return false;
         if (!page.moreAvailable) return !itemLimitReached && !payloadLimitReached;
@@ -3226,6 +3325,7 @@
           addProfilePost(item, fetched.url, route.username);
           if (itemLimitReached || payloadLimitReached) return false;
         }
+        publishProgress();
         if (objectList(safeProperty(fetched.value, "errors")).length) return false;
         const page = safeProperty(connection, "page_info");
         if (safeProperty(page, "has_next_page") === false) return true;
@@ -3310,198 +3410,235 @@
 
       const availableDocuments = Math.max(0, settings.maxDocuments - fetchedDocumentCount);
       const boundedRequests = requests.slice(0, availableDocuments);
+      relatedProgress.total = requests.filter((request) => request.purpose === "highlight").length;
+      publishProgress(settings.includeHighlights ? "highlights" : "stories");
       if (boundedRequests.length < requests.length) {
         documentLimitReached = true;
       }
-      const fetchedCollections = await mapWithConcurrency(
+      await mapWithConcurrency(
         boundedRequests,
         (request) => fetchReelCollection(request.reelId, request.purpose),
+        (fetched, request) => {
+          if (fetched) {
+            processJson(fetched.value, request.sourceRoute, fetched.url, false);
+          }
+          if (request.purpose === "highlight") {
+            relatedProgress.checked += 1;
+            const loaded = Array.from(found.values()).some((record) =>
+              record.instagramCollections.some((collection) => collection.type === "highlight" &&
+                collection.id === request.sourceRoute.highlightId));
+            if (loaded) {
+              loadedHighlights.add(request.sourceRoute.highlightId);
+            }
+            if (!fetched) failedHighlights.add(request.sourceRoute.highlightId);
+            relatedProgress.loaded = loadedHighlights.size;
+            relatedProgress.failed = failedHighlights.size;
+          } else {
+            relatedProgress.story = fetched ? "checked" : "unavailable";
+            if (!fetched) warnings.add("Instagram's active story could not be read with the current browser session. Open the story and retry collecting it.");
+          }
+        },
         MAX_FETCH_CONCURRENCY
       );
-      for (let index = 0; index < boundedRequests.length; index += 1) {
-        const fetched = fetchedCollections[index];
-        if (fetched) {
-          processJson(
-            fetched.value,
-            boundedRequests[index].sourceRoute,
-            fetched.url,
-            false
-          );
-        } else if (boundedRequests[index].purpose === "active-story") {
-          warnings.add("Instagram's active story could not be read with the current browser session. Open the story and retry collecting it.");
-        }
-      }
     }
 
-    processCurrentDocument();
+    try {
+      await processCurrentDocument();
 
-    if (["story", "highlight"].includes(route.kind)) {
-      processRuntimeData();
-      if (needsStoryMetadata && Array.from(found.values()).some(item => item.mediaType === "video")) {
-        const reelId = route.kind === "highlight"
-          ? `highlight:${route.highlightId}` : await discoverProfilePk();
-        if (reelId) {
-          const fetched = await fetchReelCollection(reelId, "story-metadata");
-          if (fetched) {
-            processJson(fetched.value, route, fetched.url, false);
+      if (["story", "highlight"].includes(route.kind)) {
+        processRuntimeData();
+        if (needsStoryMetadata && Array.from(found.values()).some(item => item.mediaType === "video")) {
+          const reelId = route.kind === "highlight"
+            ? `highlight:${route.highlightId}` : await discoverProfilePk();
+          if (reelId) {
+            const fetched = await fetchReelCollection(reelId, "story-metadata");
+            if (fetched) {
+              processJson(fetched.value, route, fetched.url, false);
+            }
           }
         }
       }
-    }
 
-    if (route.kind === "post" || route.kind === "reel") {
-      // SPA post modals do not replace the profile document's original
-      // scripts. Recover the exact React item when exposed, otherwise request
-      // only this canonical shortcode with the active Instagram session.
-      processRuntimeData();
-      await collectExactPostNetworkFallback();
-      processExactViewerDom();
-    }
+      if (route.kind === "post" || route.kind === "reel") {
+        // SPA post modals do not replace the profile document's original
+        // scripts. Recover the exact React item when exposed, otherwise request
+        // only this canonical shortcode with the active Instagram session.
+        processRuntimeData();
+        await collectExactPostNetworkFallback();
+        processExactViewerDom();
+      }
 
-    if (route.kind === "profile") {
-      processRuntimeData();
-      let pk = await discoverProfilePk();
-      if (settings.includeProfilePosts) {
-        profileTimelineComplete = await collectProfileFeed(pk);
-        if (!profileTimelineComplete && !itemLimitReached && !payloadLimitReached) {
-          profileTimelineComplete = await collectProfileGraphql("posts", pk);
-        }
-        pk = profilePk() || pk;
-        if (settings.includeProfileReels) {
-          profileReelsComplete = await collectProfileGraphql("reels", pk);
-        }
-      }
-      await collectProfileGridPosts();
-      processProfileGridDom();
-      orderProfileCarouselRecords();
-      if (settings.includeStories || settings.includeHighlights) {
-        await collectProfileStoriesAndHighlights(pk);
-      }
-    }
-
-    while (route.kind === "profile" &&
-      (settings.includeStories || settings.includeHighlights) && queuedDocuments.length) {
-      if (fetchedDocumentCount >= settings.maxDocuments) {
-        documentLimitReached = true;
-        break;
-      }
-      const entry = queuedDocuments.shift();
-      queuedDocumentUrls.delete(entry.url);
-      if (visitedDocuments.has(entry.url)) {
-        continue;
-      }
-      visitedDocuments.add(entry.url);
-      fetchedDocumentCount += 1;
-      const fetched = await fetchHtmlDocument(entry, true);
-      if (!fetched) {
-        continue;
-      }
-      const fetchedRoute = parseRoute(fetched.url);
-      const storyRouteMatches = entry.purpose === "story" &&
-        fetchedRoute.kind === "story" &&
-        fetchedRoute.username === entry.expectedUsername &&
-        (!entry.expectedStoryId || !fetchedRoute.storyId ||
-          fetchedRoute.storyId === entry.expectedStoryId);
-      const highlightRouteMatches = entry.purpose === "highlight" &&
-        fetchedRoute.kind === "highlight" &&
-        fetchedRoute.highlightId === entry.expectedHighlightId;
-      if (!storyRouteMatches && !highlightRouteMatches) {
-        inaccessibleRelatedCount += 1;
-        continue;
-      }
-      const relatedRoute = Object.assign({}, fetchedRoute, {
-        username: entry.expectedOwner || fetchedRoute.username || ""
-      });
-      const added = processScripts(scriptsFromHtml(fetched.text), relatedRoute, fetched.url);
-      if (!added) {
-        addMetaFallback(metaMapFromHtml(fetched.text), relatedRoute, fetched.url, relatedRoute.kind);
-      }
-      discoverRelatedLinks(linksFromHtml(fetched.text, fetched.url), relatedRoute);
-    }
-
-    if (itemLimitReached) {
-      warnings.add(`Instagram collection reached the ${settings.maxItems.toLocaleString()}-item safety limit.`);
-    }
-    if (payloadLimitReached) {
-      warnings.add("Some Instagram media were skipped because their combined URL data exceeded the 2 MB safety limit.");
-    }
-    if (documentLimitReached) {
-      warnings.add("Instagram collection stopped at its bounded document or response-size safety limit.");
-    }
-    if (collectionTimeLimitReached) {
-      warnings.add("Instagram collection stopped at its 2-minute safety limit; results may be partial.");
-    }
-    if (jsonNodeLimitReached) {
-      warnings.add("Instagram structured data reached its bounded traversal safety limit; results may be partial.");
-    }
-    const incompleteProfilePosts = Array.from(profilePosts.keys()).filter((id) => !profilePostIsComplete(id));
-    const profileVideosResolved = route.kind === "profile" && settings.includeProfilePosts &&
-      !settings.includeStories && !settings.includeHighlights && profilePosts.size > 0 &&
-      !incompleteProfilePosts.length;
-    if (unsupportedVideoCount && !profileVideosResolved) {
-      warnings.add(
-        `${unsupportedVideoCount.toLocaleString()} Instagram video source${unsupportedVideoCount === 1 ? " was" : "s were"} skipped because no direct progressive HTTP(S) file was exposed.`
-      );
-    }
-    if (inaccessibleRelatedCount) {
-      warnings.add(
-        `${inaccessibleRelatedCount.toLocaleString()} related Instagram page${inaccessibleRelatedCount === 1 ? " was" : "s were"} unavailable to the current browser session.`
-      );
-    }
-    let profileCollection = null;
-    if (route.kind === "profile" && settings.includeProfilePosts) {
-      if (!profileTimelineComplete) {
-        warnings.add("Instagram profile collection is incomplete: the full post history could not be read.");
-      }
-      if (!profileReelsComplete) {
-        warnings.add("Instagram profile collection is incomplete: the full reels history could not be read.");
-      }
-      if (incompleteProfilePosts.length) {
-        warnings.add(`Instagram could not resolve every slide or direct video in ${incompleteProfilePosts.length} profile post(s).`);
-      }
-      profileCollection = {
-        username: route.username,
-        posts: collectedProfilePostIds().size,
-        complete: profileTimelineComplete && profileReelsComplete && !incompleteProfilePosts.length &&
-          !itemLimitReached && !payloadLimitReached && !documentLimitReached &&
-          !collectionTimeLimitReached && !jsonNodeLimitReached
-      };
-    }
-    if (!found.size) {
-      let label = `${route.kind} media`;
       if (route.kind === "profile") {
-        const requested = [];
+        processRuntimeData();
+        publishProgress();
+        let pk = await discoverProfilePk();
         if (settings.includeProfilePosts) {
-          requested.push("profile posts");
+          publishProgress("posts", "");
+          profileTimelineComplete = await collectProfileFeed(pk);
+          if (!profileTimelineComplete && !itemLimitReached && !payloadLimitReached) {
+            profileTimelineComplete = await collectProfileGraphql("posts", pk);
+          }
+          pk = profilePk() || pk;
+          if (settings.includeProfileReels) {
+            publishProgress("reels", "");
+            profileReelsComplete = await collectProfileGraphql("reels", pk);
+          }
         }
-        if (settings.includeStories) {
-          requested.push("active story media");
+        publishProgress("carousels", "");
+        await collectProfileGridPosts();
+        processProfileGridDom();
+        orderProfileCarouselRecords();
+        if (settings.includeStories || settings.includeHighlights) {
+          publishProgress(settings.includeHighlights ? "highlights" : "stories", "");
+          await collectProfileStoriesAndHighlights(pk);
         }
-        if (settings.includeHighlights) {
-          requested.push("highlight media");
-        }
-        label = requested.length ? requested.join(", ") : "profile media";
       }
-      warnings.add(
-        `Instagram did not expose downloadable ${label} to the current browser session; it may be private, restricted, expired, or stream-only.`
-      );
-    }
 
-    return {
-      handled: true,
-      pageUrl: route.pageUrl,
-      pageTitle,
-      embeddedFrameCount: 0,
-      images: Array.from(found.values()),
-      warnings: Array.from(warnings),
-      profileCollection
-    };
+      while (route.kind === "profile" &&
+        (settings.includeStories || settings.includeHighlights) && queuedDocuments.length &&
+        !cancelled && !itemLimitReached && !payloadLimitReached && remainingCollectionTime()) {
+        if (fetchedDocumentCount >= settings.maxDocuments) {
+          documentLimitReached = true;
+          break;
+        }
+        const entry = queuedDocuments.shift();
+        queuedDocumentUrls.delete(entry.url);
+        if (relatedRead.has(entry.purpose === "highlight"
+          ? `highlight:${entry.expectedHighlightId}` : `story:${entry.expectedUsername}`)) continue;
+        if (visitedDocuments.has(entry.url)) {
+          continue;
+        }
+        visitedDocuments.add(entry.url);
+        fetchedDocumentCount += 1;
+        const fetched = await fetchHtmlDocument(entry, true);
+        if (!fetched) {
+          continue;
+        }
+        const fetchedRoute = parseRoute(fetched.url);
+        const storyRouteMatches = entry.purpose === "story" &&
+          fetchedRoute.kind === "story" &&
+          fetchedRoute.username === entry.expectedUsername &&
+          (!entry.expectedStoryId || !fetchedRoute.storyId ||
+            fetchedRoute.storyId === entry.expectedStoryId);
+        const highlightRouteMatches = entry.purpose === "highlight" &&
+          fetchedRoute.kind === "highlight" &&
+          fetchedRoute.highlightId === entry.expectedHighlightId;
+        if (!storyRouteMatches && !highlightRouteMatches) {
+          inaccessibleRelatedCount += 1;
+          continue;
+        }
+        const relatedRoute = Object.assign({}, fetchedRoute, {
+          username: entry.expectedOwner || fetchedRoute.username || ""
+        });
+        const added = await processScripts(scriptsFromHtml(fetched.text), relatedRoute, fetched.url);
+        if (!added) {
+          addMetaFallback(metaMapFromHtml(fetched.text), relatedRoute, fetched.url, relatedRoute.kind);
+        }
+        if (relatedRoute.kind === "highlight" && relatedRead.has(`highlight:${relatedRoute.highlightId}`)) {
+          failedHighlights.delete(relatedRoute.highlightId);
+          loadedHighlights.add(relatedRoute.highlightId);
+          relatedProgress.failed = failedHighlights.size;
+          relatedProgress.loaded = loadedHighlights.size;
+        }
+        discoverRelatedLinks(linksFromHtml(fetched.text, fetched.url), relatedRoute);
+        publishProgress();
+      }
+
+      if (cancelled) warnings.add("Instagram fetching stopped. Media already found has been kept.");
+      if (relatedProgress.failed) {
+        warnings.add(`${relatedProgress.failed} Instagram highlight collection(s) could not be read. Retry to check them again.`);
+      }
+      if (itemLimitReached) {
+        warnings.add(`Instagram collection reached the ${settings.maxItems.toLocaleString()}-item safety limit.`);
+      }
+      if (payloadLimitReached) {
+        warnings.add("Some Instagram media were skipped because their combined URL data exceeded the 2 MB safety limit.");
+      }
+      if (documentLimitReached) {
+        warnings.add("Instagram collection stopped at its bounded document or response-size safety limit.");
+      }
+      if (collectionTimeLimitReached) {
+        warnings.add("Instagram collection stopped at its 2-minute safety limit; results may be partial.");
+      }
+      if (jsonNodeLimitReached) {
+        warnings.add("Instagram structured data reached its bounded traversal safety limit; results may be partial.");
+      }
+      const incompleteProfilePosts = Array.from(profilePosts.keys()).filter((id) => !profilePostIsComplete(id));
+      const profileVideosResolved = route.kind === "profile" && settings.includeProfilePosts &&
+        !settings.includeStories && !settings.includeHighlights && profilePosts.size > 0 &&
+        !incompleteProfilePosts.length;
+      if (unsupportedVideoCount && !profileVideosResolved) {
+        warnings.add(
+          `${unsupportedVideoCount.toLocaleString()} Instagram video source${unsupportedVideoCount === 1 ? " was" : "s were"} skipped because no direct progressive HTTP(S) file was exposed.`
+        );
+      }
+      if (inaccessibleRelatedCount) {
+        warnings.add(
+          `${inaccessibleRelatedCount.toLocaleString()} related Instagram page${inaccessibleRelatedCount === 1 ? " was" : "s were"} unavailable to the current browser session.`
+        );
+      }
+      let profileCollection = null;
+      if (route.kind === "profile" && settings.includeProfilePosts) {
+        if (!profileTimelineComplete) {
+          warnings.add("Instagram profile collection is incomplete: the full post history could not be read.");
+        }
+        if (!profileReelsComplete) {
+          warnings.add("Instagram profile collection is incomplete: the full reels history could not be read.");
+        }
+        if (incompleteProfilePosts.length) {
+          warnings.add(`Instagram could not resolve every slide or direct video in ${incompleteProfilePosts.length} profile post(s).`);
+        }
+        profileCollection = {
+          username: route.username,
+          posts: collectedPostIds.size,
+          complete: profileTimelineComplete && profileReelsComplete && !incompleteProfilePosts.length &&
+            !itemLimitReached && !payloadLimitReached && !documentLimitReached &&
+            !collectionTimeLimitReached && !jsonNodeLimitReached && !cancelled
+        };
+      }
+      if (!found.size) {
+        let label = `${route.kind} media`;
+        if (route.kind === "profile") {
+          const requested = [];
+          if (settings.includeProfilePosts) {
+            requested.push("profile posts");
+          }
+          if (settings.includeStories) {
+            requested.push("active story media");
+          }
+          if (settings.includeHighlights) {
+            requested.push("highlight media");
+          }
+          label = requested.length ? requested.join(", ") : "profile media";
+        }
+        warnings.add(
+          `Instagram did not expose downloadable ${label} to the current browser session; it may be private, restricted, expired, or stream-only.`
+        );
+      }
+
+      return {
+        handled: true,
+        pageUrl: route.pageUrl,
+        pageTitle,
+        embeddedFrameCount: 0,
+        images: Array.from(found.values()),
+        warnings: Array.from(warnings),
+        profileCollection,
+        progress: publishProgress(cancelled ? "cancelled" : warnings.size ? "partial" : "complete", "")
+      };
+    } finally {
+      if (progressRun && globalThis.__anydownloadInstagramRun === progressRun) {
+        // Keep only the small final snapshot; release closures over parsed media.
+        globalThis.__anydownloadInstagramRun = { id: runId, progress: progressRun.progress };
+      }
+    }
   }
 
   const api = Object.freeze({
     isInstagramUrl,
     canCollectRelated,
     routeKeyForUrl,
+    controlCollection,
     collectFromPage
   });
   root.ImageDownloaderInstagram = api;
