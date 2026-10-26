@@ -4,6 +4,13 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.23.2] - 2026-10-26
+
+### Fixed
+
+- Expand Instagram profile carousel covers through the exact post query and loaded page data, so every exposed photo and direct video is collected even when the profile feed supplies only the first slide.
+- Allow larger Instagram profile histories within a 512-request, two-minute collection budget, retaining existing response and media limits and enforcing the shared byte allowance across concurrent requests.
+
 ## [1.23.1] - 2026-10-24
 
 ### Fixed

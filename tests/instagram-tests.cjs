@@ -491,18 +491,144 @@ async function run() {
         return jsonResponse(url, { items: [partial], more_available: false });
       }
       if (pathname.startsWith("/api/v1/media/")) return jsonResponse(url, { items: [partial] });
+      if (pathname === "/graphql/query/") return jsonResponse(url, {}, { ok: false });
       assert.equal(pathname, "/p/PARTIALS1/");
       if (!resolves) return response(url, "", { ok: false });
       return response(url, htmlDocument({ scripts: [{ value: {
         partial: { shortcode_media: partial }, full: { shortcode_media: complete }
       } }] }));
     });
-    assert.equal(requests.length, 3);
+    assert.equal(requests.length, 4);
     assert.deepEqual(result.images.map((item) => item.url), (resolves ? [1, 2, 3] : [1, 3]).map((index) =>
       `https://scontent.cdninstagram.com/part-${index}.jpg`));
     assert.equal(result.profileCollection.complete, resolves);
     if (resolves) assert.deepEqual(result.warnings, []);
     else assert.ok(result.warnings.some((warning) => /could not resolve every slide/.test(warning)));
+  }
+
+  // A large account used to spend almost all 32 requests enumerating its
+  // timeline, leaving 150 carousel covers without their remaining slides.
+  // Compact exact GraphQL responses must fit the expanded profile budget and
+  // must not require heavyweight post HTML or accept other authors' media.
+  for (const maxDocuments of [32, 512]) {
+    const user = { pk: "42", username: "alice" };
+    const posts = Array.from({ length: 353 }, (_, index) => ({
+      code: `LARGE${index}`, user,
+      ...(index < 150 ? { media_type: 8, carousel_media_count: 3,
+        ...imageNode(`cover-${index}`, `https://scontent.cdninstagram.com/large-${index}-1.jpg`)
+      } : { media_type: 1,
+        ...imageNode(`single-${index}`, `https://scontent.cdninstagram.com/large-${index}.jpg`)
+      })
+    }));
+    const requests = [];
+    const result = await scan("https://www.instagram.com/alice/", {
+      scripts: [script({ user })]
+    }, { maxDocuments, includeProfileReels: true }, async (url, init) => {
+      requests.push({ url, init });
+      const parsed = new URL(url);
+      if (parsed.pathname === "/api/v1/feed/user/42/") {
+        const offset = Number(parsed.searchParams.get("max_id") || 0);
+        return jsonResponse(url, { items: posts.slice(offset, offset + 12),
+          more_available: offset + 12 < posts.length, next_max_id: String(offset + 12) });
+      }
+      if (parsed.pathname.startsWith("/api/v1/media/")) {
+        return jsonResponse(url, {}, { ok: false });
+      }
+      if (parsed.pathname === "/graphql/query/" && init.method === "POST") {
+        return jsonResponse(url, { data: { xdt_api__v1__clips__user__connection_v2: {
+          edges: [], page_info: { has_next_page: false }
+        } } });
+      }
+      if (parsed.pathname === "/graphql/query/") {
+        assert.equal(parsed.searchParams.get("doc_id"), "27852811784380813");
+        const { shortcode } = JSON.parse(parsed.searchParams.get("variables"));
+        const post = posts.find(({ code }) => code === shortcode);
+        assert.ok(post);
+        const carousel_media = [1, 2, 3].map((slot) =>
+          slot === 2 ? { media_type: 2, ...videoNode(`${shortcode}-2`,
+            `https://scontent.cdninstagram.com/${shortcode}-2.mp4`,
+            `https://scontent.cdninstagram.com/${shortcode}-2-poster.jpg`) }
+            : { media_type: 1, ...imageNode(`${shortcode}-${slot}`,
+              `https://scontent.cdninstagram.com/large-${posts.indexOf(post)}-${slot}.jpg`) });
+        const complete = { ...post, carousel_media };
+        return jsonResponse(url, { data: {
+          unrelated: { ...complete, code: "UNRELATED" },
+          wrongOwner: { ...complete, user: { username: "bob" } },
+          xdt_shortcode_media: complete
+        } });
+      }
+      return response(url, "", { ok: false });
+    });
+    assert.ok(requests.length <= maxDocuments);
+    if (maxDocuments === 32) {
+      assert.equal(result.profileCollection.complete, false);
+      assert.ok(result.warnings.some(warning => /150 profile post/.test(warning)));
+    } else {
+      assert.deepEqual(result.profileCollection, { username: "alice", posts: 353, complete: true });
+      assert.equal(result.images.length, 653);
+      assert.equal(result.images.filter(({ mediaType }) => mediaType === "video").length, 150);
+      assert.deepEqual(result.warnings, []);
+      assert.equal(requests.length, 331);
+      assert.ok(requests.every(({ url }) => !/\/(?:p|reel)\//.test(new URL(url).pathname)),
+        "Complete compact post responses avoid full HTML requests");
+    }
+  }
+
+  // Some exact responses contain only one typed photo, or a shortened child
+  // list with no count. Neither can override the profile's known slide count.
+  for (const source of ["photo", "short-carousel"]) {
+    const post = { code: "KNOWNCOUNT", user: { username: "alice" }, media_type: 8,
+      carousel_media_count: 3, carousel_media: [1, 2, 3].map((slot) => ({
+        media_type: 1, ...imageNode(`known-${slot}`, `https://scontent.cdninstagram.com/known-${slot}.jpg`)
+      })) };
+    let htmlRequests = 0;
+    const result = await scan("https://www.instagram.com/alice/", {
+      scripts: [script({ user: { pk: "42", username: "alice" } })]
+    }, {}, async (url) => {
+      const path = new URL(url).pathname;
+      if (path === "/api/v1/feed/user/42/") {
+        return jsonResponse(url, { items: [{ ...post, carousel_media: post.carousel_media.slice(0, 1) }],
+          more_available: false });
+      }
+      if (path.startsWith("/api/v1/media/")) return jsonResponse(url, {}, { ok: false });
+      if (path === "/graphql/query/") return jsonResponse(url, { data: { xdt_shortcode_media:
+        source === "photo" ? { code: post.code, user: post.user, ...post.carousel_media[0] }
+          : { ...post, carousel_media_count: undefined, carousel_media: post.carousel_media.slice(0, 1) }
+      } });
+      htmlRequests += 1;
+      return response(url, htmlDocument({ scripts: [{ value: { shortcode_media: post } }] }));
+    });
+    assert.equal(htmlRequests, 1, source);
+    assert.equal(result.images.length, 3, source);
+    assert.equal(result.profileCollection.complete, true, source);
+    assert.deepEqual(result.warnings, [], source);
+  }
+
+  // A visible carousel marker can be the only evidence of additional slides.
+  // A typed single-photo response must remain an incomplete cover when every
+  // later lookup fails, even though Instagram supplied no exact slide count.
+  {
+    const code = "MARKEDCOVER";
+    const result = await scan("https://www.instagram.com/alice/", {
+      scripts: [script({ user: { pk: "42", username: "alice" } })],
+      elements: [fakeDomElement("a", {
+        attributes: { href: `/alice/p/${code}/` },
+        children: [fakeDomElement("svg", { attributes: { "aria-label": "Carousel" } })]
+      })]
+    }, {}, async (url) => {
+      const path = new URL(url).pathname;
+      if (path === "/api/v1/feed/user/42/") {
+        return jsonResponse(url, { items: [], more_available: false });
+      }
+      if (path.startsWith("/api/v1/media/")) return jsonResponse(url, { items: [{
+        code, user: { username: "alice" }, media_type: 1,
+        ...imageNode("marked-cover", "https://scontent.cdninstagram.com/marked-cover.jpg")
+      }] });
+      return response(url, "", { ok: false });
+    });
+    assert.equal(result.images.length, 1);
+    assert.equal(result.profileCollection.complete, false);
+    assert.ok(result.warnings.some(warning => /1 profile post/.test(warning)));
   }
 
   // Missing older pages, repeated cursors, and response errors must never
@@ -588,6 +714,7 @@ async function run() {
       "/api/v1/users/web_profile_info/",
       "/graphql/query/",
       `/api/v1/media/${instagramMediaIdFromShortcode("VISIBLE1")}/info/`,
+      "/graphql/query/",
       "/p/VISIBLE1/"
     ]);
     assert.ok(!result.warnings.some((warning) => /related Instagram page/i.test(warning)));
@@ -782,7 +909,7 @@ async function run() {
       "https://scontent.cdninstagram.com/html-reel.mp4"
     ]);
     assert.deepEqual(result.images.map((item) => item.mediaType), ["image", "video"]);
-    assert.equal(requests.length, 6);
+    assert.equal(requests.length, 8);
     assert.ok(requests.includes("/p/HTMLPHOTO/"));
     assert.ok(requests.includes("/reel/HTMLREEL1/"));
   }
@@ -934,6 +1061,9 @@ async function run() {
           }]]]
         } }] }));
       }
+      if (parsed.pathname !== "/api/v1/feed/user/42/") {
+        return jsonResponse(url, {}, { ok: false });
+      }
       assert.equal(parsed.pathname, "/api/v1/feed/user/42/");
       return jsonResponse(url, {
         items: [{
@@ -962,6 +1092,7 @@ async function run() {
     assert.deepEqual(requests.map((url) => new URL(url).pathname), [
       "/api/v1/feed/user/42/",
       `/api/v1/media/${instagramMediaIdFromShortcode("RELAY2")}/info/`,
+      "/graphql/query/",
       "/p/RELAY2/"
     ]);
     assert.ok(!result.warnings.some((warning) => /could not resolve every slide/i.test(warning)));

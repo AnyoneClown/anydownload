@@ -90,7 +90,7 @@
       includeStories: options.includeStories === true || options.includeRelated === true,
       includeHighlights: options.includeHighlights === true || options.includeRelated === true,
       maxItems: boundedInteger(options.maxItems, 500, 1, 1500),
-      maxDocuments: boundedInteger(options.maxDocuments, 16, 1, 32),
+      maxDocuments: boundedInteger(options.maxDocuments, 16, 1, 512),
       maxDocumentBytes: boundedInteger(options.maxDocumentBytes, 4000000, 16384, 4000000),
       maxTotalDocumentBytes: boundedInteger(
         options.maxTotalDocumentBytes,
@@ -107,6 +107,8 @@
     const MAX_RELATED_LINKS = 128;
     const FETCH_TIMEOUT_MS = 12000;
     const EXACT_FETCH_TIMEOUT_MS = 5000;
+    const COLLECTION_TIMEOUT_MS = 120000;
+    const collectionStartedAt = Date.now();
     const INSTAGRAM_WEB_APP_ID = "936619743392459";
     // Instagram rotates persisted GraphQL operation IDs. This is a bounded
     // fallback after the canonical post document and media-info endpoint.
@@ -140,6 +142,7 @@
     let itemLimitReached = false;
     let payloadLimitReached = false;
     let documentLimitReached = false;
+    let collectionTimeLimitReached = false;
     let unsupportedVideoCount = 0;
     let needsStoryMetadata = false;
     let inaccessibleRelatedCount = 0;
@@ -348,6 +351,11 @@
       pageUrl = "";
     }
     const route = parseRoute(pageUrl);
+    // Account histories can require many compact pagination and exact-post
+    // responses. Other routes retain their small original request budget.
+    if (route.kind !== "profile" || !settings.includeProfilePosts) {
+      settings.maxDocuments = Math.min(settings.maxDocuments, 32);
+    }
     const routeShortcodeAliases = new Set();
     let queryShortcode = safeText(route.shortcode, 80).trim();
     if (route.kind === "post" || route.kind === "reel") {
@@ -1341,16 +1349,24 @@
       const shortcode = objectIdentifier(object);
       const declaredCount = carouselCount(object);
       const children = childMedia(object);
-      const carousel = isCarouselObject(object) || children.length > 0;
       const previous = profilePosts.get(shortcode);
+      const carousel = isCarouselObject(object) || children.length > 0 ||
+        Boolean(previous && previous.carousel);
       const count = Math.min(settings.maxItems + 1,
         Math.max(1, declaredCount, children.length, previous && previous.count || 0));
       const complete = carousel
         ? children.length >= count && children.every(hasDownloadableMedia)
         : hasDownloadableMedia(object);
+      // A later profile feed can expose only a cover or partial children for
+      // an already resolved carousel. Keep its complete sources instead of
+      // replacing a video slot with an equal-size photo poster. Complete
+      // responses still refresh signed URLs through the usual merge path.
+      if (!complete && previous && previous.count >= count && profilePostIsComplete(shortcode)) {
+        return;
+      }
       if (shortcode && (profilePosts.has(shortcode) || profilePosts.size < settings.maxItems)) {
         profilePosts.set(shortcode, {
-          shortcode, count, carousel: carousel || Boolean(previous && previous.carousel),
+          shortcode, count, carousel,
           kind: previous && previous.kind || (Number(safeProperty(object, "media_type")) === 2 ? "reel" : "post"),
           complete: complete || Boolean(previous && previous.complete && previous.count >= count)
         });
@@ -1905,6 +1921,13 @@
     }
 
     async function readResponseText(response) {
+      // Charge each chunk when it arrives, including rejected responses. A
+      // deferred charge lets concurrent readers all spend the same allowance.
+      function chargeBytes(bytes) {
+        const available = settings.maxTotalDocumentBytes - totalDocumentBytes;
+        totalDocumentBytes += Math.min(available, bytes);
+        return bytes <= available;
+      }
       let announcedLength = 0;
       try {
         announcedLength = Number(response.headers && response.headers.get("content-length")) || 0;
@@ -1913,6 +1936,13 @@
       }
       if (announcedLength > settings.maxDocumentBytes ||
         totalDocumentBytes + announcedLength > settings.maxTotalDocumentBytes) {
+        try {
+          if (response.body && typeof response.body.cancel === "function") {
+            await response.body.cancel();
+          }
+        } catch (_error) {
+          // A rejected response may already have a closed or locked body.
+        }
         return { ok: false, tooLarge: true, text: "" };
       }
       if (response.body && typeof response.body.getReader === "function" &&
@@ -1927,9 +1957,10 @@
             if (part.done) {
               break;
             }
-            bytes += part.value && Number(part.value.byteLength) || 0;
-            if (bytes > settings.maxDocumentBytes ||
-              totalDocumentBytes + bytes > settings.maxTotalDocumentBytes) {
+            const chunkBytes = part.value && Number(part.value.byteLength) || 0;
+            bytes += chunkBytes;
+            const withinTotalBudget = chargeBytes(chunkBytes);
+            if (bytes > settings.maxDocumentBytes || !withinTotalBudget) {
               if (typeof reader.cancel === "function") {
                 await reader.cancel().catch(() => undefined);
               }
@@ -1948,15 +1979,40 @@
         }
       }
       const text = await response.text();
-      const bytes = byteLength(text);
-      if (bytes > settings.maxDocumentBytes || totalDocumentBytes + bytes > settings.maxTotalDocumentBytes) {
+      let bytes = 0;
+      let withinTotalBudget = true;
+      // byteLength deliberately truncates page scripts before encoding. Count
+      // fetched text in small chunks so an oversized fallback response still
+      // consumes the bytes already read instead of receiving a partial charge.
+      for (let offset = 0; offset < text.length; offset += 16384) {
+        const chunkBytes = byteLength(text.slice(offset, offset + 16384));
+        bytes += chunkBytes;
+        if (!chargeBytes(chunkBytes)) {
+          withinTotalBudget = false;
+          break;
+        }
+      }
+      if (bytes > settings.maxDocumentBytes || !withinTotalBudget) {
         return { ok: false, tooLarge: true, text: "" };
       }
       return { ok: true, text, bytes };
     }
 
+    function remainingCollectionTime() {
+      const remaining = Math.max(0, COLLECTION_TIMEOUT_MS - (Date.now() - collectionStartedAt));
+      if (!remaining) collectionTimeLimitReached = true;
+      return remaining;
+    }
+
     async function fetchHtmlDocument(entry, reportAsRelated, rawTimeoutMs) {
-      const timeoutMs = boundedInteger(rawTimeoutMs, FETCH_TIMEOUT_MS, 1000, FETCH_TIMEOUT_MS);
+      const remaining = remainingCollectionTime();
+      if (!remaining) return null;
+      if (totalDocumentBytes >= settings.maxTotalDocumentBytes) {
+        documentLimitReached = true;
+        return null;
+      }
+      const timeoutMs = Math.min(remaining,
+        boundedInteger(rawTimeoutMs, FETCH_TIMEOUT_MS, 1000, FETCH_TIMEOUT_MS));
       const shouldReportAsRelated = reportAsRelated !== false;
       const noteUnavailable = () => {
         if (shouldReportAsRelated) {
@@ -2004,12 +2060,12 @@
           documentLimitReached = documentLimitReached || body.tooLarge;
           return null;
         }
-        totalDocumentBytes += body.bytes || byteLength(body.text);
         return { url: finalUrl, text: body.text };
       } catch (_error) {
         noteUnavailable();
         return null;
       } finally {
+        remainingCollectionTime();
         if (timer !== null && typeof clearTimeout === "function") {
           clearTimeout(timer);
         }
@@ -2017,7 +2073,14 @@
     }
 
     async function fetchInstagramJson(rawUrl, purpose, reportAsRelated, rawTimeoutMs, graphQuery) {
-      const timeoutMs = boundedInteger(rawTimeoutMs, FETCH_TIMEOUT_MS, 1000, FETCH_TIMEOUT_MS);
+      const remaining = remainingCollectionTime();
+      if (!remaining) return null;
+      if (totalDocumentBytes >= settings.maxTotalDocumentBytes) {
+        documentLimitReached = true;
+        return null;
+      }
+      const timeoutMs = Math.min(remaining,
+        boundedInteger(rawTimeoutMs, FETCH_TIMEOUT_MS, 1000, FETCH_TIMEOUT_MS));
       const shouldReportAsRelated = reportAsRelated !== false;
       const noteUnavailable = () => {
         if (shouldReportAsRelated) {
@@ -2091,7 +2154,6 @@
           documentLimitReached = documentLimitReached || responseBody.tooLarge;
           return null;
         }
-        totalDocumentBytes += responseBody.bytes || byteLength(responseBody.text);
         try {
           return {
             url: finalUrl,
@@ -2106,6 +2168,7 @@
         noteUnavailable();
         return null;
       } finally {
+        remainingCollectionTime();
         if (timer !== null && typeof clearTimeout === "function") {
           clearTimeout(timer);
         }
@@ -2320,7 +2383,8 @@
     function processRuntimeData() {
       const exactRoute = ["post", "reel"].includes(route.kind);
       const storyRoute = ["story", "highlight"].includes(route.kind);
-      const complete = () => exactRoute ? exactStructuredPostComplete : !storyRoute && Boolean(profilePk());
+      const complete = () => exactRoute ? exactStructuredPostComplete : !storyRoute &&
+        (settings.includeProfilePosts ? itemLimitReached || payloadLimitReached : Boolean(profilePk()));
       if ((!exactRoute && !storyRoute && route.kind !== "profile") || complete()) {
         return;
       }
@@ -2391,6 +2455,16 @@
           }
         } else if (route.kind === "profile") {
           registerMatchingProfile(value, route.username);
+          // Loaded React items can contain full carousels even when the
+          // profile document only exposes their grid covers. Keep traversing
+          // after finding the profile pk, and require each post's own author
+          // before using these page-owned runtime values.
+          processMatchingProfileObject(value, route.pageUrl, route.username);
+          if (objectIdentifier(value) && hasMediaShape(value) &&
+            ownerFromObject(value) === route.username) {
+            addProfilePost(value, route.pageUrl, route.username);
+            return;
+          }
         } else if (exactItemMatches(value) && addExactItem(value, route.pageUrl)) {
           return;
         }
@@ -2796,7 +2870,8 @@
     }
 
     async function collectProfileGridPosts() {
-      if (route.kind !== "profile" || !settings.includeProfilePosts) {
+      if (route.kind !== "profile" || !settings.includeProfilePosts ||
+        itemLimitReached || payloadLimitReached) {
         return;
       }
       const visitedPosts = new Set();
@@ -2842,10 +2917,17 @@
         queuePost(shortcode, postRoute.kind);
       }
 
-      function betterPostSource(candidate, current) {
+      function postSourceIsComplete(object, request) {
+        if (!exactContainerIsComplete(object)) return false;
+        const known = profilePosts.get(request.shortcode);
+        const children = childMedia(object);
+        return !known || (!known.carousel || children.length > 0) &&
+          Math.max(1, children.length) >= known.count;
+      }
+      function betterPostSource(candidate, current, request) {
         if (!current) return true;
-        const candidateComplete = exactContainerIsComplete(candidate);
-        const currentComplete = exactContainerIsComplete(current);
+        const candidateComplete = postSourceIsComplete(candidate, request);
+        const currentComplete = postSourceIsComplete(current, request);
         if (candidateComplete !== currentComplete) return candidateComplete;
         const candidateChildren = childMedia(candidate);
         const currentChildren = childMedia(current);
@@ -2857,13 +2939,13 @@
           candidateChildren.length > currentChildren.length;
       }
 
-      function exactPostFromHtml(html, request) {
+      function exactPostFromValues(values, request) {
         let best = null;
         let inspected = 0;
         const seen = new WeakSet();
         function walk(value, depth) {
           if (!value || depth > MAX_JSON_DEPTH || inspected >= 50000 ||
-            best && exactContainerIsComplete(best) ||
+            best && postSourceIsComplete(best, request) ||
             typeof value !== "object" || seen.has(value)) {
             return;
           }
@@ -2874,24 +2956,44 @@
             ownerFromObject(value) === route.username) {
             const children = childMedia(value);
             if ((children.length || hasMediaShape(value) || imageVariants(value, request.postUrl).length) &&
-              betterPostSource(value, best)) {
+              betterPostSource(value, best, request)) {
               best = value;
             }
           }
           const entries = Array.isArray(value) ? value.slice(0, 2048) : Object.values(value).slice(0, 512);
           for (const child of entries) {
             walk(child, depth + 1);
-            if (best && exactContainerIsComplete(best)) break;
+            if (best && postSourceIsComplete(best, request)) break;
           }
         }
-        for (const script of scriptsFromHtml(html)) {
-          for (const value of parseJsonValues(script.text)) {
-            walk(value, 0);
-            if (best && exactContainerIsComplete(best)) break;
-          }
-          if (best && exactContainerIsComplete(best)) break;
+        for (const value of values) {
+          walk(value, 0);
+          if (best && postSourceIsComplete(best, request)) break;
         }
         return best;
+      }
+      function exactPostFromHtml(html, request) {
+        function* values() {
+          for (const script of scriptsFromHtml(html)) {
+            yield* parseJsonValues(script.text);
+          }
+        }
+        return exactPostFromValues(values(), request);
+      }
+      async function fetchPostGraphql(request) {
+        const endpoint = new URL("/graphql/query/", route.pageUrl);
+        endpoint.searchParams.set("doc_id", INSTAGRAM_POST_QUERY_DOC_ID);
+        endpoint.searchParams.set("variables", JSON.stringify({
+          shortcode: request.shortcode,
+          __relay_internal__pv__PolarisShortDramaEnabledrelayprovider: false,
+          __relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider: false
+        }));
+        const fetched = await fetchInstagramJson(
+          endpoint.href, "profile-post-query", false, EXACT_FETCH_TIMEOUT_MS
+        );
+        if (!fetched || objectList(safeProperty(fetched.value, "errors")).length) return null;
+        const item = exactPostFromValues([fetched.value], request);
+        return item ? { item, url: fetched.url } : null;
       }
       async function fetchExactPost(request) {
         if (fetchedDocumentCount >= settings.maxDocuments || visitedDocuments.has(request.postUrl)) {
@@ -2921,9 +3023,18 @@
         if (item) {
           exact = { item, url: fetched.url };
         }
-        if (!exact || !exactContainerIsComplete(exact.item)) {
+        // The compact exact query exposes carousel children and progressive
+        // video sources even when media-info or the profile feed has only a
+        // cover. Try it before spending the byte budget on full post HTML.
+        if (!exact || !postSourceIsComplete(exact.item, request)) {
+          const graph = await fetchPostGraphql(request);
+          if (graph && betterPostSource(graph.item, exact && exact.item, request)) {
+            exact = graph;
+          }
+        }
+        if (!exact || !postSourceIsComplete(exact.item, request)) {
           const html = await fetchExactPost(request);
-          if (html && betterPostSource(html.item, exact && exact.item)) {
+          if (html && betterPostSource(html.item, exact && exact.item, request)) {
             exact = html;
           }
         }
@@ -3317,6 +3428,9 @@
     if (documentLimitReached) {
       warnings.add("Instagram collection stopped at its bounded document or response-size safety limit.");
     }
+    if (collectionTimeLimitReached) {
+      warnings.add("Instagram collection stopped at its 2-minute safety limit; results may be partial.");
+    }
     if (jsonNodeLimitReached) {
       warnings.add("Instagram structured data reached its bounded traversal safety limit; results may be partial.");
     }
@@ -3349,7 +3463,8 @@
         username: route.username,
         posts: collectedProfilePostIds().size,
         complete: profileTimelineComplete && profileReelsComplete && !incompleteProfilePosts.length &&
-          !itemLimitReached && !payloadLimitReached && !documentLimitReached && !jsonNodeLimitReached
+          !itemLimitReached && !payloadLimitReached && !documentLimitReached &&
+          !collectionTimeLimitReached && !jsonNodeLimitReached
       };
     }
     if (!found.size) {

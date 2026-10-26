@@ -4273,7 +4273,7 @@
               includeStories: Boolean(settings.instagramCollections),
               includeHighlights: Boolean(settings.instagramCollections),
               maxItems: MAX_DISCOVERED_IMAGES,
-              maxDocuments: 32,
+              maxDocuments: settings.instagramCollections ? 32 : 512,
               maxDocumentBytes: 4000000,
               maxTotalDocumentBytes: 32000000,
               maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH
