@@ -81,6 +81,7 @@ class Element {
   append(...nodes) { this.children.push(...nodes); }
   appendChild(node) { this.append(node); return node; }
   replaceChildren(...nodes) { this.children = nodes; }
+  get options() { return this.children; }
   contains() { return true; }
   matches(selector) { return selector === ":popover-open" && this.popoverOpen === true; }
   showPopover() { this.popoverOpen = true; }
@@ -214,13 +215,13 @@ function popupHarness(stored = { local: [], session: [] }) {
             await wait;
           }
           if (scanError) throw new Error("Scan failed");
-          return [{ frameId: 0, result: { images: sourceImages, pageUrl: tab.url, pageTitle: tab.title, warnings: [] } }];
+          return [{ frameId: 0, result: { handled: true, images: sourceImages, pageUrl: tab.url, pageTitle: tab.title, warnings: [] } }];
         }
       }
     }
   };
   vm.createContext(context);
-  for (const file of ["core", "filters", "templates", "tracker", "download-ledger", "gallery"]) {
+  for (const file of ["core", "filters", "templates", "tracker", "download-ledger", "gallery", "instagram"]) {
     vm.runInContext(fs.readFileSync(`${__dirname}/../extension/shared/${file}.js`, "utf8"), context);
   }
   context.ImageDownloaderCollector = function collectImagesFromPage(options, parsed) {
@@ -411,6 +412,46 @@ async function checkRefreshMedia() {
       "A failed clear preserves media; a failed scan must not resurrect cleared media");
     assert.match(harness.elements.get("notice").textContent, /failed/);
     assert.equal(harness.popup.state.busy, false);
+  }
+}
+
+async function checkInstagramCollectionRefresh() {
+  for (const incognito of [false, true]) {
+    const harness = popupHarness();
+    const { popup, tab, elements, stored } = harness;
+    tab.url = "https://www.instagram.com/alice/";
+    tab.incognito = incognito;
+    const post = { ...photo("profile-post"), pageUrl: tab.url,
+      instagramCollections: [{ type: "post", id: "POST1", owner: "alice" }] };
+    const story = { ...photo("active-story"), pageUrl: tab.url,
+      instagramCollections: [{ type: "story", id: "alice", owner: "alice" }] };
+    harness.setImages([post]);
+    assert.equal(await popup.scanPage(), true);
+    popup.state.instagramCollectionFilter = "story";
+    elements.get("instagram-collection-filter-select").value = "story";
+    harness.setImages([story]);
+    assert.equal(await popup.scanPage({ instagramCollections: true, preserveSelection: true }), true);
+    assert.equal(popup.state.instagramCollectionFilter, "story",
+      "Refreshing stories on the same profile must keep the selected story filter");
+    assert.equal(elements.get("instagram-collection-filter-select").value, "story");
+    assert.deepEqual(Array.from(popup.filteredImages(), item => item.url), [story.url]);
+    assert.equal(popup.state.images.length, 2, "The refresh keeps the existing post collection");
+    assert.equal(stored[incognito ? "local" : "session"].length, 0);
+
+    harness.setImages([post]);
+    assert.equal(await popup.scanPage({ live: true, preserveSelection: true }), true);
+    assert.equal(popup.state.instagramCollectionFilter, "story");
+    assert.deepEqual(Array.from(popup.filteredImages(), item => item.url), [story.url]);
+
+    tab.url = "https://www.instagram.com/bob/";
+    harness.setImages([]);
+    assert.equal(await popup.scanPage(), true);
+    assert.equal(popup.state.instagramCollectionFilter, "all", "A different profile resets the collection filter");
+    popup.state.instagramCollectionFilter = "story";
+    tab.incognito = !incognito;
+    assert.equal(await popup.scanPage(), true);
+    assert.equal(popup.state.instagramCollectionFilter, "all", "A privacy-context change resets the collection filter");
+    assert.equal(popup.state.images.length, 0, "Private and normal collections remain separate");
   }
 }
 
@@ -794,6 +835,7 @@ function checkScrolling() {
 (async () => {
   await checkPopup();
   await checkRefreshMedia();
+  await checkInstagramCollectionRefresh();
   await checkSelectionDuringScan();
   await checkSavedCollectionView();
   await checkFixedPageLimit();

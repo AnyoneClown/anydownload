@@ -116,6 +116,7 @@
     const INSTAGRAM_PROFILE_QUERY_DOC_ID = "7898261790222653";
     const INSTAGRAM_REELS_QUERY_DOC_ID = "7845543455542541";
     const INSTAGRAM_STORIES_QUERY_DOC_ID = "28449850404637481";
+    const INSTAGRAM_STORIES_CONNECTION_QUERY_DOC_ID = "29324689403792944";
     const MAX_COLLECTION_MEMBERSHIPS = 16;
     const MAX_FETCH_CONCURRENCY = 3;
     const INSTAGRAM_SCRIPT_MARKER = /["'](?:carousel_media|carouselMedia|contentUrl|content_url|display_resources|display_uri|displayUri|display_url|edge_owner_to_timeline_media|edge_sidecar_to_children|image_url|image_versions2|is_video|media_code|media_type|playback_url|polaris_ordered_timeline_connection|polarisOrderedTimelineConnection|reel_id|reels_media|shortcode|shortcode_media|thumbnailUrl|timeline_media|video_url|video_versions|xdt_[a-z0-9_]+)["']\s*:/i;
@@ -3237,16 +3238,62 @@
       return false;
     }
 
+    function currentStoryQueryDocId() {
+      const queryName = "PolarisStoriesV3ReelPageGalleryQuery";
+      const requireModule = safeProperty(window, "require");
+      if (typeof requireModule === "function") {
+        // Read only this known query's loaded metadata. Do not inspect the
+        // module registry, evaluate script text, or load remote bundles.
+        for (const suffix of ["$Parameters", ".graphql"]) {
+          try {
+            const params = safeProperty(requireModule(`${queryName}${suffix}`), "params");
+            const id = safeText(safeProperty(params, "id"), 80);
+            if (safeProperty(params, "name") === queryName &&
+              safeProperty(params, "operationKind") === "query" && /^\d{5,40}$/.test(id)) {
+              return id;
+            }
+          } catch (_error) {
+            // A profile may not have loaded the story viewer's modules yet.
+          }
+        }
+      }
+      return INSTAGRAM_STORIES_CONNECTION_QUERY_DOC_ID;
+    }
+
     async function fetchReelCollection(reelId, purpose) {
       const endpoint = new URL("/api/v1/feed/reels_media/", route.pageUrl);
       endpoint.searchParams.set("reel_ids", safeText(reelId, 200));
       const fetched = await fetchInstagramJson(endpoint.href, purpose, false);
-      if (fetched || !normalizedProfilePk(reelId)) {
+      const reels = safeProperty(fetched && fetched.value, "reels");
+      const validLegacy = fetched && safeProperty(fetched.value, "status") !== "fail" && (
+        Array.isArray(safeProperty(fetched.value, "reels_media")) ||
+        reels && typeof reels === "object" && !Array.isArray(reels)
+      );
+      if (validLegacy || !normalizedProfilePk(reelId)) {
         return fetched;
       }
-      // The legacy endpoint can fail for an accessible active story even when
-      // highlight requests succeed. Use the same owner-scoped query as the web
-      // story viewer, within the existing request, response and session bounds.
+      // Current viewers use a Relay connection; both the legacy endpoint and
+      // standalone query can fail for an otherwise accessible active story.
+      // Request just this owner's reel, within the shared request/byte budget.
+      const connectionResult = await fetchInstagramJson(
+        new URL("/graphql/query/", route.pageUrl).href,
+        purpose, false, FETCH_TIMEOUT_MS, {
+          docId: currentStoryQueryDocId(),
+          variables: {
+            initial_reel_id: reelId, reel_ids: [reelId], first: 1,
+            last: null, after: null, before: null, is_highlight: false,
+            __relay_internal__pv__PolarisCommunityNoteStoriesLabelEnabledrelayprovider: true
+          }
+        }
+      );
+      const connection = safeProperty(
+        safeProperty(connectionResult && connectionResult.value, "data"),
+        "xdt_api__v1__feed__reels_media__connection"
+      );
+      if (Array.isArray(safeProperty(connection, "edges"))) {
+        return { ...connectionResult, value: connection };
+      }
+      // Retain the standalone fallback for sessions using the older viewer.
       const fallback = await fetchInstagramJson(
         new URL("/graphql/query/", route.pageUrl).href,
         purpose, false, FETCH_TIMEOUT_MS, {
@@ -3260,7 +3307,8 @@
       const collection = safeProperty(
         safeProperty(fallback && fallback.value, "data"), "xdt_api__v1__feed__reels_media"
       );
-      return Array.isArray(safeProperty(collection, "reels_media")) ? fallback : null;
+      return Array.isArray(safeProperty(collection, "reels_media"))
+        ? { ...fallback, value: collection } : null;
     }
 
     async function collectProfileStoriesAndHighlights(pk) {

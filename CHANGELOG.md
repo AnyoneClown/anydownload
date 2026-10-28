@@ -4,6 +4,12 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.24.2] - 2026-10-28
+
+### Fixed
+
+- Restore Instagram active-story collection through the current story viewer's owner-scoped connection query when the older endpoints fail. Use the loaded viewer's query ID when available, retain bounded fallbacks, and keep the current-story filter selected while refreshing the same profile.
+
 ## [1.24.1] - 2026-10-26
 
 ### Changed

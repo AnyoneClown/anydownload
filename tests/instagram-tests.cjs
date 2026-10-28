@@ -321,6 +321,7 @@ async function withPage(url, page, callback, fetchImpl) {
   };
   replacements.window.self = replacements.window;
   replacements.window.top = replacements.window;
+  if (typeof page?.require === "function") replacements.window.require = page.require;
   pageDocument.defaultView = replacements.window;
   replacements.fetch = fetchImpl || (async () => ({ ok: false }));
   const previous = new Map();
@@ -1863,8 +1864,8 @@ async function run() {
       } } })]
     }, {}, async url => { rejectedRequests.push(url); return { ok: false }; });
     assert.deepEqual(rejectedRequests.map(url => new URL(url).pathname), [
-      "/api/v1/feed/reels_media/", "/graphql/query/"
-    ], "Unavailable story metadata gets one bounded web-viewer fallback, then stops");
+      "/api/v1/feed/reels_media/", "/graphql/query/", "/graphql/query/"
+    ], "Unavailable story metadata tries each bounded web-viewer fallback once, then stops");
     assert.equal(rejected.images[0].mediaType, "video");
     let realVideoRequests = 0;
     const realVideo = await scan("https://www.instagram.com/stories/alice/102/", {
@@ -2098,6 +2099,79 @@ async function run() {
     ));
   }
 
+  // The current story viewer uses an owner-scoped Relay connection. The older
+  // reels_media endpoint and standalone query can both fail for a visible story.
+  // Prefer the loaded viewer's operation ID so a rotation needs no release.
+  for (const moduleKind of ["absent", "parameters", "graphql", "invalid", "throws"]) {
+    const requests = [];
+    const modules = [];
+    const rotated = ["parameters", "graphql"].includes(moduleKind);
+    const docId = rotated ? "12345678901234567" : "29324689403792944";
+    const queryName = "PolarisStoriesV3ReelPageGalleryQuery";
+    const params = { name: queryName, operationKind: "query", id: docId };
+    const result = await scan("https://www.instagram.com/alice/", {
+      cookie: "csrftoken=fixture-story-token; sessionid=do-not-copy",
+      scripts: [script({ user: { pk: "42", username: "alice" } })],
+      require: moduleKind === "absent" ? undefined : (name) => {
+        modules.push(name);
+        assert.ok([`${queryName}$Parameters`, `${queryName}.graphql`].includes(name));
+        if (moduleKind === "throws") throw new Error("Module unavailable");
+        if (moduleKind === "invalid") return { params: { ...params, operationKind: "mutation", id: "99999" } };
+        if (moduleKind === "graphql" && name.endsWith("$Parameters")) return undefined;
+        return { params };
+      }
+    }, { includeProfilePosts: false, includeStories: true }, async (url, init) => {
+      requests.push({ url, init });
+      if (new URL(url).pathname === "/api/v1/feed/reels_media/") {
+        // A JSON failure with HTTP 200 must not suppress the fallback either.
+        return jsonResponse(url, { status: "fail" }, { ok: moduleKind === "parameters" });
+      }
+      assert.equal(new URL(url).pathname, "/graphql/query/");
+      const body = new URLSearchParams(init.body);
+      assert.equal(body.get("doc_id"), docId);
+      assert.deepEqual(JSON.parse(body.get("variables")), {
+        initial_reel_id: "42", reel_ids: ["42"], first: 1,
+        last: null, after: null, before: null, is_highlight: false,
+        __relay_internal__pv__PolarisCommunityNoteStoriesLabelEnabledrelayprovider: true
+      });
+      assert.equal(init.method, "POST");
+      assert.equal(init.redirect, "error");
+      assert.equal(init.headers["X-CSRFToken"], "fixture-story-token");
+      return jsonResponse(url, { data: {
+        xdt_api__v1__feed__reels_media__connection: {
+          edges: [{ node: {
+            id: "42", reel_type: "user_reel", user: { pk: "42", username: "alice" },
+            items: [
+              imageNode("902", "https://scontent.cdninstagram.com/current-story.jpg"),
+              videoNode("903", "https://scontent.cdninstagram.com/current-story.mp4",
+                "https://scontent.cdninstagram.com/current-story-poster.jpg"),
+              { ...imageNode("904", "https://scontent.cdninstagram.com/foreign-story.jpg"),
+                user: { username: "bob" } }
+            ]
+          } }, { node: {
+            id: "99", user: { username: "bob" },
+            items: [imageNode("905", "https://scontent.cdninstagram.com/foreign-reel.jpg")]
+          } }], page_info: { has_next_page: false }
+        },
+        // Viewer metadata outside the requested connection is not story media.
+        xdt_viewer: { user: { username: "alice" },
+          items: [imageNode("906", "https://scontent.cdninstagram.com/unrelated.jpg")] }
+      } });
+    });
+    assert.deepEqual(result.images.map(item => item.url), [
+      "https://scontent.cdninstagram.com/current-story.jpg",
+      "https://scontent.cdninstagram.com/current-story.mp4"
+    ], moduleKind);
+    assert.ok(result.images.every(item => item.instagramCollections.length === 1 &&
+      item.instagramCollections[0].type === "story" && item.instagramCollections[0].owner === "alice"));
+    assert.deepEqual(result.warnings, []);
+    assert.equal(requests.length, 2, "A successful connection query needs no standalone fallback");
+    assert.ok(requests.every(({ init }) => init.credentials === "include"));
+    assert.ok(modules.length <= 2);
+    assert.ok(!JSON.stringify(result).includes("fixture-story-token"));
+    assert.ok(!JSON.stringify(requests).includes("do-not-copy"));
+  }
+
   // Instagram's legacy story endpoint can return 500 for a story that its web
   // viewer can read. The owner-scoped GraphQL fallback also works while the
   // independent highlight requests succeed, and keeps failure feedback visible.
@@ -2128,6 +2202,9 @@ async function run() {
       assert.equal(parsed.pathname, "/graphql/query/");
       assert.equal(init.method, "POST");
       const body = new URLSearchParams(init.body);
+      if (body.get("doc_id") === "29324689403792944") {
+        return jsonResponse(url, { data: null, errors: [{ message: "Connection query unavailable" }] });
+      }
       assert.equal(body.get("doc_id"), "28449850404637481");
       assert.deepEqual(JSON.parse(body.get("variables")), {
         reel_ids_arr: ["42"],
@@ -2158,7 +2235,7 @@ async function run() {
       "https://scontent.cdninstagram.com/graphql-story.mp4",
       "https://scontent.cdninstagram.com/trip.jpg"
     ] : ["https://scontent.cdninstagram.com/trip.jpg"]);
-    assert.equal(requests.length, 4, "Only the failed active-story request gets a fallback");
+    assert.equal(requests.length, 5, "Only the failed active-story request gets fallbacks");
     assert.ok(requests.every(({ init }) => init.credentials === "include"));
     assert.ok(!JSON.stringify(result).includes("fixture-story-token"));
     assert.ok(!JSON.stringify(requests).includes("do-not-copy"));

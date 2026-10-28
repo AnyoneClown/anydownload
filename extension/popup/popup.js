@@ -3873,6 +3873,7 @@
     }
     const sameContext = galleryContext && galleryContext.siteKey === siteKey &&
       galleryContext.incognito === Boolean(tab.incognito);
+    const samePageScope = sameContext && state.pageScopeKey === pageScopeKeyForUrl(tab.url);
     if (sameContext && settings.live) {
       return;
     }
@@ -3901,7 +3902,7 @@
     state.ignoredKeys = sameContext ? state.ignoredKeys : new Set();
     state.explicitRedownloads.clear();
     state.showIgnored = false;
-    state.instagramCollectionFilter = "all";
+    if (!samePageScope) state.instagramCollectionFilter = "all";
     state.instagramCollectionMode = state.images.some((image) => image.instagramCollections.length);
     elements["page-label"].textContent = state.pageTitle;
     markFilenamePreviewsDirty();
