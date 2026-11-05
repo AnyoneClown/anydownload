@@ -198,7 +198,7 @@ svg {
 }
 
 .secondary-button {
-  border-color: var(--line);
+  border-color: var(--control-line);
   color: var(--ink);
   background: var(--surface);
   white-space: nowrap;
@@ -726,6 +726,12 @@ svg {
   border-color: color-mix(in srgb, var(--success) 30%, var(--line));
   color: var(--success);
   background: var(--success-soft);
+}
+
+.notice.warning {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--line));
+  color: var(--warning);
+  background: var(--warning-soft);
 }
 
 .image-list {

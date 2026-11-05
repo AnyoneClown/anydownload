@@ -11,6 +11,45 @@
   let pollTimer = null;
   let refreshing = false;
   let privateContext = false;
+  // Firefox reports interruptions as reason codes. Show what happened and
+  // what to do next; the raw code stays available in the tooltip.
+  const DOWNLOAD_ERROR_MESSAGES = Object.freeze({
+    FILE_FAILED: "Firefox could not save the file. Check the download folder, then retry.",
+    FILE_ACCESS_DENIED: "Firefox is not allowed to write to the download folder.",
+    FILE_NO_SPACE: "There is not enough disk space for this file.",
+    FILE_NAME_TOO_LONG: "The file name or folder path is too long. Use a shorter filename template or folder.",
+    FILE_TOO_LARGE: "The file is too large for the download folder's drive.",
+    FILE_VIRUS_INFECTED: "Firefox blocked this file because it may be harmful.",
+    FILE_TRANSIENT_ERROR: "Firefox hit a temporary file error. Retry the download.",
+    FILE_BLOCKED: "Firefox or the system blocked this file.",
+    FILE_SECURITY_CHECK_FAILED: "This file failed a security check.",
+    FILE_TOO_SHORT: "The file ended early. Retry the download.",
+    NETWORK_FAILED: "The network connection failed. Check your connection, then retry.",
+    NETWORK_TIMEOUT: "The server took too long to respond. Retry later.",
+    NETWORK_DISCONNECTED: "The network connection was lost. Retry when you are back online.",
+    NETWORK_SERVER_DOWN: "The server is unreachable. Retry later.",
+    NETWORK_INVALID_REQUEST: "The server rejected the request.",
+    SERVER_FAILED: "The server could not send the file. Retry later.",
+    SERVER_NO_RANGE: "The server cannot resume this download. Retry to start it again.",
+    SERVER_BAD_CONTENT: "The server sent an incomplete or invalid file.",
+    SERVER_UNAUTHORIZED: "The server requires a login for this file. Sign in on the website, rescan the page, then retry.",
+    SERVER_CERT_PROBLEM: "The server's security certificate is not trusted.",
+    SERVER_FORBIDDEN: "The server refused this file. Links from Instagram and similar sites expire, so rescan the page, then retry.",
+    USER_CANCELED: "The download was cancelled in Firefox.",
+    USER_SHUTDOWN: "Firefox closed before the download finished. Retry the download.",
+    CRASH: "Firefox stopped during the download. Retry the download."
+  });
+
+  function describeTaskError(value) {
+    const text = String(value || "");
+    return Object.prototype.hasOwnProperty.call(DOWNLOAD_ERROR_MESSAGES, text)
+      ? DOWNLOAD_ERROR_MESSAGES[text]
+      : text;
+  }
+
+  function taskDisplayName(task) {
+    return String(task && task.filename || "Media download").split(/[\\/]/).pop() || "Media download";
+  }
 
   function cacheElements() {
     for (const id of [
@@ -149,11 +188,15 @@
     return labels[value] || "Unknown";
   }
 
-  function createButton(label, action, targetType, id, className) {
+  function createButton(label, action, targetType, id, className, subject) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = className || "task-button";
     button.textContent = label;
+    if (subject) {
+      // Repeated row actions need distinct names; the visible label comes first.
+      button.setAttribute("aria-label", `${label} ${subject}`);
+    }
     button.dataset.focusKey = `${targetType}:${id}:${action}`;
     button.addEventListener("click", () => performAction(action, targetType, id));
     return button;
@@ -161,17 +204,18 @@
 
   function taskActions(task) {
     const fragment = document.createDocumentFragment();
+    const name = taskDisplayName(task);
     if (["queued", "starting", "in_progress"].includes(task.status)) {
-      fragment.append(createButton("Pause", "pause", "task", task.id));
+      fragment.append(createButton("Pause", "pause", "task", task.id, "", name));
     }
     if (task.status === "paused") {
-      fragment.append(createButton("Resume", "resume", "task", task.id));
+      fragment.append(createButton("Resume", "resume", "task", task.id, "", name));
     }
     if (["queued", "starting", "in_progress", "paused"].includes(task.status)) {
-      fragment.append(createButton("Cancel", "cancel", "task", task.id));
+      fragment.append(createButton("Cancel", "cancel", "task", task.id, "", name));
     }
     if (["failed", "interrupted", "cancelled"].includes(task.status)) {
-      fragment.append(createButton("Retry", "retry", "task", task.id));
+      fragment.append(createButton("Retry", "retry", "task", task.id, "", name));
     }
     if (task.downloadId != null && task.status === "complete" &&
       browser.downloads && typeof browser.downloads.show === "function") {
@@ -179,6 +223,7 @@
       show.type = "button";
       show.className = "task-button";
       show.textContent = "Show";
+      show.setAttribute("aria-label", `Show ${name}`);
       show.dataset.focusKey = `task:${task.id}:show`;
       show.addEventListener("click", () => performDownloadsAction(
         "show",
@@ -199,7 +244,7 @@
     copy.className = "task-copy";
     const title = document.createElement("strong");
     title.className = "task-title";
-    title.textContent = String(task.filename || "Media download").split(/[\\/]/).pop() || "Media download";
+    title.textContent = taskDisplayName(task);
     title.title = task.filename || "";
     const received = Number(task.bytesReceived) || 0;
     const total = Number(task.totalBytes) || 0;
@@ -207,7 +252,8 @@
     if (task.error) {
       const detail = document.createElement("span");
       detail.className = "task-meta";
-      detail.textContent = task.error;
+      detail.textContent = describeTaskError(task.error);
+      if (detail.textContent !== task.error) detail.title = String(task.error);
       copy.append(detail);
     }
     const size = document.createElement("span");
@@ -298,17 +344,18 @@
     pill.textContent = statusLabel(job.status);
     const actions = document.createElement("div");
     actions.className = "job-actions";
+    const jobName = title.textContent;
     if (!job.historyOnly && Number(counts.active || 0) + Number(counts.queued || 0) > 0) {
-      actions.append(createButton("Pause", "pause", "job", job.id, "quiet-button"));
+      actions.append(createButton("Pause", "pause", "job", job.id, "quiet-button", jobName));
     }
     if (!job.historyOnly && Number(counts.paused || 0) > 0) {
-      actions.append(createButton("Resume", "resume", "job", job.id, "quiet-button"));
+      actions.append(createButton("Resume", "resume", "job", job.id, "quiet-button", jobName));
     }
     if (!job.historyOnly && Number(counts.pending || 0) > 0) {
-      actions.append(createButton("Cancel", "cancel", "job", job.id, "danger-button"));
+      actions.append(createButton("Cancel", "cancel", "job", job.id, "danger-button", jobName));
     }
     if (!job.historyOnly && Number(counts.failed || 0) > 0) {
-      actions.append(createButton("Retry failed", "retry", "job", job.id, "quiet-button"));
+      actions.append(createButton("Retry failed", "retry", "job", job.id, "quiet-button", `in ${jobName}`));
     }
     header.append(copy, pill, actions);
     card.append(header);

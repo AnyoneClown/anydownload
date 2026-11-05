@@ -4,6 +4,21 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.25.0] - 2026-11-05
+
+### Changed
+
+- Keep Instagram live updates, Sidebar tab follows, and page reloads to the loaded page after a route has been collected. Network collection runs for explicit scans and at most once per route every 10 minutes, and page-only refreshes no longer replace resolved slides or videos with grid covers.
+- Stop an Instagram collection at the first rate-limit, login, or security-check response, cancel its pending requests, and pause automatic network collection for at least 5 minutes after a rate limit. Explain what happened and what to do next, keep media collected before the stop, and drop generic "may be private" guesses for these cases.
+- Report Instagram results with file and post counts, and show partial results and scan warnings with a distinct warning style.
+- Explain Firefox download interruption codes on the Downloads page with a next step, keeping the original code in the tooltip, and name each row action after its file or batch for assistive technology.
+- Give the Downloads and Trackers buttons accessible names that match their visible labels and announce the queue count. Make secondary-button borders meet non-text contrast in light mode.
+
+### Fixed
+
+- Keep the direct MP4 for a mixed Instagram carousel slide when the feed first exposed a larger cover image for the same slot.
+- Continue parsing later Instagram responses after one oversized script reaches the structured-data traversal limit.
+
 ## [1.24.2] - 2026-10-28
 
 ### Fixed

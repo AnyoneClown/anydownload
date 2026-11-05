@@ -2412,6 +2412,109 @@ async function run() {
     assert.ok(result.warnings.some((warning) => /1-item safety limit/i.test(warning)));
   }
 
+  // Rate limits, login walls, and security checks stop the whole run at the
+  // first response instead of letting every fallback repeat the request.
+  {
+    const failureResponse = (url, status, body, headers = {}) => ({
+      ok: false, status, url,
+      headers: { get(name) {
+        return { "content-type": "application/json", ...headers }[String(name).toLowerCase()] || null;
+      } },
+      async text() { return JSON.stringify(body); }
+    });
+    const grid = Array.from({ length: 24 }, (_, index) => anchor(`https://www.instagram.com/p/GRID${index}/`));
+    const page = { scripts: [script({ data: { user: { pk: "42", username: "alice" } } })], anchors: grid };
+    const cases = [
+      { code: "rate_limited", respond: (url) => failureResponse(url, 429,
+        { message: "Please wait a few minutes before you try again.", status: "fail" }, { "retry-after": "600" }),
+      message: /limiting requests.*Wait about 10 minutes/, retryAfterSeconds: 600 },
+      { code: "rate_limited", respond: (url) => failureResponse(url, 401,
+        { message: "Please wait a few minutes before you try again.", require_login: true, status: "fail" }),
+      message: /limiting requests.*Wait a few minutes/, retryAfterSeconds: 0 },
+      { code: "checkpoint", respond: (url) => failureResponse(url, 400,
+        { message: "checkpoint_required", checkpoint_url: "/challenge/1/", status: "fail" }),
+      message: /confirm your account/, retryAfterSeconds: 0 },
+      { code: "login_required", respond: () => response(
+        "https://www.instagram.com/accounts/login/?next=%2Falice%2F", "<html>Log in</html>"),
+      message: /asked you to log in/, retryAfterSeconds: 0 }
+    ];
+    for (const testCase of cases) {
+      const requests = [];
+      const result = await scan("https://www.instagram.com/alice/", page, { includeProfileReels: true,
+        maxDocuments: 512 }, async (url) => {
+        requests.push(url);
+        return testCase.respond(url);
+      });
+      assert.equal(requests.length, 1, `${testCase.code} must stop every later Instagram request`);
+      assert.equal(result.failure.code, testCase.code);
+      assert.equal(result.failure.retryAfterSeconds, testCase.retryAfterSeconds);
+      assert.match(result.warnings[0], testCase.message);
+      assert.ok(!result.warnings.some((warning) => /may be private|incomplete|unavailable to the current/.test(warning)),
+        "A classified failure replaces generic availability guesses");
+      assert.equal(result.profileCollection.complete, false);
+    }
+
+    // A generic 403 from one endpoint is not a reason to stop other strategies.
+    const requests = [];
+    const result = await scan("https://www.instagram.com/alice/", page, {}, async (url) => {
+      requests.push(url);
+      return failureResponse(url, 403, { message: "Not allowed", status: "fail" });
+    });
+    assert.ok(requests.length > 1);
+    assert.equal(result.failure, null);
+  }
+
+  // Page-only refreshes parse the loaded page and never send requests or
+  // report the skipped network history as incomplete.
+  {
+    const requests = [];
+    const user = { pk: "42", username: "alice" };
+    const result = await scan("https://www.instagram.com/alice/", {
+      scripts: [script({ data: { user: { ...user, edge_owner_to_timeline_media: { edges: [{ node: {
+        code: "ONPAGE1", user: { username: "alice" },
+        ...imageNode("ONPAGE1", "https://scontent.cdninstagram.com/onpage.jpg")
+      } }] } } } })],
+      anchors: [anchor("https://www.instagram.com/p/ONPAGE1/"), anchor("https://www.instagram.com/p/OTHER2/")]
+    }, { allowNetwork: false, includeProfileReels: true, maxDocuments: 512 }, async (url) => {
+      requests.push(url);
+      return jsonResponse(url, {});
+    });
+    assert.equal(requests.length, 0);
+    assert.deepEqual(result.images.map((item) => item.url), ["https://scontent.cdninstagram.com/onpage.jpg"]);
+    assert.deepEqual(result.warnings, []);
+    assert.equal(result.profileCollection, null);
+    assert.equal(result.failure, null);
+  }
+
+  // A cover-only carousel can expose a larger JPEG than the slide's direct
+  // MP4. The video must win the slot, keeping the cover as its preview.
+  {
+    const user = { pk: "42", username: "alice" };
+    const coverOnly = { code: "MIXED1", user, media_type: 8, carousel_media_count: 2,
+      ...imageNode("cover", "https://scontent.cdninstagram.com/mixed-cover.jpg", 1440, 1800) };
+    const full = { code: "MIXED1", user, media_type: 8, carousel_media_count: 2, carousel_media: [
+      { media_type: 2, ...videoNode("slide-1", "https://scontent.cdninstagram.com/mixed-1.mp4",
+        "https://scontent.cdninstagram.com/mixed-1.jpg", 720, 900) },
+      { media_type: 1, ...imageNode("slide-2", "https://scontent.cdninstagram.com/mixed-2.jpg") }
+    ] };
+    const result = await scan("https://www.instagram.com/alice/", {
+      scripts: [script({ data: { user } })]
+    }, {}, async (url) => {
+      const pathname = new URL(url).pathname;
+      if (pathname === "/api/v1/feed/user/42/") {
+        return jsonResponse(url, { items: [coverOnly], more_available: false });
+      }
+      if (pathname.startsWith("/api/v1/media/")) return jsonResponse(url, { items: [full] });
+      return response(url, "", { ok: false });
+    });
+    const first = result.images.find((item) => /:MIXED1:1$/.test(item.identityKey));
+    assert.ok(first, "The first carousel slot is collected");
+    assert.equal(first.url, "https://scontent.cdninstagram.com/mixed-1.mp4");
+    assert.equal(first.mediaType, "video");
+    assert.ok(first.previewUrl, "The replaced cover remains available as a preview");
+    assert.ok(result.images.some((item) => item.url === "https://scontent.cdninstagram.com/mixed-2.jpg"));
+  }
+
   // The source must never inspect cookies, local/session storage, IndexedDB, or
   // execute page script text while extracting already-exposed data.
   {

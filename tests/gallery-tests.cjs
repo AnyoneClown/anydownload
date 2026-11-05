@@ -110,6 +110,8 @@ function popupHarness(stored = { local: [], session: [] }) {
   let updatedListener = null;
   let clearError = false;
   let scanError = false;
+  const scriptCalls = [];
+  let resultExtras = {};
   const tab = { id: 1, url: `${siteKey}/one`, title: "one", incognito: false, windowId: 1, active: true };
   const context = {
     URL, TextEncoder, TextDecoder, console, Date,
@@ -189,6 +191,7 @@ function popupHarness(stored = { local: [], session: [] }) {
       },
       scripting: {
         async executeScript({ func, args }) {
+          scriptCalls.push({ name: func.name, args });
           if (func.name === "scrollPage") {
             scrolls += 1;
             if (profilePages) {
@@ -215,7 +218,9 @@ function popupHarness(stored = { local: [], session: [] }) {
             await wait;
           }
           if (scanError) throw new Error("Scan failed");
-          return [{ frameId: 0, result: { handled: true, images: sourceImages, pageUrl: tab.url, pageTitle: tab.title, warnings: [] } }];
+          return [{ frameId: 0, result: Object.assign({
+            handled: true, images: sourceImages, pageUrl: tab.url, pageTitle: tab.title, warnings: []
+          }, resultExtras) }];
         }
       }
     }
@@ -245,7 +250,8 @@ function popupHarness(stored = { local: [], session: [] }) {
   elements.get("filename-template-input").value = "{page-title}-{index}-{filename}";
   elements.get("backgrounds-input").checked = true;
   return {
-    popup, tab, stored, elements, fetchedPages,
+    popup, tab, stored, elements, fetchedPages, scriptCalls,
+    setResultExtras(extras) { resultExtras = extras || {}; },
     enableNextPages() { continuePagination = true; },
     setProfilePages(pages, sourceUrl) {
       profilePages = pages;
@@ -453,6 +459,67 @@ async function checkInstagramCollectionRefresh() {
     assert.equal(popup.state.instagramCollectionFilter, "all", "A privacy-context change resets the collection filter");
     assert.equal(popup.state.images.length, 0, "Private and normal collections remain separate");
   }
+}
+
+async function checkInstagramNetworkScope() {
+  const harness = popupHarness();
+  const { popup, tab, elements } = harness;
+  const instagramNetwork = () => harness.scriptCalls
+    .filter((call) => call.name === "collectFromPage")
+    .map((call) => call.args[0].allowNetwork);
+  tab.url = "https://www.instagram.com/alice/";
+  const membership = [{ type: "post", id: "POST1", owner: "alice" }];
+  const resolved = { ...photo("slide"), url: "https://cdn.test/slide.mp4", mediaType: "video",
+    pageUrl: tab.url, identityKey: "instagram:post:alice:POST1:1", instagramCollections: membership };
+  const cover = { ...photo("cover"), width: 1440, height: 1800, pageUrl: tab.url,
+    identityKey: "instagram:post:alice:POST1:1", instagramCollections: membership };
+  const loaded = { ...photo("loaded"), pageUrl: tab.url, identityKey: "instagram:post:alice:POST2:1",
+    instagramCollections: [{ type: "post", id: "POST2", owner: "alice" }] };
+
+  harness.setImages([resolved]);
+  harness.setResultExtras({ profileCollection: { username: "alice", posts: 1, complete: true } });
+  assert.equal(await popup.scanPage(), true);
+  assert.deepEqual(instagramNetwork(), [true], "Opening the manager collects the profile through the network");
+  assert.match(elements.get("notice").textContent, /1 file from 1 post/);
+  assert.match(elements.get("notice").className, /success/);
+
+  // Live updates on the same profile re-read only the loaded page and must not
+  // replace a resolved slide with its larger grid cover.
+  harness.setImages([cover, loaded]);
+  harness.setResultExtras({});
+  assert.equal(await popup.scanPage({ live: true, preserveSelection: true }), true);
+  assert.deepEqual(instagramNetwork(), [true, false]);
+  assert.deepEqual(Array.from(popup.state.images, (image) => image.url),
+    ["https://cdn.test/slide.mp4", "https://cdn.test/loaded.jpg"]);
+  assert.equal(await popup.scanPage({ preserveSelection: true, automatic: true }), true);
+  assert.deepEqual(instagramNetwork(), [true, false, false], "Page reloads are automatic scans too");
+  assert.equal(await popup.scanPage({ preserveSelection: true }), true);
+  assert.deepEqual(instagramNetwork(), [true, false, false, true], "An explicit scan always uses the network");
+
+  // A new route may use the network once; a rate limit pauses automatic runs.
+  tab.url = "https://www.instagram.com/bob/";
+  harness.setImages([]);
+  harness.setResultExtras({
+    failure: { code: "rate_limited", httpStatus: 429, retryAfterSeconds: 0 },
+    warnings: ["Instagram is limiting requests from this account."]
+  });
+  assert.equal(await popup.scanPage({ live: true, preserveSelection: true }), true);
+  assert.deepEqual(instagramNetwork().slice(-1), [true]);
+  assert.match(elements.get("notice").className, /error/);
+  assert.match(elements.get("notice").textContent, /limiting requests/);
+  tab.url = "https://www.instagram.com/carol/";
+  harness.setResultExtras({});
+  assert.equal(await popup.scanPage({ live: true, preserveSelection: true }), true);
+  assert.deepEqual(instagramNetwork().slice(-1), [false], "Automatic scans wait out an Instagram rate limit");
+  harness.setImages([loaded]);
+  harness.setResultExtras({
+    failure: { code: "login_required", httpStatus: 401, retryAfterSeconds: 0 },
+    warnings: ["Instagram asked you to log in."]
+  });
+  assert.equal(await popup.scanPage({ preserveSelection: true }), true);
+  assert.deepEqual(instagramNetwork().slice(-1), [true]);
+  assert.match(elements.get("notice").className, /warning/, "Partial results after a block are a warning");
+  assert.match(elements.get("notice").textContent, /log in\. Kept 1 file collected before Instagram stopped/);
 }
 
 async function checkSelectionDuringScan() {
@@ -836,6 +903,7 @@ function checkScrolling() {
   await checkPopup();
   await checkRefreshMedia();
   await checkInstagramCollectionRefresh();
+  await checkInstagramNetworkScope();
   await checkSelectionDuringScan();
   await checkSavedCollectionView();
   await checkFixedPageLimit();

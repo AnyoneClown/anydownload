@@ -539,12 +539,30 @@
   }
 
   function accumulateLiveImages(previousImages, scannedImages, options) {
-    const settings = Object.assign({ maxImages: 5000, maxPayloadLength: 2000000 }, options || {});
+    const settings = Object.assign({
+      maxImages: 5000, maxPayloadLength: 2000000, preferExisting: false
+    }, options || {});
     const byIdentity = new Map();
-    for (const image of [...(previousImages || []), ...(scannedImages || [])]) {
+    const previousKeys = new Set();
+    for (const image of previousImages || []) {
       if (image && typeof image.url === "string" && image.url) {
         const key = mediaIdentityKey(image);
+        previousKeys.add(key);
         byIdentity.set(key, mergeMediaRecord(byIdentity.get(key), image));
+      }
+    }
+    for (const image of scannedImages || []) {
+      if (image && typeof image.url === "string" && image.url) {
+        const key = mediaIdentityKey(image);
+        const current = byIdentity.get(key);
+        byIdentity.set(key, settings.preferExisting && current && previousKeys.has(key)
+          ? Object.assign({}, current, {
+            instagramCollections: mergeInstagramCollections(
+              current.instagramCollections,
+              image.instagramCollections
+            )
+          })
+          : mergeMediaRecord(current, image));
       }
     }
 
@@ -697,6 +715,9 @@
   const LIVE_CAPTURE_INTERVAL_MS = 1600;
   const LIVE_RETRY_INTERVAL_MS = 4000;
   const LIVE_FORCE_SCAN_MS = 12000;
+  const INSTAGRAM_AUTOMATIC_NETWORK_MS = 10 * 60 * 1000;
+  const INSTAGRAM_RATE_LIMIT_COOLDOWN_MS = 5 * 60 * 1000;
+  const MAX_INSTAGRAM_NETWORK_SCOPES = 64;
   const SIDEBAR_SCAN_DEBOUNCE_MS = 140;
   const FILTER_RENDER_DEBOUNCE_MS = 90;
   const SIDEBAR_ALL_URLS_PERMISSION = Object.freeze({ origins: ["<all_urls>"] });
@@ -813,6 +834,11 @@
   let liveFingerprint = "";
   let liveLastFullScanAt = 0;
   let liveRetryNoticeText = "";
+  // Instagram network collection is expensive and uses the signed-in session.
+  // Automatic scans (live updates, Sidebar follow, page reloads) request it at
+  // most once per route every few minutes; explicit scans always may.
+  const instagramNetworkScopes = new Map();
+  let instagramRateLimitedUntil = 0;
   let queueBadgeGeneration = 0;
   let queueBadgePollingStopped = false;
   let queueBadgeTimer = null;
@@ -1773,17 +1799,20 @@
         ? `${pending.toLocaleString()} download${pending === 1 ? "" : "s"} queued or active`
         : "Download queue and statistics";
       elements["history-button"].title = label;
-      elements["history-button"].setAttribute(
-        "aria-label",
-        pending ? `Open download queue: ${label}` : "Open download queue and statistics"
-      );
+      // Keep the visible "Downloads" label first (WCAG 2.5.3) and announce the
+      // badge count, which is hidden from assistive technology on its own.
+      if (pending) {
+        elements["history-button"].setAttribute("aria-label", `Downloads, ${label}`);
+      } else {
+        elements["history-button"].removeAttribute("aria-label");
+      }
     } catch (_error) {
       if (generation !== queueBadgeGeneration) {
         return;
       }
       elements["queue-badge"].hidden = true;
       elements["history-button"].title = "Download queue and statistics";
-      elements["history-button"].setAttribute("aria-label", "Open download queue and statistics");
+      elements["history-button"].removeAttribute("aria-label");
     }
   }
 
@@ -4168,12 +4197,61 @@
     }
   }
 
+  function instagramNetworkScopeKey(tab) {
+    const routeKey = Instagram && typeof Instagram.routeKeyForUrl === "function"
+      ? Instagram.routeKeyForUrl(tab.url)
+      : "";
+    return `${tab.incognito ? "private" : "normal"}:${routeKey || String(tab.url || "")}`;
+  }
+
+  function claimInstagramNetwork(tab, automatic, now) {
+    const key = instagramNetworkScopeKey(tab);
+    const collectedAt = instagramNetworkScopes.get(key) || 0;
+    if (automatic && (now < instagramRateLimitedUntil ||
+      collectedAt && now - collectedAt < INSTAGRAM_AUTOMATIC_NETWORK_MS)) {
+      return "";
+    }
+    instagramNetworkScopes.delete(key);
+    instagramNetworkScopes.set(key, now);
+    while (instagramNetworkScopes.size > MAX_INSTAGRAM_NETWORK_SCOPES) {
+      instagramNetworkScopes.delete(instagramNetworkScopes.keys().next().value);
+    }
+    return key;
+  }
+
+  function noteInstagramFailure(failure, now) {
+    if (!failure || failure.code !== "rate_limited") {
+      return;
+    }
+    const retryAfterMs = Math.min(3600, Math.max(0, Number(failure.retryAfterSeconds) || 0)) * 1000;
+    instagramRateLimitedUntil = now + Math.max(INSTAGRAM_RATE_LIMIT_COOLDOWN_MS, retryAfterMs);
+  }
+
+  function countLabel(count, singular, plural) {
+    const value = Math.max(0, Number(count) || 0);
+    return `${value.toLocaleString()} ${value === 1 ? singular : plural || `${singular}s`}`;
+  }
+
+  function instagramResultSummary(run) {
+    if (!run || !run.network || !run.found) {
+      return "";
+    }
+    const files = countLabel(run.found, "file");
+    const posts = run.profile && Number(run.profile.posts) > 0
+      ? ` from ${countLabel(run.profile.posts, "post")}`
+      : "";
+    return run.failure
+      ? `Kept ${files}${posts} collected before Instagram stopped the requests.`
+      : `Collected ${files}${posts}.`;
+  }
+
   async function scanPage(options) {
     const settings = Object.assign({
       preserveSelection: false,
       quiet: false,
       pinnedSource: false,
       live: false,
+      automatic: false,
       instagramCollections: false,
       tabId: null,
       sidebarFollow: false,
@@ -4192,6 +4270,7 @@
     let previousInstagramCollectionMode = state.instagramCollectionMode;
     let scanTab = null;
     let succeeded = false;
+    let instagramClaimKey = "";
     state.liveScanning = Boolean(settings.live);
     state.busy = true;
     if (!settings.preserveSelection && !state.images.length) {
@@ -4239,6 +4318,7 @@
       let instagramWarning = "";
       let instagramCollectionSucceeded = false;
       let instagramProfileCollection = null;
+      const instagramRun = { network: false, found: 0, profile: null, failure: null };
       let preservedInstagramFallback = false;
       let fapFolderWarning = "";
       let fapFolderCollectionSucceeded = false;
@@ -4259,9 +4339,14 @@
       );
 
       if (instagramPage) {
-        if (settings.instagramCollections) {
+        const automaticScan = !settings.instagramCollections &&
+          Boolean(settings.live || settings.sidebarFollow || settings.automatic);
+        instagramClaimKey = claimInstagramNetwork(tab, automaticScan, Date.now());
+        // Without network access the run only adds what the page already shows.
+        instagramRun.network = Boolean(instagramClaimKey);
+        if (instagramRun.network && settings.instagramCollections) {
           elements["page-label"].textContent = "Collecting Instagram stories and highlights…";
-        } else if (Instagram.canCollectRelated(tab.url)) {
+        } else if (instagramRun.network && Instagram.canCollectRelated(tab.url)) {
           elements["page-label"].textContent = "Collecting all profile posts, carousel slides, and reels…";
         }
         try {
@@ -4273,6 +4358,7 @@
               includeProfilePosts: !settings.instagramCollections,
               includeStories: Boolean(settings.instagramCollections),
               includeHighlights: Boolean(settings.instagramCollections),
+              allowNetwork: instagramRun.network,
               maxItems: MAX_DISCOVERED_IMAGES,
               maxDocuments: settings.instagramCollections ? 32 : 512,
               maxDocumentBytes: 4000000,
@@ -4286,6 +4372,12 @@
             injectionResults = instagramResults;
             instagramCollectionSucceeded = Boolean(settings.instagramCollections);
             instagramProfileCollection = instagramResult.profileCollection;
+            instagramRun.found = instagramResult.images.length;
+            instagramRun.profile = instagramResult.profileCollection || null;
+            instagramRun.failure = instagramResult.failure && typeof instagramResult.failure === "object"
+              ? instagramResult.failure
+              : null;
+            noteInstagramFailure(instagramRun.failure, Date.now());
           } else if (settings.instagramCollections) {
             const detail = firstInstagramResult && firstInstagramResult.error
               ? ` (${firstInstagramResult.error})`
@@ -4537,7 +4629,10 @@
       } else if (preserveThisPage) {
         const accumulated = accumulateLiveImages(previousImages, merged.images, {
           maxImages: MAX_DISCOVERED_IMAGES,
-          maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH
+          maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH,
+          // A page-only Instagram refresh sees grid covers and thumbnails;
+          // it must not replace slides and videos resolved by the network run.
+          preferExisting: instagramPage && !instagramRun.network
         });
         if (accumulated.trimmed) {
           merged.warnings.push(`Automatic live updates reached the ${MAX_DISCOVERED_IMAGES.toLocaleString()}-item or 2 MB safety limit.`);
@@ -4579,10 +4674,19 @@
       const addedCount = preserveThisPage
         ? merged.images.filter((image) => !previousByIdentity.has(mediaIdentityKey(image))).length
         : 0;
-      if (merged.warnings.length) {
-        setNotice(merged.warnings.join(" "));
+      const instagramSummary = instagramResultSummary(instagramRun);
+      if (instagramRun.failure) {
+        setNotice(
+          [...merged.warnings, instagramSummary].filter(Boolean).join(" "),
+          instagramRun.found ? "warning" : "error"
+        );
+      } else if (merged.warnings.length) {
+        setNotice([instagramSummary, ...merged.warnings].filter(Boolean).join(" "), "warning");
       } else if (instagramProfileCollection && instagramProfileCollection.complete) {
-        setNotice("Collected the account’s full post and reels history, including carousel slides.", "success");
+        setNotice(
+          `Collected the account’s full post and reels history: ${countLabel(instagramRun.found, "file")} from ${countLabel(instagramProfileCollection.posts, "post")}, including carousel slides.`,
+          "success"
+        );
       } else if (settings.live && addedCount) {
         setNotice(
           `Automatic live updates added ${addedCount.toLocaleString()} new media item${addedCount === 1 ? "" : "s"}. Keep scrolling to load more.`,
@@ -4646,6 +4750,11 @@
         setNotice(`${guidance} (${message})`, "error");
       }
     } finally {
+      if (!succeeded && instagramClaimKey) {
+        // A discarded run did not reach the gallery; let the next automatic
+        // scan of this route collect it again.
+        instagramNetworkScopes.delete(instagramClaimKey);
+      }
       state.liveScanning = false;
       state.busy = false;
       renderImages();
@@ -5558,7 +5667,7 @@
         scheduleSourceRescan(generation);
         return;
       }
-      const scanned = await scanPage({ pinnedSource: true, preserveSelection: true });
+      const scanned = await scanPage({ pinnedSource: true, preserveSelection: true, automatic: true });
       if (scanned && generation === sourcePageGeneration) {
         await startLiveCapture({ skipInitialScan: true, quiet: true });
       }

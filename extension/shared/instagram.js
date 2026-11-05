@@ -89,6 +89,9 @@
       includeProfileReels: options.includeProfileReels !== false,
       includeStories: options.includeStories === true || options.includeRelated === true,
       includeHighlights: options.includeHighlights === true || options.includeRelated === true,
+      // Live refreshes re-read only the loaded page. Network collection runs
+      // for explicit scans and the first visit to each route.
+      allowNetwork: options.allowNetwork !== false,
       maxItems: boundedInteger(options.maxItems, 500, 1, 1500),
       maxDocuments: boundedInteger(options.maxDocuments, 16, 1, 512),
       maxDocumentBytes: boundedInteger(options.maxDocumentBytes, 4000000, 16384, 4000000),
@@ -151,6 +154,10 @@
     let profileAnchorCache = null;
     let profileTimelineComplete = false;
     let profileReelsComplete = !settings.includeProfileReels;
+    // The first rate-limit, login, or security-check response stops every
+    // later request in this run so fallbacks cannot repeat the failure.
+    let blockingFailure = null;
+    const activeRequestControllers = new Set();
     let utf8Encoder = null;
     try {
       utf8Encoder = typeof TextEncoder === "function" ? new TextEncoder() : null;
@@ -886,12 +893,20 @@
           return;
         }
         const photoUpgrade = details.originalMediaType === 1 && existing.originalMediaType !== 1;
+        // A carousel cover can be a larger JPEG than the slide's direct MP4.
+        // A video for the same slot always wins over a non-photo image, and a
+        // later image never replaces a resolved video, whatever their sizes.
+        const videoUpgrade = !photoUpgrade && details.mediaType === "video" &&
+          existing.mediaType !== "video";
+        const imageForVideo = !photoUpgrade && details.mediaType !== "video" &&
+          existing.mediaType === "video";
         const currentArea = (Number(existing.width) || 0) * (Number(existing.height) || 0);
         const nextArea = (Number(details.width) || 0) * (Number(details.height) || 0);
-        if ((photoUpgrade || nextArea >= currentArea) && existing.url !== url) {
+        if (!imageForVideo && (photoUpgrade || videoUpgrade || nextArea >= currentArea) &&
+          existing.url !== url) {
           const nextPreviewUrl = details.previewUrl && details.previewUrl !== url
             ? details.previewUrl
-            : "";
+            : videoUpgrade ? existing.previewUrl || existing.url : "";
           const oldPayloadLength = existing.url.length + String(existing.previewUrl || "").length;
           const nextPayloadLength = url.length + nextPreviewUrl.length;
           if (totalPayloadLength - oldPayloadLength + nextPayloadLength <= settings.maxPayloadLength) {
@@ -914,17 +929,23 @@
           delete existing.mimeType;
           delete existing.duration;
         }
-        if (details.mediaType === "video") {
+        if (details.mediaType === "video" && existing.url === url) {
+          if (videoUpgrade) {
+            // Describe the video file, not the larger cover it replaced.
+            existing.width = 0;
+            existing.height = 0;
+          }
           existing.mediaType = "video";
           existing.mimeType = "video/mp4";
         }
         existing.width = Math.max(existing.width || 0, details.width || 0);
         existing.height = Math.max(existing.height || 0, details.height || 0);
         existing.alt = existing.alt || details.alt || "";
-        if (!existing.previewUrl && details.previewUrl &&
-          totalPayloadLength + details.previewUrl.length <= settings.maxPayloadLength) {
-          existing.previewUrl = details.previewUrl;
-          totalPayloadLength += details.previewUrl.length;
+        const candidatePreviewUrl = details.previewUrl || (imageForVideo ? url : "");
+        if (!existing.previewUrl && candidatePreviewUrl && candidatePreviewUrl !== existing.url &&
+          totalPayloadLength + candidatePreviewUrl.length <= settings.maxPayloadLength) {
+          existing.previewUrl = candidatePreviewUrl;
+          totalPayloadLength += candidatePreviewUrl.length;
         }
         if (details.duration) {
           existing.duration = Math.max(existing.duration || 0, details.duration);
@@ -1423,6 +1444,9 @@
 
     function processJson(rootValue, sourceRoute, baseUrl, trustedLdRoot) {
       let visitedNodes = 0;
+      // The traversal limit is per JSON value: one oversized script must not
+      // stop later profile, highlight, or story responses from being parsed.
+      let nodeLimitReached = false;
       const seen = typeof WeakSet === "function" ? new WeakSet() : null;
       const processedContainers = typeof WeakSet === "function" ? new WeakSet() : null;
 
@@ -1488,7 +1512,7 @@
 
       function walk(value, depth, parentKey, isRoot) {
         if (
-          jsonNodeLimitReached ||
+          nodeLimitReached ||
           hasCompleteExactCollection(sourceRoute) ||
           depth > MAX_JSON_DEPTH ||
           value == null
@@ -1513,6 +1537,7 @@
         }
         visitedNodes += 1;
         if (visitedNodes > MAX_JSON_NODES) {
+          nodeLimitReached = true;
           jsonNodeLimitReached = true;
           return;
         }
@@ -2005,7 +2030,108 @@
       return remaining;
     }
 
+    function networkAllowed() {
+      return settings.allowNetwork && !blockingFailure;
+    }
+
+    function responseHeader(response, name) {
+      const headers = response && response.headers;
+      if (!headers || typeof headers.get !== "function") {
+        return "";
+      }
+      try {
+        return safeText(headers.get(name), 200);
+      } catch (_error) {
+        return "";
+      }
+    }
+
+    function retryAfterSeconds(response) {
+      const raw = responseHeader(response, "retry-after").trim();
+      if (/^\d{1,6}$/.test(raw)) {
+        return Math.min(86400, Number(raw));
+      }
+      const date = raw ? Date.parse(raw) : NaN;
+      return Number.isFinite(date)
+        ? Math.max(0, Math.min(86400, Math.ceil((date - Date.now()) / 1000)))
+        : 0;
+    }
+
+    function failureCodeFromUrl(value) {
+      let pathname = "";
+      try {
+        pathname = new URL(String(value || "")).pathname.toLowerCase();
+      } catch (_error) {
+        return "";
+      }
+      if (/^\/challenge(?:\/|$)/.test(pathname)) return "checkpoint";
+      if (/^\/accounts\/login(?:\/|$)/.test(pathname)) return "login_required";
+      return "";
+    }
+
+    function failureCodeFromPayload(value) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return "";
+      }
+      const message = safeText(safeProperty(value, "message"), 500).toLowerCase();
+      if (/checkpoint|challenge_required/.test(message) || safeProperty(value, "checkpoint_url")) {
+        return "checkpoint";
+      }
+      if (/please wait|few minutes|feedback_required|rate.?limit|too many requests/.test(message) ||
+        safeProperty(value, "spam") === true) {
+        return "rate_limited";
+      }
+      if (/login_required|not.?logged.?in/.test(message) || safeProperty(value, "require_login") === true) {
+        return "login_required";
+      }
+      return "";
+    }
+
+    function stopForFailure(code, response) {
+      if (!code || blockingFailure) {
+        return;
+      }
+      const status = Number(response && response.status);
+      blockingFailure = {
+        code,
+        httpStatus: Number.isSafeInteger(status) && status >= 100 && status <= 599 ? status : 0,
+        retryAfterSeconds: code === "rate_limited" ? retryAfterSeconds(response) : 0
+      };
+      for (const controller of activeRequestControllers) {
+        try {
+          controller.abort();
+        } catch (_error) {
+          // A completed request may no longer accept an abort signal.
+        }
+      }
+      activeRequestControllers.clear();
+    }
+
+    async function inspectFailedResponse(response) {
+      if (!response) {
+        return;
+      }
+      const status = Number(response.status);
+      let code = failureCodeFromUrl(response.url);
+      const contentType = responseHeader(response, "content-type").toLowerCase();
+      const declaredLength = Number(responseHeader(response, "content-length"));
+      if (!code && /json/.test(contentType) && !(declaredLength > 65536)) {
+        try {
+          const body = await readResponseText(response);
+          code = body.ok && body.text.length <= 65536
+            ? failureCodeFromPayload(JSON.parse(body.text))
+            : "";
+        } catch (_error) {
+          code = "";
+        }
+      }
+      if (!code && status === 429) code = "rate_limited";
+      if (!code && status === 401) code = "login_required";
+      stopForFailure(code, response);
+    }
+
     async function fetchHtmlDocument(entry, reportAsRelated, rawTimeoutMs) {
+      if (!networkAllowed()) return null;
       const remaining = remainingCollectionTime();
       if (!remaining) return null;
       if (totalDocumentBytes >= settings.maxTotalDocumentBytes) {
@@ -2016,7 +2142,7 @@
         boundedInteger(rawTimeoutMs, FETCH_TIMEOUT_MS, 1000, FETCH_TIMEOUT_MS));
       const shouldReportAsRelated = reportAsRelated !== false;
       const noteUnavailable = () => {
-        if (shouldReportAsRelated) {
+        if (shouldReportAsRelated && !blockingFailure) {
           inaccessibleRelatedCount += 1;
         }
       };
@@ -2028,6 +2154,7 @@
       let timer = null;
       try {
         controller = typeof AbortController === "function" ? new AbortController() : null;
+        if (controller) activeRequestControllers.add(controller);
         if (controller && typeof setTimeout === "function") {
           timer = setTimeout(() => controller.abort(), timeoutMs);
         }
@@ -2040,12 +2167,18 @@
           headers: { Accept: "text/html,application/xhtml+xml" }
         });
         if (!response || !response.ok) {
+          await inspectFailedResponse(response);
           noteUnavailable();
           return null;
         }
         const finalUrl = instagramHttpUrl(response.url || entry.url, entry.url);
         if (!finalUrl) {
           noteUnavailable();
+          return null;
+        }
+        const redirectFailure = failureCodeFromUrl(finalUrl);
+        if (redirectFailure) {
+          stopForFailure(redirectFailure, response);
           return null;
         }
         const contentType = safeText(
@@ -2066,6 +2199,7 @@
         noteUnavailable();
         return null;
       } finally {
+        if (controller) activeRequestControllers.delete(controller);
         remainingCollectionTime();
         if (timer !== null && typeof clearTimeout === "function") {
           clearTimeout(timer);
@@ -2074,6 +2208,7 @@
     }
 
     async function fetchInstagramJson(rawUrl, purpose, reportAsRelated, rawTimeoutMs, graphQuery) {
+      if (!networkAllowed()) return null;
       const remaining = remainingCollectionTime();
       if (!remaining) return null;
       if (totalDocumentBytes >= settings.maxTotalDocumentBytes) {
@@ -2084,7 +2219,7 @@
         boundedInteger(rawTimeoutMs, FETCH_TIMEOUT_MS, 1000, FETCH_TIMEOUT_MS));
       const shouldReportAsRelated = reportAsRelated !== false;
       const noteUnavailable = () => {
-        if (shouldReportAsRelated) {
+        if (shouldReportAsRelated && !blockingFailure) {
           inaccessibleRelatedCount += 1;
         }
       };
@@ -2108,6 +2243,7 @@
       let timer = null;
       try {
         controller = typeof AbortController === "function" ? new AbortController() : null;
+        if (controller) activeRequestControllers.add(controller);
         if (controller && typeof setTimeout === "function") {
           timer = setTimeout(() => controller.abort(), timeoutMs);
         }
@@ -2134,12 +2270,18 @@
           headers
         });
         if (!response || !response.ok) {
+          await inspectFailedResponse(response);
           noteUnavailable();
           return null;
         }
         const finalUrl = instagramHttpUrl(response.url || url, url);
         if (!finalUrl) {
           noteUnavailable();
+          return null;
+        }
+        const redirectFailure = failureCodeFromUrl(finalUrl);
+        if (redirectFailure) {
+          stopForFailure(redirectFailure, response);
           return null;
         }
         const contentType = safeText(
@@ -2155,20 +2297,30 @@
           documentLimitReached = documentLimitReached || responseBody.tooLarge;
           return null;
         }
+        let value;
         try {
-          return {
-            url: finalUrl,
-            purpose: safeText(purpose, 40),
-            value: JSON.parse(responseBody.text)
-          };
+          value = JSON.parse(responseBody.text);
         } catch (_error) {
           noteUnavailable();
           return null;
         }
+        if (safeProperty(value, "status") === "fail") {
+          const payloadFailure = failureCodeFromPayload(value);
+          if (payloadFailure) {
+            stopForFailure(payloadFailure, response);
+            return null;
+          }
+        }
+        return {
+          url: finalUrl,
+          purpose: safeText(purpose, 40),
+          value
+        };
       } catch (_error) {
         noteUnavailable();
         return null;
       } finally {
+        if (controller) activeRequestControllers.delete(controller);
         remainingCollectionTime();
         if (timer !== null && typeof clearTimeout === "function") {
           clearTimeout(timer);
@@ -3486,25 +3638,28 @@
     const profileVideosResolved = route.kind === "profile" && settings.includeProfilePosts &&
       !settings.includeStories && !settings.includeHighlights && profilePosts.size > 0 &&
       !incompleteProfilePosts.length;
-    if (unsupportedVideoCount && !profileVideosResolved) {
+    // A page-only refresh adds what is already loaded; it does not judge the
+    // completeness of the network collection it intentionally skipped.
+    const pageOnly = !settings.allowNetwork;
+    if (unsupportedVideoCount && !profileVideosResolved && !pageOnly) {
       warnings.add(
         `${unsupportedVideoCount.toLocaleString()} Instagram video source${unsupportedVideoCount === 1 ? " was" : "s were"} skipped because no direct progressive HTTP(S) file was exposed.`
       );
     }
-    if (inaccessibleRelatedCount) {
+    if (inaccessibleRelatedCount && !blockingFailure) {
       warnings.add(
         `${inaccessibleRelatedCount.toLocaleString()} related Instagram page${inaccessibleRelatedCount === 1 ? " was" : "s were"} unavailable to the current browser session.`
       );
     }
     let profileCollection = null;
-    if (route.kind === "profile" && settings.includeProfilePosts) {
-      if (!profileTimelineComplete) {
+    if (route.kind === "profile" && settings.includeProfilePosts && !pageOnly) {
+      if (!profileTimelineComplete && !blockingFailure) {
         warnings.add("Instagram profile collection is incomplete: the full post history could not be read.");
       }
-      if (!profileReelsComplete) {
+      if (!profileReelsComplete && !blockingFailure) {
         warnings.add("Instagram profile collection is incomplete: the full reels history could not be read.");
       }
-      if (incompleteProfilePosts.length) {
+      if (incompleteProfilePosts.length && !blockingFailure) {
         warnings.add(`Instagram could not resolve every slide or direct video in ${incompleteProfilePosts.length} profile post(s).`);
       }
       profileCollection = {
@@ -3512,10 +3667,10 @@
         posts: collectedProfilePostIds().size,
         complete: profileTimelineComplete && profileReelsComplete && !incompleteProfilePosts.length &&
           !itemLimitReached && !payloadLimitReached && !documentLimitReached &&
-          !collectionTimeLimitReached && !jsonNodeLimitReached
+          !collectionTimeLimitReached && !jsonNodeLimitReached && !blockingFailure
       };
     }
-    if (!found.size) {
+    if (!found.size && !pageOnly && !blockingFailure) {
       let label = `${route.kind} media`;
       if (route.kind === "profile") {
         const requested = [];
@@ -3535,14 +3690,28 @@
       );
     }
 
+    let failure = null;
+    const warningList = Array.from(warnings);
+    if (blockingFailure) {
+      failure = Object.assign({}, blockingFailure);
+      const waitMinutes = Math.ceil(failure.retryAfterSeconds / 60);
+      const message = failure.code === "rate_limited"
+        ? `Instagram is limiting requests from this account, so collection stopped early to protect it. ${waitMinutes > 1 ? `Wait about ${waitMinutes} minutes` : "Wait a few minutes"}, then scan again.`
+        : failure.code === "checkpoint"
+          ? "Instagram wants you to confirm your account, so collection stopped. Open Instagram, complete the security check, then scan again."
+          : "Instagram asked you to log in, so collection stopped. Log in to Instagram in this browser, then scan again.";
+      warningList.unshift(message);
+    }
+
     return {
       handled: true,
       pageUrl: route.pageUrl,
       pageTitle,
       embeddedFrameCount: 0,
       images: Array.from(found.values()),
-      warnings: Array.from(warnings),
-      profileCollection
+      warnings: warningList,
+      profileCollection,
+      failure
     };
   }
 

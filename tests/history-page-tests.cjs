@@ -455,7 +455,8 @@ async function exerciseUsefulBatchRowsAndIndeterminateSizes() {
           { id: "saved", filename: "/home/me/Downloads/Summer/photo.jpg", status: "complete", bytesReceived: 2048, totalBytes: 2048 },
           { id: "loading", filename: "loading.jpg", status: "in_progress", bytesReceived: 1024, totalBytes: 0 },
           { id: "waiting", filename: "waiting.jpg", status: "queued", bytesReceived: 0, totalBytes: 0 },
-          { id: "broken", filename: "broken.jpg", status: "interrupted", error: "Server returned 404", bytesReceived: 0, totalBytes: 0 }
+          { id: "broken", filename: "broken.jpg", status: "interrupted", error: "Server returned 404", bytesReceived: 0, totalBytes: 0 },
+          { id: "expired", filename: "expired.jpg", status: "interrupted", error: "SERVER_FORBIDDEN", bytesReceived: 0, totalBytes: 0 }
         ] }
     ]
   });
@@ -488,6 +489,15 @@ async function exerciseUsefulBatchRowsAndIndeterminateSizes() {
   assert.equal(unknownSize.textContent, "—");
   assert.equal(unknownSize.title, "Size unknown");
   assert.equal(descendants(files[3]).find(element => element.className === "task-meta").textContent, "Server returned 404");
+  const expiredMeta = descendants(files[4]).find(element => element.className === "task-meta");
+  assert.match(expiredMeta.textContent, /refused this file.*rescan the page, then retry/,
+    "Firefox interruption codes are explained with a next step");
+  assert.equal(expiredMeta.title, "SERVER_FORBIDDEN", "The raw Firefox code stays available");
+  const retry = descendants(files[4]).find(element => element.tagName === "BUTTON" && element.textContent === "Retry");
+  assert.equal(retry["aria-label"], "Retry expired.jpg", "Repeated row actions name their file after the visible label");
+  const pause = descendants(rows[0]).find(element => element.tagName === "BUTTON" && element.textContent === "Pause" &&
+    element.className === "quiet-button");
+  assert.equal(pause["aria-label"], "Pause Summer trip");
   assert.equal(descendants(rows[1]).some(element => element.tagName === "BUTTON"), false,
     "A cleared batch summary must not offer file or queue actions");
   assert.equal(descendants(rows[1]).some(element => element.className === "job-size"), false,
