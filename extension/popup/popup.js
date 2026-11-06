@@ -794,6 +794,7 @@
     explicitRedownloads: new Set(),
     filenameTemplate: Templates.DEFAULT_TEMPLATE,
     filenamePreviewByUrl: new Map(),
+    selectionNumberByUrl: new Map(),
     instagramCollectionMode: false,
     instagramCollectionFilter: "all",
     liveCapture: false,
@@ -818,6 +819,7 @@
   const ignoredKeyByImage = new WeakMap();
   const renderedMetaNodes = new Map();
   const renderedNameNodes = new Map();
+  let renderedInstagramGroups = [];
   const searchTextCache = new WeakMap();
   const sortNameCache = new WeakMap();
   const filenameCollator = new Intl.Collator(undefined, { numeric: true });
@@ -943,6 +945,7 @@
       "image-list",
       "instagram-collection-filter-field",
       "instagram-collection-filter-select",
+      "instagram-collection-tabs",
       "instagram-collections-button",
       "media-type-filter-select",
       "notice",
@@ -1551,8 +1554,9 @@
     const result = templateResult || filenameTemplateStatus();
     const date = jobDate instanceof Date ? jobDate : new Date();
     const previews = new Map();
+    const selected = selectedDownloadableImages();
+    state.selectionNumberByUrl = new Map(selected.map((image, index) => [image.url, index + 1]));
     if (result.ok) {
-      const selected = selectedDownloadableImages();
       const rendered = renderedDownloadItems(selected, result.value, date);
       rendered.forEach((item, index) => previews.set(selected[index].url, item.filename));
     }
@@ -1620,6 +1624,7 @@
         }
         record.label.textContent = filename;
         record.container.title = image.alt || filename;
+        if (record.number) record.number.textContent = selectionNumberText(image);
         record.checkbox.setAttribute(
           "aria-label",
           downloadStatusFor(image) === "downloaded"
@@ -2761,6 +2766,175 @@
     );
   }
 
+  function instagramProfileUsername(url) {
+    try {
+      const key = Instagram && typeof Instagram.routeKeyForUrl === "function" ? Instagram.routeKeyForUrl(url) : "";
+      return key.startsWith("instagram:profile:") ? key.slice("instagram:profile:".length) : "";
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function displayPageTitle(title, url) {
+    const username = instagramProfileUsername(url);
+    return username ? `@${username}` : title;
+  }
+
+  const INSTAGRAM_COLLECTION_TABS = [["all", "All"], ["posts", "Posts"], ["story", "Story"], ["highlights", "Highlights"]];
+
+  function selectInstagramCollection(value) {
+    const select = elements["instagram-collection-filter-select"];
+    if (!Array.from(select.options).some((option) => option.value === value)) {
+      return;
+    }
+    select.value = value;
+    state.instagramCollectionFilter = value;
+    state.showSelected = false;
+    updateSmartFilterButton();
+    resetGalleryPage();
+  }
+
+  function updateInstagramCollectionTabs() {
+    const container = elements["instagram-collection-tabs"];
+    if (!container) {
+      return;
+    }
+    const profile = !elements["instagram-collection-filter-field"].hidden;
+    container.hidden = !profile;
+    if (!profile) {
+      return;
+    }
+    if (container.children.length !== INSTAGRAM_COLLECTION_TABS.length) {
+      container.replaceChildren(...INSTAGRAM_COLLECTION_TABS.map(([value]) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.dataset.collection = value;
+        button.addEventListener("click", () => selectInstagramCollection(value));
+        return button;
+      }));
+    }
+    const available = state.images.filter((image) => !isImageIgnored(image));
+    INSTAGRAM_COLLECTION_TABS.forEach(([value, label], index) => {
+      const button = container.children[index];
+      const count = available.filter((image) => matchesInstagramCollectionFilter(image, value)).length;
+      button.textContent = `${label} (${count.toLocaleString()})`;
+      button.setAttribute("aria-pressed", String(state.instagramCollectionFilter === value));
+    });
+  }
+
+  function instagramStripGroup(image) {
+    const collections = normalizedInstagramCollections(image.instagramCollections);
+    const story = collections.find((collection) => collection.type === "story");
+    if (story) {
+      return { key: `story:${story.id}`, title: "Story" };
+    }
+    const highlight = collections.find((collection) => collection.type === "highlight");
+    return highlight ? { key: `highlight:${highlight.id}`, title: highlight.title || "Highlight" } : null;
+  }
+
+  function groupSelectableImages(images) {
+    return images.filter((image) => !isImageIgnored(image) && imageCanBeSelected(image) &&
+      downloadStatusFor(image) !== "queued" && downloadStatusFor(image) !== "downloaded");
+  }
+
+  function toggleInstagramGroup(group) {
+    if (state.busy && !state.liveScanning) {
+      return;
+    }
+    const selectable = groupSelectableImages(group.images);
+    const allSelected = selectable.length > 0 && selectable.every((image) => state.selected.has(image.url));
+    for (const image of selectable) {
+      if (allSelected) {
+        state.selected.delete(image.url);
+      } else {
+        state.selected.add(image.url);
+      }
+    }
+    renderImages();
+  }
+
+  function updateInstagramGroupToggles() {
+    for (const group of renderedInstagramGroups) {
+      const selectable = groupSelectableImages(group.images);
+      const selected = selectable.filter((image) => state.selected.has(image.url)).length;
+      const all = selectable.length > 0 && selected === selectable.length;
+      group.tick.className = `ig-tick${all ? " all" : selected ? " some" : ""}`;
+      group.button.disabled = !selectable.length || (state.busy && !state.liveScanning);
+      group.button.setAttribute("aria-pressed", all ? "true" : selected ? "mixed" : "false");
+      group.button.setAttribute("aria-label", `${all ? "Deselect" : "Select"} ${group.title}, ${group.images.length.toLocaleString()} file${group.images.length === 1 ? "" : "s"}`);
+    }
+  }
+
+  // On an Instagram profile, story and highlights sit in a strip above the posts.
+  function appendMediaRows(target, images) {
+    const instagramProfile = Boolean(instagramProfileUsername(state.pageUrl));
+    elements["image-list"].classList.toggle("instagram-layout", instagramProfile);
+    if (!instagramProfile) {
+      for (const image of images) target.appendChild(makeImageRow(image));
+      return;
+    }
+    const groups = new Map();
+    const posts = [];
+    for (const image of images) {
+      const group = instagramStripGroup(image);
+      if (!group) {
+        posts.push(image);
+        continue;
+      }
+      if (!groups.has(group.key)) groups.set(group.key, { title: group.title, images: [] });
+      groups.get(group.key).images.push(image);
+    }
+    const heading = (text, count) => {
+      const node = document.createElement("div");
+      node.className = "ig-section-heading";
+      node.setAttribute("role", "presentation");
+      node.textContent = text;
+      if (count !== undefined) {
+        const note = document.createElement("span");
+        note.className = "ig-section-note";
+        note.textContent = count.toLocaleString();
+        node.appendChild(note);
+      }
+      return node;
+    };
+    if (groups.size) {
+      target.appendChild(heading("Story and highlights"));
+      const strip = document.createElement("div");
+      strip.className = "ig-strip";
+      strip.setAttribute("role", "presentation");
+      for (const group of groups.values()) {
+        const wrapper = document.createElement("div");
+        wrapper.className = "ig-group";
+        wrapper.setAttribute("role", "presentation");
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "ig-group-toggle";
+        const tick = document.createElement("span");
+        tick.className = "ig-tick";
+        tick.setAttribute("aria-hidden", "true");
+        const title = document.createElement("span");
+        title.textContent = group.title;
+        const count = document.createElement("span");
+        count.className = "ig-group-count";
+        count.textContent = group.images.length.toLocaleString();
+        button.append(tick, title, count);
+        const record = { button, tick, title: group.title, images: group.images };
+        button.addEventListener("click", () => toggleInstagramGroup(record));
+        renderedInstagramGroups.push(record);
+        const tiles = document.createElement("div");
+        tiles.className = "ig-group-tiles";
+        tiles.setAttribute("role", "presentation");
+        for (const image of group.images) tiles.appendChild(makeImageRow(image));
+        wrapper.append(button, tiles);
+        strip.appendChild(wrapper);
+      }
+      target.appendChild(strip);
+      if (posts.length) target.appendChild(heading("Posts and reels", posts.length));
+    }
+    for (const image of posts) target.appendChild(makeImageRow(image));
+    updateInstagramGroupToggles();
+  }
+
   function updateInstagramCollectionFilterUi() {
     const field = elements["instagram-collection-filter-field"];
     const select = elements["instagram-collection-filter-select"];
@@ -2782,6 +2956,7 @@
       state.instagramCollectionFilter = "all";
       select.value = "all";
       updateSmartFilterButton();
+      updateInstagramCollectionTabs();
       return;
     }
 
@@ -2812,6 +2987,7 @@
       : "all";
     select.value = state.instagramCollectionFilter;
     updateSmartFilterButton();
+    updateInstagramCollectionTabs();
   }
 
   function persistSmartFilters() {
@@ -3124,6 +3300,26 @@
       .join(" · ");
   }
 
+  function imageSizeText(image) {
+    return image.width && image.height
+      ? `${Math.round(image.width).toLocaleString()} × ${Math.round(image.height).toLocaleString()}`
+      : "";
+  }
+
+  function selectionNumberText(image) {
+    const number = state.selected.has(image.url) && state.selectionNumberByUrl.get(image.url);
+    return number ? number.toLocaleString() : "";
+  }
+
+  // Instagram records carry their place in a post or story as "Instagram post 2/4 image".
+  function instagramPlacement(image) {
+    const kind = (image.kinds || []).find((value) => /^Instagram /.test(String(value)));
+    const match = /^Instagram (post|reel|story|highlight)(?: (\d+)\/(\d+))?/.exec(String(kind || ""));
+    return match
+      ? { kind: match[1], position: Number(match[2]) || 1, total: Number(match[3]) || 1 }
+      : null;
+  }
+
   function registerImageMeta(meta, image) {
     let nodes = renderedMetaNodes.get(image.url);
     if (!nodes) {
@@ -3141,7 +3337,7 @@
     }
     for (const meta of nodes) {
       if (meta.isConnected) {
-        meta.textContent = imageMetaText(image);
+        meta.textContent = meta.dataset.metaFormat === "size" ? imageSizeText(image) : imageMetaText(image);
       } else {
         nodes.delete(meta);
       }
@@ -3245,6 +3441,7 @@
   function updateSummary(visibleImages) {
     updateGalleryControls();
     updateMediaTypeTabs();
+    updateInstagramCollectionTabs();
     renderActiveFilterChips();
     updateMediaActions();
     for (const records of renderedNameNodes.values()) {
@@ -3252,8 +3449,8 @@
         if (record.label.isConnected) updateRenderedCardActions(record);
       }
     }
+    updateInstagramGroupToggles();
     elements["page-label"].title = elements["page-label"].textContent;
-    elements["gallery-status"].title = elements["gallery-status"].textContent;
     scheduleGallerySave();
     const total = state.images.length;
     const selectionBusy = state.busy && !state.liveScanning;
@@ -3420,7 +3617,8 @@
     const video = mediaTypeFor(image) === "video";
     const downloadStatus = downloadStatusFor(image);
     const row = document.createElement("article");
-    row.className = `image-row${video ? " video" : ""}${ignored ? " ignored" : ""}${downloadStatus === "downloaded" ? " downloaded" : ""}`;
+    const smallMedia = !video && image.width > 0 && image.height > 0 && Math.max(image.width, image.height) < 200;
+    row.className = `image-row${video ? " video" : ""}${ignored ? " ignored" : ""}${downloadStatus === "downloaded" ? " downloaded" : ""}${smallMedia ? " small-media" : ""}`;
     row.setAttribute("role", "listitem");
 
     const checkbox = document.createElement("input");
@@ -3468,6 +3666,33 @@
       placeholder.textContent = "Video";
       thumbnailFrame.appendChild(placeholder);
     }
+    const selectionNumber = document.createElement("span");
+    selectionNumber.className = "selection-number";
+    selectionNumber.setAttribute("aria-hidden", "true");
+    selectionNumber.textContent = selectionNumberText(image);
+    const facts = document.createElement("span");
+    facts.className = "thumbnail-facts";
+    facts.setAttribute("aria-hidden", "true");
+    const placement = instagramPlacement(image);
+    if (placement && placement.total > 1 && ["post", "reel"].includes(placement.kind)) {
+      const slides = document.createElement("span");
+      slides.className = "thumbnail-fact slides";
+      slides.textContent = `${placement.position}/${placement.total}`;
+      facts.appendChild(slides);
+    }
+    if (video) {
+      const duration = document.createElement("span");
+      duration.className = "thumbnail-fact play";
+      duration.textContent = formatMediaDuration(image.duration);
+      facts.appendChild(duration);
+    }
+    const size = document.createElement("span");
+    size.className = "thumbnail-fact size";
+    size.dataset.metaFormat = "size";
+    size.textContent = imageSizeText(image);
+    registerImageMeta(size, image);
+    facts.appendChild(size);
+    thumbnailFrame.append(selectionNumber, facts);
 
     const copy = document.createElement("div");
     copy.className = "image-copy";
@@ -3511,7 +3736,8 @@
       label: filenameLabel,
       container: name,
       checkbox,
-      previewButton
+      previewButton,
+      number: selectionNumber
     });
     const url = document.createElement("div");
     url.className = "image-url";
@@ -3624,6 +3850,7 @@
     visibleDimensionRows.clear();
     renderedMetaNodes.clear();
     renderedNameNodes.clear();
+    renderedInstagramGroups = [];
     const cancelledUrls = dimensionProbeScheduler.cancelQueued(() => true);
     for (const url of cancelledUrls) {
       resetCancelledDimensionStatus(url);
@@ -3713,7 +3940,8 @@
       const empty = document.createElement("div");
       empty.className = "empty-state";
       const title = document.createElement("strong");
-      title.textContent = state.showSelected ? "No files selected" : state.showIgnored ? "Nothing ignored here" : state.images.length ? "No matching media" : "No media found yet";
+      const scanning = state.busy && !state.images.length && !state.showSelected && !state.showIgnored;
+      title.textContent = state.showSelected ? "No files selected" : state.showIgnored ? "Nothing ignored here" : state.images.length ? "No matching media" : scanning ? "Looking for media…" : "No media found yet";
       const detail = document.createElement("p");
       const ignoredCount = state.images.filter(isImageIgnored).length;
       if (state.showSelected) {
@@ -3726,6 +3954,8 @@
             : "No ignored media are present on this page.";
       } else if (state.images.length && ignoredCount === state.images.length) {
         detail.textContent = `All ${ignoredCount.toLocaleString()} media items on this page are ignored. Open Filters, then Ignored to restore them.`;
+      } else if (scanning) {
+        detail.textContent = "Media appears here when the scan finishes.";
       } else {
         detail.textContent = state.images.length
           ? "Try a different search or clear your filters to see more of your collection."
@@ -3747,9 +3977,7 @@
     }
 
     const fragment = document.createDocumentFragment();
-    for (const image of visible.slice(first, first + MAX_RENDERED_ROWS)) {
-      fragment.appendChild(makeImageRow(image));
-    }
+    appendMediaRows(fragment, visible.slice(first, first + MAX_RENDERED_ROWS));
     elements["image-list"].appendChild(fragment);
 
     updateSummary(visible);
@@ -3774,8 +4002,11 @@
     elements["undo-clear-button"].disabled = collecting || state.busy;
     if (!collecting) {
       elements["gallery-status"].textContent = state.siteKey
-        ? `${hostFromUrl(state.siteKey)} · ${state.images.length.toLocaleString()} collected · ${state.incognito ? "private session only" : "saved on this device"}`
+        ? `${hostFromUrl(state.siteKey)}${state.incognito ? ", private window" : ""}`
         : "Galleries are saved separately for each website.";
+      elements["gallery-status"].title = state.siteKey
+        ? `${state.images.length.toLocaleString()} collected from ${hostFromUrl(state.siteKey)}, ${state.incognito ? "kept for this private session only" : "saved on this device"}`
+        : elements["gallery-status"].textContent;
     }
   }
 
@@ -3933,7 +4164,7 @@
     state.showIgnored = false;
     if (!samePageScope) state.instagramCollectionFilter = "all";
     state.instagramCollectionMode = state.images.some((image) => image.instagramCollections.length);
-    elements["page-label"].textContent = state.pageTitle;
+    elements["page-label"].textContent = displayPageTitle(state.pageTitle, state.pageUrl);
     markFilenamePreviewsDirty();
     renderImages();
   }
@@ -4653,7 +4884,7 @@
       );
       updateInstagramCollectionFilterUi();
       const hostname = hostFromUrl(merged.page.pageUrl);
-      elements["page-label"].textContent = merged.page.pageTitle || hostname;
+      elements["page-label"].textContent = displayPageTitle(merged.page.pageTitle || hostname, merged.page.pageUrl);
       updateFilenameTemplateUi();
       if (settings.live) {
         // Keep refreshed URLs selectable while the status lookup is still pending.
@@ -5907,8 +6138,13 @@
     });
     for (const view of ["grid", "list"]) {
       elements[`${view}-view-button`].addEventListener("click", () => {
+        const button = elements[`${view}-view-button`];
+        const focused = document.activeElement === button;
         applyMediaView(view);
         persistSettings({ mediaLayout: view }).catch((error) => setNotice(error.message, "error"));
+        // Narrow layouts show only the other layout's button, so keep focus on the switch.
+        const other = elements[`${view === "grid" ? "list" : "grid"}-view-button`];
+        if (focused && typeof getComputedStyle === "function" && getComputedStyle(button).display === "none") other.focus();
       });
     }
     elements["stop-gallery-button"].addEventListener("click", stopGalleryCollection);
@@ -6012,10 +6248,7 @@
       updateSmartFilterButton();
     });
     elements["instagram-collection-filter-select"].addEventListener("change", () => {
-      state.instagramCollectionFilter = elements["instagram-collection-filter-select"].value;
-      state.showSelected = false;
-      updateSmartFilterButton();
-      resetGalleryPage();
+      selectInstagramCollection(elements["instagram-collection-filter-select"].value);
     });
     elements["reset-filters-button"].addEventListener("click", resetMediaFilters);
     elements["ignored-button"].addEventListener("click", () => {

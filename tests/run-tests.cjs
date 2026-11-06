@@ -64,7 +64,7 @@ const trackingJs = fs.readFileSync(path.join(root, "tracking/tracking.js"), "utf
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.name, "AnyDownload — Page Media Downloader");
-assert.equal(manifest.version, "1.25.0");
+assert.equal(manifest.version, "1.26.0");
 assert.equal(manifest.action.default_title, "Download page media");
 assert.equal(Core.MAX_BATCH_TOTAL_URL_LENGTH, 2000000);
 assert.deepEqual(manifest.permissions.sort(), ["activeTab", "alarms", "downloads", "menus", "notifications", "scripting", "storage"]);
@@ -306,7 +306,8 @@ assert.match(
   /<div id="smart-filter-panel"[^>]*popover[^>]*>[\s\S]*?<input id="photos-only-input"[^>]*type="checkbox"[\s\S]*?<\/div>/,
   "Photos only must live inside the Filters popover"
 );
-const popupFilters = popupHtml.slice(popupHtml.indexOf('<div id="smart-filter-panel"'), popupHtml.indexOf('<div class="summary-row"'));
+const popupFilters = popupHtml.slice(popupHtml.indexOf('<div id="smart-filter-panel"'), popupHtml.indexOf('<div id="active-filter-chips"'));
+assert.ok(popupFilters.includes('id="photos-only-input"'), "The filters slice must cover the Filters popover");
 for (const controlId of ["backgrounds-input", "clear-gallery-button"]) {
   assert.doesNotMatch(popupFilters, new RegExp(`id="${controlId}"`), `${controlId} belongs in collection actions, not view filters`);
 }

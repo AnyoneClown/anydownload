@@ -4,6 +4,16 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.26.0] - 2026-11-06
+
+### Changed
+
+- Redesign the media manager around the media itself. A slim header names the scanned page (an Instagram profile by its handle), one toolbar holds the type tabs, search, Filters, sort, layout, and page actions, and the action bar holds the selection count, Select all, Deselect, the destination, and Download. The popup now shows about 15 thumbnails instead of 4.
+- Show media as a dense grid without card chrome. Selected files carry the number they will be saved with (`{index}`), unselected files fade once anything is selected, and size, video duration, carousel position, and download status appear on the tile. Preview and More appear on hover or focus, and on touch screens More stays visible.
+- On Instagram profiles, add All, Posts, Story, and Highlights tabs, show the story and each highlight in a strip above the posts with a control to select or deselect the whole group, and use the 4:5 post grid.
+- Say "Looking for media…" while a scan is still running instead of "No media found yet".
+- Fit the Sidebar and Firefox for Android toolbar into two rows.
+
 ## [1.25.0] - 2026-11-05
 
 ### Changed

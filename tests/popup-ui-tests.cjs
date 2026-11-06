@@ -631,6 +631,30 @@ for (const embedded of [false, true]) {
   assert.deepEqual(Array.from(ui.filteredImages(), item => item.url), [second.url]);
   assert.deepEqual([...ui.state.selected], selectedBeforeFilters, "Instagram collection filters preserve selections");
   ui.resetMediaFilters();
+
+  // Each selected tile shows the {index} its file will be saved with.
+  const originalKinds = first.kinds;
+  first.kinds = ["Instagram post 2/4 image"];
+  ui.markFilenamePreviewsDirty();
+  ui.renderImages();
+  const descendants = node => node.children.flatMap(child => [child, ...descendants(child)]);
+  const tiles = () => descendants(get("image-list")).filter(row => /^image-row\b/.test(row.className || ""));
+  const tilePart = (row, className) => row.children[1].children.find(child => child.className === className);
+  const tileNumbers = () => tiles().map(row => tilePart(row, "selection-number").textContent);
+  assert.deepEqual(tileNumbers(), ["1", "2", "3"], "Selection marks follow the saved filename order");
+  tiles()[1].children[0].click();
+  assert.deepEqual(tileNumbers(), ["1", "", "2"], "Deselecting a file renumbers the files after it");
+  tiles()[1].children[0].click();
+  assert.deepEqual(tileNumbers(), ["1", "2", "3"]);
+  const firstFacts = tilePart(tiles()[0], "thumbnail-facts").children;
+  assert.equal(firstFacts.find(fact => fact.className === "thumbnail-fact slides").textContent, "2/4",
+    "Carousel slides show their position in the post");
+  assert.equal(firstFacts.find(fact => fact.className === "thumbnail-fact size").textContent, "1,000 × 600");
+  assert.equal(tilePart(tiles()[2], "thumbnail-facts").children.some(fact => fact.className === "thumbnail-fact play"), true,
+    "Video tiles carry a duration badge");
+  first.kinds = originalKinds;
+  ui.state.selected.clear();
+  for (const url of selectedBeforeFilters) ui.state.selected.add(url);
   first.downloadStatus = "downloaded";
   first.downloadFingerprint = "completed-first";
   ui.state.explicitRedownloads.add(first.downloadFingerprint);
