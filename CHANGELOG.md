@@ -4,6 +4,17 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.26.2] - 2026-11-06
+
+### Changed
+
+- When an Instagram profile scan cannot read the full post history, say that only the posts loaded on the page were collected and ask to scroll the profile to the end, then scan again. The request details move to the page console.
+
+### Fixed
+
+- Stop Instagram post and reels collection from failing on profiles whose page state holds sparse arrays ("can't access property Symbol.iterator").
+- Send Instagram GraphQL requests to `/api/graphql`, which Instagram's web app uses now; `/graphql/query/` answers 403 or redirects. Use the operation ID and name of a query the page has already loaded, with an updated fallback for profile posts, and include the page's request token.
+
 ## [1.26.1] - 2026-11-06
 
 ### Fixed

@@ -6,6 +6,10 @@ const path = require("path");
 
 const Instagram = require("../extension/shared/instagram.js");
 
+// Incomplete profile scans log request details for diagnosis; keep test output readable.
+const historyLog = [];
+console.info = (message) => historyLog.push(String(message));
+
 assert.equal(typeof Instagram, "object");
 assert.equal(typeof Instagram.isInstagramUrl, "function");
 assert.equal(typeof Instagram.canCollectRelated, "function");
@@ -424,7 +428,7 @@ async function run() {
       if (new URL(url).pathname === `/api/v1/media/${instagramMediaIdFromShortcode("REELONLY2")}/info/`) {
         return jsonResponse(url, { items: [reel("REELONLY2")] });
       }
-      assert.equal(new URL(url).pathname, "/graphql/query/");
+      assert.equal(new URL(url).pathname, "/api/graphql");
       assert.equal(init.method, "POST");
       assert.equal(init.credentials, "include");
       assert.equal(init.redirect, "error");
@@ -433,7 +437,7 @@ async function run() {
       const variables = JSON.parse(form.get("variables"));
       let key, nodes, next;
       if (variables.username === "alice") {
-        assert.equal(form.get("doc_id"), "7898261790222653");
+        assert.equal(form.get("doc_id"), "30132373736352300");
         key = "xdt_api__v1__feed__user_timeline_graphql_connection";
         if (!variables.after) {
           nodes = [{ code: "OFFSCREEN1", user, media_type: 8, carousel_media_count: 3,
@@ -492,7 +496,7 @@ async function run() {
         return jsonResponse(url, { items: [partial], more_available: false });
       }
       if (pathname.startsWith("/api/v1/media/")) return jsonResponse(url, { items: [partial] });
-      if (pathname === "/graphql/query/") return jsonResponse(url, {}, { ok: false });
+      if (pathname === "/api/graphql") return jsonResponse(url, {}, { ok: false });
       assert.equal(pathname, "/p/PARTIALS1/");
       if (!resolves) return response(url, "", { ok: false });
       return response(url, htmlDocument({ scripts: [{ value: {
@@ -535,14 +539,15 @@ async function run() {
       if (parsed.pathname.startsWith("/api/v1/media/")) {
         return jsonResponse(url, {}, { ok: false });
       }
-      if (parsed.pathname === "/graphql/query/" && init.method === "POST") {
+      const form = new URLSearchParams(init.body || "");
+      if (parsed.pathname === "/api/graphql" && form.get("doc_id") !== "27852811784380813") {
         return jsonResponse(url, { data: { xdt_api__v1__clips__user__connection_v2: {
           edges: [], page_info: { has_next_page: false }
         } } });
       }
-      if (parsed.pathname === "/graphql/query/") {
-        assert.equal(parsed.searchParams.get("doc_id"), "27852811784380813");
-        const { shortcode } = JSON.parse(parsed.searchParams.get("variables"));
+      if (parsed.pathname === "/api/graphql") {
+        assert.equal(init.method, "POST");
+        const { shortcode } = JSON.parse(form.get("variables"));
         const post = posts.find(({ code }) => code === shortcode);
         assert.ok(post);
         const carousel_media = [1, 2, 3].map((slot) =>
@@ -592,7 +597,7 @@ async function run() {
           more_available: false });
       }
       if (path.startsWith("/api/v1/media/")) return jsonResponse(url, {}, { ok: false });
-      if (path === "/graphql/query/") return jsonResponse(url, { data: { xdt_shortcode_media:
+      if (path === "/api/graphql") return jsonResponse(url, { data: { xdt_shortcode_media:
         source === "photo" ? { code: post.code, user: post.user, ...post.carousel_media[0] }
           : { ...post, carousel_media_count: undefined, carousel_media: post.carousel_media.slice(0, 1) }
       } });
@@ -655,8 +660,62 @@ async function run() {
     });
     assert.equal(result.images.length, 1, failure);
     assert.equal(result.profileCollection.complete, false, failure);
-    assert.ok(result.warnings.some((warning) => /full post history could not be read/.test(warning)), failure);
+    assert.ok(result.warnings.some((warning) => /scroll the profile to the end/.test(warning)), failure);
     assert.ok(requests <= (failure === "document-limit" ? 2 : 3), failure);
+  }
+
+  // Profile posts use the page's loaded query ID and name, so a rotation needs no release.
+  {
+    const graphRequests = [];
+    const queryName = "PolarisProfilePostsTabContentQuery_connection";
+    const result = await scan("https://www.instagram.com/alice/", {
+      scripts: [script({ data: { user: { pk: "42", username: "alice" } } })],
+      require: (name) => {
+        if (name === `${queryName}$Parameters`) {
+          return { params: { name: queryName, operationKind: "query", id: "11112222333344445" } };
+        }
+        if (name === "LSD") return { token: "fixture-lsd" };
+        throw new Error(`Unexpected module ${name}`);
+      }
+    }, {}, async (url, init) => {
+      if (init.method !== "POST") return jsonResponse(url, {}, { ok: false });
+      graphRequests.push({ url, init, form: new URLSearchParams(init.body) });
+      return jsonResponse(url, { data: { xdt_api__v1__feed__user_timeline_graphql_connection: {
+        edges: [{ node: { code: "LOADED1", user: { username: "alice" }, media_type: 1,
+          ...imageNode("loaded-1", "https://scontent.cdninstagram.com/loaded-1.jpg") } }],
+        page_info: { has_next_page: false }
+      } } });
+    });
+    assert.equal(new URL(graphRequests[0].url).pathname, "/api/graphql");
+    assert.equal(graphRequests[0].form.get("doc_id"), "11112222333344445");
+    assert.equal(graphRequests[0].form.get("fb_api_req_friendly_name"), queryName);
+    assert.equal(graphRequests[0].init.headers["X-FB-Friendly-Name"], queryName);
+    assert.equal(graphRequests[0].form.get("lsd"), "fixture-lsd");
+    assert.ok(result.images.some((item) => item.url === "https://scontent.cdninstagram.com/loaded-1.jpg"));
+  }
+
+  // An incomplete history asks the person to scroll; request details go to the console.
+  {
+    const logged = [];
+    const consoleInfo = console.info;
+    console.info = (message) => logged.push(String(message));
+    let result;
+    try {
+      result = await scan("https://www.instagram.com/alice/", {
+        scripts: [script({ data: { user: { pk: "42", username: "alice" } } })]
+      }, { includeProfileReels: true }, async (url, init) => {
+        if (init.method !== "POST") return jsonResponse(url, {}, { ok: false });
+        return jsonResponse(url, { errors: [{ message: "doc_id is no longer valid" }], data: null });
+      });
+    } finally {
+      console.info = consoleInfo;
+    }
+    assert.deepEqual(result.warnings.filter((warning) => /scroll the profile/.test(warning)), [
+      "Only the posts already loaded on the page were collected. To get every post, scroll the profile to the end, then scan again."
+    ]);
+    assert.ok(result.warnings.every((warning) => !/history could not be read|HTTP 403|GraphQL/.test(warning)));
+    assert.deepEqual(logged, ["AnyDownload: Instagram history requests did not complete " +
+      "(feed: HTTP 403; timeline: GraphQL error: doc_id is no longer valid; reels: GraphQL error: doc_id is no longer valid)"]);
   }
 
   // Unsupported Instagram pages fall back to the generic DOM collector, while
@@ -713,9 +772,9 @@ async function run() {
     }]);
     assert.deepEqual(requests.map((url) => new URL(url).pathname), [
       "/api/v1/users/web_profile_info/",
-      "/graphql/query/",
+      "/api/graphql",
       `/api/v1/media/${instagramMediaIdFromShortcode("VISIBLE1")}/info/`,
-      "/graphql/query/",
+      "/api/graphql",
       "/p/VISIBLE1/"
     ]);
     assert.ok(!result.warnings.some((warning) => /related Instagram page/i.test(warning)));
@@ -1093,7 +1152,7 @@ async function run() {
     assert.deepEqual(requests.map((url) => new URL(url).pathname), [
       "/api/v1/feed/user/42/",
       `/api/v1/media/${instagramMediaIdFromShortcode("RELAY2")}/info/`,
-      "/graphql/query/",
+      "/api/graphql",
       "/p/RELAY2/"
     ]);
     assert.ok(!result.warnings.some((warning) => /could not resolve every slide/i.test(warning)));
@@ -1198,6 +1257,29 @@ async function run() {
     ]);
     assert.equal(result.images[0].instagramCollections[0].id, "INITIAL1");
     assert.ok(requests.every((item) => item.init.credentials === "include"));
+  }
+
+  // React runtime state can hold sparse arrays. Walking them for profile posts
+  // must skip the holes instead of destructuring undefined entries.
+  {
+    const runtimeNode = fakeDomElement("main");
+    const sparse = [];
+    sparse[3] = { route: { username: "alice", userID: "55" } };
+    runtimeNode["__reactProps$fixture"] = { queue: sparse, hooks: new Array(4) };
+    const result = await scan("https://www.instagram.com/alice/", {
+      elements: [runtimeNode]
+    }, {}, async (url) => {
+      const parsed = new URL(url);
+      assert.equal(parsed.pathname, "/api/v1/feed/user/55/");
+      return jsonResponse(url, { items: [{
+        code: "SPARSE1",
+        user: { username: "alice" },
+        ...imageNode("sparse-1", "https://scontent.cdninstagram.com/sparse-1.jpg")
+      }], more_available: false });
+    });
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://scontent.cdninstagram.com/sparse-1.jpg"
+    ], "Holes in runtime arrays must not stop profile post collection");
   }
 
   // Modern profile pages keep the target user ID in React route props while
@@ -1472,9 +1554,11 @@ async function run() {
           assert.equal(parsed.pathname, `/api/v1/media/${canonicalMediaId}/info/`);
           return jsonResponse(url, { items: [] }, { ok: false });
         }
-        assert.equal(parsed.pathname, "/graphql/query/");
-        assert.equal(parsed.searchParams.get("doc_id"), "27852811784380813");
-        const variables = JSON.parse(parsed.searchParams.get("variables"));
+        assert.equal(parsed.pathname, "/api/graphql");
+        assert.equal(init.method, "POST");
+        const form = new URLSearchParams(init.body);
+        assert.equal(form.get("doc_id"), "27852811784380813");
+        const variables = JSON.parse(form.get("variables"));
         assert.deepEqual(variables, {
           shortcode: canonicalShortcode,
           __relay_internal__pv__PolarisShortDramaEnabledrelayprovider: false,
@@ -1864,7 +1948,7 @@ async function run() {
       } } })]
     }, {}, async url => { rejectedRequests.push(url); return { ok: false }; });
     assert.deepEqual(rejectedRequests.map(url => new URL(url).pathname), [
-      "/api/v1/feed/reels_media/", "/graphql/query/", "/graphql/query/"
+      "/api/v1/feed/reels_media/", "/api/graphql", "/api/graphql"
     ], "Unavailable story metadata tries each bounded web-viewer fallback once, then stops");
     assert.equal(rejected.images[0].mediaType, "video");
     let realVideoRequests = 0;
@@ -2113,6 +2197,8 @@ async function run() {
       cookie: "csrftoken=fixture-story-token; sessionid=do-not-copy",
       scripts: [script({ user: { pk: "42", username: "alice" } })],
       require: moduleKind === "absent" ? undefined : (name) => {
+        // The page's per-request LSD token is the one other module the collector reads.
+        if (name === "LSD") return moduleKind === "parameters" ? { token: "fixture-lsd-token" } : undefined;
         modules.push(name);
         assert.ok([`${queryName}$Parameters`, `${queryName}.graphql`].includes(name));
         if (moduleKind === "throws") throw new Error("Module unavailable");
@@ -2126,7 +2212,7 @@ async function run() {
         // A JSON failure with HTTP 200 must not suppress the fallback either.
         return jsonResponse(url, { status: "fail" }, { ok: moduleKind === "parameters" });
       }
-      assert.equal(new URL(url).pathname, "/graphql/query/");
+      assert.equal(new URL(url).pathname, "/api/graphql");
       const body = new URLSearchParams(init.body);
       assert.equal(body.get("doc_id"), docId);
       assert.deepEqual(JSON.parse(body.get("variables")), {
@@ -2137,6 +2223,8 @@ async function run() {
       assert.equal(init.method, "POST");
       assert.equal(init.redirect, "error");
       assert.equal(init.headers["X-CSRFToken"], "fixture-story-token");
+      assert.equal(init.headers["X-FB-LSD"], moduleKind === "parameters" ? "fixture-lsd-token" : undefined);
+      assert.equal(body.get("lsd"), moduleKind === "parameters" ? "fixture-lsd-token" : null);
       return jsonResponse(url, { data: {
         xdt_api__v1__feed__reels_media__connection: {
           edges: [{ node: {
@@ -2169,6 +2257,7 @@ async function run() {
     assert.ok(requests.every(({ init }) => init.credentials === "include"));
     assert.ok(modules.length <= 2);
     assert.ok(!JSON.stringify(result).includes("fixture-story-token"));
+    assert.ok(!JSON.stringify(result).includes("fixture-lsd-token"));
     assert.ok(!JSON.stringify(requests).includes("do-not-copy"));
   }
 
@@ -2199,7 +2288,7 @@ async function run() {
           items: [imageNode("901", "https://scontent.cdninstagram.com/trip.jpg")]
         } } });
       }
-      assert.equal(parsed.pathname, "/graphql/query/");
+      assert.equal(parsed.pathname, "/api/graphql");
       assert.equal(init.method, "POST");
       const body = new URLSearchParams(init.body);
       if (body.get("doc_id") === "29324689403792944") {

@@ -116,10 +116,13 @@
     // Instagram rotates persisted GraphQL operation IDs. This is a bounded
     // fallback after the canonical post document and media-info endpoint.
     const INSTAGRAM_POST_QUERY_DOC_ID = "27852811784380813";
-    const INSTAGRAM_PROFILE_QUERY_DOC_ID = "7898261790222653";
+    // Fallback for PolarisProfilePostsTabContentQuery_connection; the loaded page's own ID wins.
+    const INSTAGRAM_PROFILE_QUERY_DOC_ID = "30132373736352300";
     const INSTAGRAM_REELS_QUERY_DOC_ID = "7845543455542541";
     const INSTAGRAM_STORIES_QUERY_DOC_ID = "28449850404637481";
     const INSTAGRAM_STORIES_CONNECTION_QUERY_DOC_ID = "29324689403792944";
+    // Instagram's web app posts persisted queries here; /graphql/query/ now answers 403 or redirects.
+    const INSTAGRAM_GRAPHQL_PATH = "/api/graphql";
     const MAX_COLLECTION_MEMBERSHIPS = 16;
     const MAX_FETCH_CONCURRENCY = 3;
     const INSTAGRAM_SCRIPT_MARKER = /["'](?:carousel_media|carouselMedia|contentUrl|content_url|display_resources|display_uri|displayUri|display_url|edge_owner_to_timeline_media|edge_sidecar_to_children|image_url|image_versions2|is_video|media_code|media_type|playback_url|polaris_ordered_timeline_connection|polarisOrderedTimelineConnection|reel_id|reels_media|shortcode|shortcode_media|thumbnailUrl|timeline_media|video_url|video_versions|xdt_[a-z0-9_]+)["']\s*:/i;
@@ -2207,6 +2210,21 @@
       }
     }
 
+    // The first problem per profile request, so an incomplete scan can say what failed.
+    const requestNotes = new Map();
+    function noteRequest(purpose, detail) {
+      const key = safeText(purpose, 40);
+      if (key && detail && !requestNotes.has(key)) requestNotes.set(key, safeText(detail, 160));
+    }
+
+    function requestProblems(...purposes) {
+      const labels = { "profile-info": "profile", "profile-feed": "feed",
+        "profile-timeline": "timeline", "profile-reels": "reels" };
+      const parts = purposes.filter((purpose) => requestNotes.has(purpose))
+        .map((purpose) => `${labels[purpose] || purpose}: ${requestNotes.get(purpose)}`);
+      return parts.length ? ` (${parts.join("; ")})` : "";
+    }
+
     async function fetchInstagramJson(rawUrl, purpose, reportAsRelated, rawTimeoutMs, graphQuery) {
       if (!networkAllowed()) return null;
       const remaining = remainingCollectionTime();
@@ -2255,9 +2273,21 @@
           const csrf = safeText(safeProperty(document, "cookie"), 65536)
             .match(/(?:^|;\s*)csrftoken=([a-z0-9_-]{1,256})(?:;|$)/i);
           if (csrf) headers["X-CSRFToken"] = csrf[1];
-          body = new URLSearchParams({
-            doc_id: graphQuery.docId, variables, server_timestamps: "true"
-          }).toString();
+          const form = new URLSearchParams();
+          const lsd = pageLsdToken();
+          if (lsd) {
+            form.set("lsd", lsd);
+            headers["X-FB-LSD"] = lsd;
+          }
+          if (graphQuery.name) {
+            form.set("fb_api_caller_class", "RelayModern");
+            form.set("fb_api_req_friendly_name", graphQuery.name);
+            headers["X-FB-Friendly-Name"] = graphQuery.name;
+          }
+          form.set("doc_id", graphQuery.docId);
+          form.set("variables", variables);
+          form.set("server_timestamps", "true");
+          body = form.toString();
           headers["Content-Type"] = "application/x-www-form-urlencoded";
         }
         const response = await fetch(url, {
@@ -2270,6 +2300,7 @@
           headers
         });
         if (!response || !response.ok) {
+          noteRequest(purpose, response ? `HTTP ${Number(response.status) || 0}` : "no response");
           await inspectFailedResponse(response);
           noteUnavailable();
           return null;
@@ -2289,11 +2320,13 @@
           200
         ).toLowerCase();
         if (contentType && !/(?:application|text)\/[^;]*json/.test(contentType)) {
+          noteRequest(purpose, `not JSON (${contentType.split(";")[0]})`);
           noteUnavailable();
           return null;
         }
         const responseBody = await readResponseText(response);
         if (!responseBody.ok) {
+          noteRequest(purpose, responseBody.tooLarge ? "response too large" : "unreadable response");
           documentLimitReached = documentLimitReached || responseBody.tooLarge;
           return null;
         }
@@ -2301,6 +2334,7 @@
         try {
           value = JSON.parse(responseBody.text);
         } catch (_error) {
+          noteRequest(purpose, "invalid JSON");
           noteUnavailable();
           return null;
         }
@@ -2316,7 +2350,9 @@
           purpose: safeText(purpose, 40),
           value
         };
-      } catch (_error) {
+      } catch (error) {
+        noteRequest(purpose, error && error.name === "AbortError" ? "timed out"
+          : `network error${error && error.message ? `: ${error.message}` : ""}`);
         noteUnavailable();
         return null;
       } finally {
@@ -2424,18 +2460,16 @@
         return;
       }
 
-      const graphQuery = new URL("/graphql/query/", route.pageUrl);
-      graphQuery.searchParams.set("doc_id", INSTAGRAM_POST_QUERY_DOC_ID);
-      graphQuery.searchParams.set("variables", JSON.stringify({
-        shortcode: queryShortcode,
-        __relay_internal__pv__PolarisShortDramaEnabledrelayprovider: false,
-        __relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider: false
-      }));
       const fetched = await fetchInstagramJson(
-        graphQuery.href,
+        new URL(INSTAGRAM_GRAPHQL_PATH, route.pageUrl).href,
         "exact-post-query",
         false,
-        EXACT_FETCH_TIMEOUT_MS
+        EXACT_FETCH_TIMEOUT_MS,
+        { docId: INSTAGRAM_POST_QUERY_DOC_ID, variables: {
+          shortcode: queryShortcode,
+          __relay_internal__pv__PolarisShortDramaEnabledrelayprovider: false,
+          __relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider: false
+        } }
       );
       if (fetched) {
         processExactPayload(fetched.value, fetched.url);
@@ -2621,16 +2655,26 @@
         } else if (exactItemMatches(value) && addExactItem(value, route.pageUrl)) {
           return;
         }
+        // React state can hold sparse arrays, and map() keeps their holes, so
+        // index arrays directly and skip empty slots.
         let entries = [];
         try {
-          entries = Array.isArray(value)
-            ? value.slice(0, 2048).map((item, index) => [String(index), item])
-            : Object.entries(value).slice(0, 512);
+          if (Array.isArray(value)) {
+            const length = Math.min(Number(value.length) || 0, 2048);
+            for (let index = 0; index < length; index += 1) {
+              if (index in value) entries.push([String(index), value[index]]);
+            }
+          } else {
+            entries = Object.entries(value).slice(0, 512);
+          }
         } catch (_error) {
           entries = [];
         }
-        for (const [key, child] of entries) {
-          walk(child, depth + 1, key);
+        for (const entry of entries) {
+          if (!Array.isArray(entry)) {
+            continue;
+          }
+          walk(entry[1], depth + 1, entry[0]);
           if (complete()) {
             break;
           }
@@ -3134,15 +3178,13 @@
         return exactPostFromValues(values(), request);
       }
       async function fetchPostGraphql(request) {
-        const endpoint = new URL("/graphql/query/", route.pageUrl);
-        endpoint.searchParams.set("doc_id", INSTAGRAM_POST_QUERY_DOC_ID);
-        endpoint.searchParams.set("variables", JSON.stringify({
-          shortcode: request.shortcode,
-          __relay_internal__pv__PolarisShortDramaEnabledrelayprovider: false,
-          __relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider: false
-        }));
         const fetched = await fetchInstagramJson(
-          endpoint.href, "profile-post-query", false, EXACT_FETCH_TIMEOUT_MS
+          new URL(INSTAGRAM_GRAPHQL_PATH, route.pageUrl).href, "profile-post-query", false,
+          EXACT_FETCH_TIMEOUT_MS, { docId: INSTAGRAM_POST_QUERY_DOC_ID, variables: {
+            shortcode: request.shortcode,
+            __relay_internal__pv__PolarisShortDramaEnabledrelayprovider: false,
+            __relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider: false
+          } }
         );
         if (!fetched || objectList(safeProperty(fetched.value, "errors")).length) return null;
         const item = exactPostFromValues([fetched.value], request);
@@ -3300,7 +3342,11 @@
     }
 
     async function collectProfileFeed(pk) {
-      if (!settings.includeProfilePosts || !pk) {
+      if (!settings.includeProfilePosts) {
+        return false;
+      }
+      if (!pk) {
+        noteRequest("profile-feed", "profile ID not found");
         return false;
       }
       let maxId = "";
@@ -3319,7 +3365,10 @@
           break;
         }
         const page = feedPageFrom(fetched.value);
-        if (!page.valid) break;
+        if (!page.valid) {
+          noteRequest("profile-feed", "unexpected response");
+          break;
+        }
         for (const item of page.items) {
           addProfilePost(item, fetched.url, route.username);
           if (itemLimitReached || payloadLimitReached) {
@@ -3327,7 +3376,10 @@
           }
         }
         const next = page.nextMaxId;
-        if (!page.paginationKnown) return false;
+        if (!page.paginationKnown) {
+          noteRequest("profile-feed", "no pagination information");
+          return false;
+        }
         if (!page.moreAvailable) return !itemLimitReached && !payloadLimitReached;
         if (!next || seenCursors.has(next)) {
           break;
@@ -3356,14 +3408,26 @@
         };
         if (!reels) variables.username = route.username;
         if (after) variables.after = after;
+        const query = reels
+          ? loadedQuery(["PolarisProfileReelsTabContentQuery_connection"], INSTAGRAM_REELS_QUERY_DOC_ID)
+          : loadedQuery(["PolarisProfilePostsTabContentQuery_connection"], INSTAGRAM_PROFILE_QUERY_DOC_ID);
         const fetched = await fetchInstagramJson(
-          new URL("/graphql/query/", route.pageUrl).href,
+          new URL(INSTAGRAM_GRAPHQL_PATH, route.pageUrl).href,
           reels ? "profile-reels" : "profile-timeline", false, FETCH_TIMEOUT_MS,
-          { docId: reels ? INSTAGRAM_REELS_QUERY_DOC_ID : INSTAGRAM_PROFILE_QUERY_DOC_ID, variables }
+          { ...query, variables }
         );
         if (!fetched) return false;
+        const purpose = reels ? "profile-reels" : "profile-timeline";
+        const graphErrors = objectList(safeProperty(fetched.value, "errors"));
+        const graphError = graphErrors.length
+          ? `GraphQL error: ${safeText(safeProperty(graphErrors[0], "message") ||
+            safeProperty(graphErrors[0], "summary"), 120) || "unknown"}`
+          : "";
         const connection = safeProperty(safeProperty(fetched.value, "data"), connectionKey);
-        if (!Array.isArray(safeProperty(connection, "edges"))) return false;
+        if (!Array.isArray(safeProperty(connection, "edges"))) {
+          noteRequest(purpose, graphError || "unexpected response");
+          return false;
+        }
         for (const node of timelineItems(connection)) {
           const item = reels ? safeProperty(node, "media") : node;
           // The reels connection can expose a shortcode and player sources
@@ -3379,7 +3443,10 @@
           addProfilePost(item, fetched.url, route.username);
           if (itemLimitReached || payloadLimitReached) return false;
         }
-        if (objectList(safeProperty(fetched.value, "errors")).length) return false;
+        if (graphErrors.length) {
+          noteRequest(reels ? "profile-reels" : "profile-timeline", graphError);
+          return false;
+        }
         const page = safeProperty(connection, "page_info");
         if (safeProperty(page, "has_next_page") === false) return true;
         const cursor = safeText(safeProperty(page, "end_cursor"), 1000).trim();
@@ -3390,26 +3457,45 @@
       return false;
     }
 
-    function currentStoryQueryDocId() {
-      const queryName = "PolarisStoriesV3ReelPageGalleryQuery";
+    // Instagram rotates persisted query IDs. Prefer the ID of a known query the
+    // page has already loaded; read only that query's metadata. Do not inspect
+    // the module registry, evaluate script text, or load remote bundles.
+    function loadedQuery(queryNames, fallbackId) {
       const requireModule = safeProperty(window, "require");
       if (typeof requireModule === "function") {
-        // Read only this known query's loaded metadata. Do not inspect the
-        // module registry, evaluate script text, or load remote bundles.
-        for (const suffix of ["$Parameters", ".graphql"]) {
-          try {
-            const params = safeProperty(requireModule(`${queryName}${suffix}`), "params");
-            const id = safeText(safeProperty(params, "id"), 80);
-            if (safeProperty(params, "name") === queryName &&
-              safeProperty(params, "operationKind") === "query" && /^\d{5,40}$/.test(id)) {
-              return id;
+        for (const queryName of queryNames) {
+          for (const suffix of ["$Parameters", ".graphql"]) {
+            try {
+              const params = safeProperty(requireModule(`${queryName}${suffix}`), "params");
+              const id = safeText(safeProperty(params, "id"), 80);
+              if (safeProperty(params, "name") === queryName &&
+                safeProperty(params, "operationKind") === "query" && /^\d{5,40}$/.test(id)) {
+                return { docId: id, name: queryName };
+              }
+            } catch (_error) {
+              // The page may not have loaded this query's module yet.
             }
-          } catch (_error) {
-            // A profile may not have loaded the story viewer's modules yet.
           }
         }
       }
-      return INSTAGRAM_STORIES_CONNECTION_QUERY_DOC_ID;
+      return { docId: fallbackId, name: queryNames[0] || "" };
+    }
+
+    function currentStoryQueryDocId() {
+      return loadedQuery(["PolarisStoriesV3ReelPageGalleryQuery"], INSTAGRAM_STORIES_CONNECTION_QUERY_DOC_ID).docId;
+    }
+
+    // The page's own GraphQL requests carry this per-page request token.
+    function pageLsdToken() {
+      try {
+        const requireModule = safeProperty(window, "require");
+        const token = typeof requireModule === "function"
+          ? safeText(safeProperty(requireModule("LSD"), "token"), 200)
+          : "";
+        return /^[A-Za-z0-9_-]{6,200}$/.test(token) ? token : "";
+      } catch (_error) {
+        return "";
+      }
     }
 
     async function fetchReelCollection(reelId, purpose) {
@@ -3428,7 +3514,7 @@
       // standalone query can fail for an otherwise accessible active story.
       // Request just this owner's reel, within the shared request/byte budget.
       const connectionResult = await fetchInstagramJson(
-        new URL("/graphql/query/", route.pageUrl).href,
+        new URL(INSTAGRAM_GRAPHQL_PATH, route.pageUrl).href,
         purpose, false, FETCH_TIMEOUT_MS, {
           docId: currentStoryQueryDocId(),
           variables: {
@@ -3447,7 +3533,7 @@
       }
       // Retain the standalone fallback for sessions using the older viewer.
       const fallback = await fetchInstagramJson(
-        new URL("/graphql/query/", route.pageUrl).href,
+        new URL(INSTAGRAM_GRAPHQL_PATH, route.pageUrl).href,
         purpose, false, FETCH_TIMEOUT_MS, {
           docId: INSTAGRAM_STORIES_QUERY_DOC_ID,
           variables: {
@@ -3653,11 +3739,22 @@
     }
     let profileCollection = null;
     if (route.kind === "profile" && settings.includeProfilePosts && !pageOnly) {
-      if (!profileTimelineComplete && !blockingFailure) {
-        warnings.add("Instagram profile collection is incomplete: the full post history could not be read.");
-      }
-      if (!profileReelsComplete && !blockingFailure) {
-        warnings.add("Instagram profile collection is incomplete: the full reels history could not be read.");
+      // Instagram often withholds older history from these requests, while the
+      // posts the page loads as it scrolls are still collected. Tell the person
+      // what to do; the request details go to the page console for diagnosis.
+      if ((!profileTimelineComplete || !profileReelsComplete) && !blockingFailure &&
+        !itemLimitReached && !payloadLimitReached) {
+        warnings.add(!profileTimelineComplete
+          ? "Only the posts already loaded on the page were collected. To get every post, scroll the profile to the end, then scan again."
+          : "Some reels may be missing. To get every reel, scroll the profile to the end, then scan again.");
+        const details = requestProblems("profile-info", "profile-feed", "profile-timeline", "profile-reels");
+        if (details) {
+          try {
+            console.info(`AnyDownload: Instagram history requests did not complete${details}`);
+          } catch (_error) {
+            // The console is optional diagnostics.
+          }
+        }
       }
       if (incompleteProfilePosts.length && !blockingFailure) {
         warnings.add(`Instagram could not resolve every slide or direct video in ${incompleteProfilePosts.length} profile post(s).`);

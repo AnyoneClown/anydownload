@@ -88,7 +88,7 @@ async function run() {
   ]);
   assert.equal(profile.result.profileCollection.complete, false);
   assert.ok(profile.result.warnings.some((warning) => /2-minute safety limit/.test(warning)));
-  assert.ok(profile.result.warnings.some((warning) => /full post history could not be read/.test(warning)));
+  assert.ok(profile.result.warnings.some((warning) => /scroll the profile to the end/.test(warning)));
   assert.deepEqual(profile.timers.map(({ delay }) => delay), [500],
     "An in-flight request may use only the remaining collection time");
   assert.deepEqual(profile.clearedTimers, profile.timers);
