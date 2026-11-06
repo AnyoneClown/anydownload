@@ -112,6 +112,7 @@ function popupHarness(stored = { local: [], session: [] }) {
   let scanError = false;
   const scriptCalls = [];
   let resultExtras = {};
+  let collectorError = null;
   const tab = { id: 1, url: `${siteKey}/one`, title: "one", incognito: false, windowId: 1, active: true };
   const context = {
     URL, TextEncoder, TextDecoder, console, Date,
@@ -218,6 +219,7 @@ function popupHarness(stored = { local: [], session: [] }) {
             await wait;
           }
           if (scanError) throw new Error("Scan failed");
+          if (collectorError && func.name === "collectFromPage") return [{ frameId: 0, error: collectorError }];
           return [{ frameId: 0, result: Object.assign({
             handled: true, images: sourceImages, pageUrl: tab.url, pageTitle: tab.title, warnings: []
           }, resultExtras) }];
@@ -252,6 +254,7 @@ function popupHarness(stored = { local: [], session: [] }) {
   return {
     popup, tab, stored, elements, fetchedPages, scriptCalls,
     setResultExtras(extras) { resultExtras = extras || {}; },
+    failCollector(error) { collectorError = error; },
     enableNextPages() { continuePagination = true; },
     setProfilePages(pages, sourceUrl) {
       profilePages = pages;
@@ -520,6 +523,21 @@ async function checkInstagramNetworkScope() {
   assert.deepEqual(instagramNetwork().slice(-1), [true]);
   assert.match(elements.get("notice").className, /warning/, "Partial results after a block are a warning");
   assert.match(elements.get("notice").textContent, /log in\. Kept 1 file collected before Instagram stopped/);
+
+  // Firefox returns a collector that threw as { error }; the reason must reach the person.
+  tab.url = "https://www.instagram.com/dave/";
+  harness.setResultExtras({});
+  harness.failCollector(new TypeError("can't access property \"edges\", media is undefined"));
+  const consoleError = console.error;
+  console.error = () => {};
+  try {
+    assert.equal(await popup.scanPage({ preserveSelection: true }), true);
+  } finally {
+    console.error = consoleError;
+  }
+  assert.match(elements.get("notice").textContent, /Instagram collection stopped with an error.*media is undefined/);
+  assert.doesNotMatch(elements.get("notice").textContent, /did not expose media for this exact route/);
+  harness.failCollector(null);
 }
 
 async function checkSelectionDuringScan() {

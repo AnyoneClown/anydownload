@@ -4609,11 +4609,22 @@
               ? instagramResult.failure
               : null;
             noteInstagramFailure(instagramRun.failure, Date.now());
-          } else if (settings.instagramCollections) {
-            const detail = firstInstagramResult && firstInstagramResult.error
-              ? ` (${firstInstagramResult.error})`
+          } else {
+            // Firefox reports a script that threw as { error } instead of rejecting.
+            const injected = firstInstagramResult && firstInstagramResult.error;
+            // Firefox stack frames read "functionName@url:line:column"; keep the first one.
+            const frame = injected && typeof injected.stack === "string"
+              ? (injected.stack.split("\n").find(Boolean) || "").replace(/@.*?(:\d+:\d+)$/, "$1")
               : "";
-            instagramWarning = `Instagram stories and highlights could not be collected; the existing results were kept.${detail}`;
+            const detail = injected
+              ? `${String(injected.message || injected)}${frame ? ` at ${frame}` : ""}`.slice(0, 300)
+              : !firstInstagramResult ? "Firefox did not run the collector in this tab." : "";
+            if (injected) console.error("AnyDownload Instagram collector failed.", injected);
+            if (settings.instagramCollections) {
+              instagramWarning = `Instagram stories and highlights could not be collected; the existing results were kept.${detail ? ` (${detail})` : ""}`;
+            } else if (detail) {
+              instagramWarning = `Instagram collection stopped with an error. Reload the Instagram tab and scan again. (${detail})`;
+            }
           }
         } catch (error) {
           instagramWarning = settings.instagramCollections

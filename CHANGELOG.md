@@ -4,6 +4,13 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.26.1] - 2026-11-06
+
+### Fixed
+
+- Show why an Instagram post and reels collection failed, with the error and the step where it stopped, instead of the generic "did not expose media for this exact route" message. Firefox reports a collector that threw as an error result, which was only read for stories and highlights.
+- Center the Preview and More icons on media tiles and the Filters icon in the narrow toolbar.
+
 ## [1.26.0] - 2026-11-06
 
 ### Changed
