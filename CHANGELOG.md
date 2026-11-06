@@ -4,6 +4,14 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.26.3] - 2026-11-06
+
+### Fixed
+
+- Collect every slide of an Instagram carousel from a profile whose grid links posts by 39-character codes, as private profiles do. The post lookup skipped those codes, so only the grid cover was collected. It now resolves them through the media ID in the code's first 11 characters.
+- Send Instagram GraphQL requests the way Instagram's web app does, with the page's `fb_dtsg` token, async flags, and the query's provided variables, and accept the `text/javascript` JSON it returns. A signed-in session answered the previous requests with an HTML page, so profile history, post lookups, and the story fallback failed. Stop sending GraphQL for the rest of a scan once it answers with a page, and stop the scan when a query reports a rate limit.
+- Keep reading an Instagram profile's post history when Instagram reports a failed field on a post it still returned.
+
 ## [1.26.2] - 2026-11-06
 
 ### Changed

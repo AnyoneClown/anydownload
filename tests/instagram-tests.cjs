@@ -540,7 +540,7 @@ async function run() {
         return jsonResponse(url, {}, { ok: false });
       }
       const form = new URLSearchParams(init.body || "");
-      if (parsed.pathname === "/api/graphql" && form.get("doc_id") !== "27852811784380813") {
+      if (parsed.pathname === "/api/graphql" && form.get("doc_id") !== "29471655712522340") {
         return jsonResponse(url, { data: { xdt_api__v1__clips__user__connection_v2: {
           edges: [], page_info: { has_next_page: false }
         } } });
@@ -825,6 +825,157 @@ async function run() {
       `instagram:post:alice:${shortcode}:1`,
       `instagram:post:alice:${shortcode}:2`
     ]);
+  }
+
+  // Private-profile grids link every post by a 39-character code: the
+  // 11-character shortcode plus an opaque suffix. A signed-in session answers
+  // an incomplete GraphQL request with its HTML page. Resolve each post through
+  // media info for the prefix's pk, and stop sending GraphQL after the page.
+  {
+    const carousel = "DVpyEcsDKeCxHeJCRyWhOfOz24H94A-D421lEQ0";
+    const single = "C17UWE4Nq5dpEYj9zbwArjDAzKujqdPg6eQtgQ0";
+    const pk = (code) => instagramMediaIdFromShortcode(code.slice(0, 11));
+    const user = { pk: "42", username: "alice" };
+    const gridPost = (code, marker) => fakeDomElement("a", {
+      attributes: { href: `/alice/p/${code}/` },
+      children: [
+        fakeDomElement("img", {
+          attributes: { src: `https://scontent.cdninstagram.com/${code}-cover.jpg` },
+          width: 1080,
+          height: 1350
+        }),
+        ...(marker ? [fakeDomElement("svg", { attributes: { "aria-label": "Carousel" } })] : [])
+      ]
+    });
+    const requests = [];
+    const result = await scan("https://www.instagram.com/alice/", {
+      elements: [gridPost(carousel, true), gridPost(single, false)]
+    }, {}, async (url) => {
+      const pathname = new URL(url).pathname;
+      requests.push(pathname);
+      if (pathname === "/api/v1/users/web_profile_info/") {
+        return response(url, "<!DOCTYPE html><html>Page Not Found</html>", { ok: false });
+      }
+      if (pathname === "/api/graphql") {
+        return response(url, "<!DOCTYPE html><html><head></head><body>Instagram</body></html>");
+      }
+      if (pathname === `/api/v1/media/${pk(carousel)}/info/`) {
+        return jsonResponse(url, { items: [{ code: carousel, pk: pk(carousel), id: `${pk(carousel)}_42`,
+          user, media_type: 8, carousel_media_count: 3, carousel_media: [1, 2, 3].map((slide) =>
+            ({ media_type: 1, ...imageNode(`slide-${slide}`, `https://scontent.cdninstagram.com/slide-${slide}.jpg`) }))
+        }] });
+      }
+      if (pathname === `/api/v1/media/${pk(single)}/info/`) {
+        return jsonResponse(url, { items: [{ code: single, pk: pk(single), user, media_type: 1,
+          ...imageNode("single", "https://scontent.cdninstagram.com/single.jpg") }] });
+      }
+      throw new Error(`Unexpected request ${pathname}`);
+    });
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://scontent.cdninstagram.com/slide-1.jpg",
+      "https://scontent.cdninstagram.com/slide-2.jpg",
+      "https://scontent.cdninstagram.com/slide-3.jpg",
+      "https://scontent.cdninstagram.com/single.jpg"
+    ]);
+    assert.deepEqual(result.images.map((item) => item.instagramCollections[0].id),
+      [carousel, carousel, carousel, single]);
+    assert.deepEqual(requests.filter((pathname) => pathname === "/api/graphql"), ["/api/graphql"],
+      "GraphQL is not retried after it answered with a page");
+    assert.ok(!requests.some((pathname) => pathname.startsWith("/p/")), "Media info avoids post pages");
+    assert.ok(!result.warnings.some((warning) => /could not resolve every slide/.test(warning)));
+  }
+
+  // A signed-in page sends GraphQL with its async flags, fb_dtsg, and the
+  // query's provided variables, and Instagram answers as text/javascript. A
+  // failed field on a returned post does not make the history incomplete.
+  for (const dropped of [false, true]) {
+    const queryName = "PolarisProfilePostsTabContentQuery_connection";
+    const forms = [];
+    const result = await scan("https://www.instagram.com/alice/", {
+      cookie: "csrftoken=fixture-token; ds_user_id=777; sessionid=do-not-copy",
+      scripts: [script({ data: { user: { pk: "42", username: "alice" } } })],
+      require: (name) => {
+        if (name === `${queryName}$Parameters`) {
+          return { params: { name: queryName, operationKind: "query", id: "11112222333344445",
+            providedVariables: {
+              include_multi_captions: { get: () => true },
+              __relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider: { get: () => true },
+              __relay_internal__pv__PolarisBrokenrelayprovider: { get() { throw new Error("unavailable"); } },
+              __relay_internal__pv__PolarisObjectrelayprovider: { get: () => ({ nested: true }) }
+            } } };
+        }
+        if (name === "LSD") return { token: "fixture-lsd" };
+        if (name === "DTSGInitData") return { token: "fixture-dtsg:17:1730000000" };
+        throw new Error(`Unexpected module ${name}`);
+      }
+    }, {}, async (url, init) => {
+      if (init.method !== "POST") return jsonResponse(url, {}, { ok: false });
+      const form = new URLSearchParams(init.body);
+      forms.push(form);
+      const node = (code, slides) => ({ code, user: { username: "alice" },
+        ...(slides ? { media_type: 8, carousel_media_count: slides, carousel_media: Array.from(
+          { length: slides }, (_, index) => ({ media_type: 1,
+            ...imageNode(`${code}-${index}`, `https://scontent.cdninstagram.com/${code}-${index}.jpg`) })) }
+          : { media_type: 1, ...imageNode(code, `https://scontent.cdninstagram.com/${code}.jpg`) }) });
+      return response(url, JSON.stringify({
+        data: { xdt_api__v1__feed__user_timeline_graphql_connection: {
+          edges: [{ node: node("CAROUSEL1", 2) }, { node: node("PHOTO1") },
+            ...(dropped ? [{ node: null }] : [])],
+          page_info: { has_next_page: false, end_cursor: null }
+        } },
+        errors: [{ message: "A server error field_exception occured. Check server logs for details.",
+          path: ["xdt_api__v1__feed__user_timeline_graphql_connection", "edges", dropped ? 2 : 0] }]
+      }), { headers: { "content-type": "text/javascript; charset=utf-8" } });
+    });
+    const form = forms[0];
+    assert.equal(form.get("av"), "777");
+    assert.equal(form.get("__a"), "1");
+    assert.equal(form.get("__comet_req"), "7");
+    assert.equal(form.get("__d"), "www");
+    assert.equal(form.get("fb_dtsg"), "fixture-dtsg:17:1730000000");
+    assert.equal(form.get("lsd"), "fixture-lsd");
+    assert.equal(form.get("doc_id"), "11112222333344445");
+    const variables = JSON.parse(form.get("variables"));
+    assert.equal(variables.username, "alice");
+    assert.equal(variables.include_multi_captions, true);
+    assert.equal(variables.__relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider, true);
+    assert.equal(variables.__relay_internal__pv__PolarisShortDramaEnabledrelayprovider, false);
+    assert.ok(!("__relay_internal__pv__PolarisBrokenrelayprovider" in variables));
+    assert.ok(!("__relay_internal__pv__PolarisObjectrelayprovider" in variables));
+    assert.deepEqual(result.images.map((item) => item.url), [
+      "https://scontent.cdninstagram.com/CAROUSEL1-0.jpg",
+      "https://scontent.cdninstagram.com/CAROUSEL1-1.jpg",
+      "https://scontent.cdninstagram.com/PHOTO1.jpg"
+    ], String(dropped));
+    assert.equal(result.profileCollection.complete, !dropped, String(dropped));
+    assert.equal(result.warnings.some((warning) => /scroll the profile to the end/.test(warning)), dropped);
+    assert.ok(!JSON.stringify(result).includes("fixture-dtsg"));
+    assert.ok(!JSON.stringify(result).includes("do-not-copy"));
+  }
+
+  // A rate-limited GraphQL query has errors and no data. Stop at once and keep
+  // the visible grid instead of spending more requests on post lookups.
+  {
+    const requests = [];
+    const result = await scan("https://www.instagram.com/alice/", {
+      scripts: [script({ data: { user: { pk: "42", username: "alice" } } })],
+      elements: [fakeDomElement("a", {
+        attributes: { href: "/alice/p/LIMITED1234/" },
+        children: [fakeDomElement("img", {
+          attributes: { src: "https://scontent.cdninstagram.com/limited-cover.jpg" },
+          width: 1080,
+          height: 1350
+        })]
+      })]
+    }, {}, async (url, init) => {
+      requests.push(new URL(url).pathname);
+      if (init.method !== "POST") return jsonResponse(url, {}, { ok: false });
+      return response(url, JSON.stringify({ errors: [{ message: "Rate limit exceeded",
+        severity: "CRITICAL", code: 1675004 }] }), { headers: { "content-type": "text/javascript; charset=utf-8" } });
+    });
+    assert.equal(result.failure && result.failure.code, "rate_limited");
+    assert.deepEqual(requests, ["/api/v1/feed/user/42/", "/api/graphql"]);
+    assert.deepEqual(result.images.map((item) => item.url), ["https://scontent.cdninstagram.com/limited-cover.jpg"]);
   }
 
   // A loaded profile can mix many carousels with standalone photos and a reel.
@@ -1557,11 +1708,13 @@ async function run() {
         assert.equal(parsed.pathname, "/api/graphql");
         assert.equal(init.method, "POST");
         const form = new URLSearchParams(init.body);
-        assert.equal(form.get("doc_id"), "27852811784380813");
+        assert.equal(form.get("doc_id"), "29471655712522340");
+        assert.equal(form.get("fb_api_req_friendly_name"), "PolarisPostRootQuery");
         const variables = JSON.parse(form.get("variables"));
         assert.deepEqual(variables, {
           shortcode: canonicalShortcode,
           __relay_internal__pv__PolarisShortDramaEnabledrelayprovider: false,
+          __relay_internal__pv__PolarisThreadsStyleCommentsEnabledrelayprovider: false,
           __relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider: false
         });
         assert.equal(init.credentials, "include");
@@ -2197,8 +2350,12 @@ async function run() {
       cookie: "csrftoken=fixture-story-token; sessionid=do-not-copy",
       scripts: [script({ user: { pk: "42", username: "alice" } })],
       require: moduleKind === "absent" ? undefined : (name) => {
-        // The page's per-request LSD token is the one other module the collector reads.
+        // The page's LSD and fb_dtsg tokens are the only other modules the collector reads.
         if (name === "LSD") return moduleKind === "parameters" ? { token: "fixture-lsd-token" } : undefined;
+        if (name === "DTSGInitData") {
+          return moduleKind === "parameters" ? { token: "fixture-dtsg-token:17:1730000000" } : undefined;
+        }
+        if (name === "DTSGInitialData") return undefined;
         modules.push(name);
         assert.ok([`${queryName}$Parameters`, `${queryName}.graphql`].includes(name));
         if (moduleKind === "throws") throw new Error("Module unavailable");
@@ -2225,6 +2382,8 @@ async function run() {
       assert.equal(init.headers["X-CSRFToken"], "fixture-story-token");
       assert.equal(init.headers["X-FB-LSD"], moduleKind === "parameters" ? "fixture-lsd-token" : undefined);
       assert.equal(body.get("lsd"), moduleKind === "parameters" ? "fixture-lsd-token" : null);
+      assert.equal(body.get("fb_dtsg"), moduleKind === "parameters" ? "fixture-dtsg-token:17:1730000000" : null);
+      assert.equal(body.get("fb_api_req_friendly_name"), queryName);
       return jsonResponse(url, { data: {
         xdt_api__v1__feed__reels_media__connection: {
           edges: [{ node: {
@@ -2258,6 +2417,7 @@ async function run() {
     assert.ok(modules.length <= 2);
     assert.ok(!JSON.stringify(result).includes("fixture-story-token"));
     assert.ok(!JSON.stringify(result).includes("fixture-lsd-token"));
+    assert.ok(!JSON.stringify(result).includes("fixture-dtsg-token"));
     assert.ok(!JSON.stringify(requests).includes("do-not-copy"));
   }
 

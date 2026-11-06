@@ -113,9 +113,10 @@
     const COLLECTION_TIMEOUT_MS = 120000;
     const collectionStartedAt = Date.now();
     const INSTAGRAM_WEB_APP_ID = "936619743392459";
-    // Instagram rotates persisted GraphQL operation IDs. This is a bounded
-    // fallback after the canonical post document and media-info endpoint.
-    const INSTAGRAM_POST_QUERY_DOC_ID = "27852811784380813";
+    // Instagram rotates persisted GraphQL operation IDs. This is the fallback
+    // for PolarisPostRootQuery when the page has not loaded that query.
+    const INSTAGRAM_POST_QUERY_DOC_ID = "29471655712522340";
+    const INSTAGRAM_POST_QUERY_NAME = "PolarisPostRootQuery";
     // Fallback for PolarisProfilePostsTabContentQuery_connection; the loaded page's own ID wins.
     const INSTAGRAM_PROFILE_QUERY_DOC_ID = "30132373736352300";
     const INSTAGRAM_REELS_QUERY_DOC_ID = "7845543455542541";
@@ -160,6 +161,9 @@
     // The first rate-limit, login, or security-check response stops every
     // later request in this run so fallbacks cannot repeat the failure.
     let blockingFailure = null;
+    // Set when /api/graphql answers with a page instead of data, so later
+    // queries in this run do not repeat a request that cannot succeed.
+    let graphqlUnavailable = false;
     const activeRequestControllers = new Set();
     let utf8Encoder = null;
     try {
@@ -367,17 +371,20 @@
     if (route.kind !== "profile" || !settings.includeProfilePosts) {
       settings.maxDocuments = Math.min(settings.maxDocuments, 32);
     }
+    // Private-profile and share permalinks append an opaque 28-character
+    // capability suffix to the conventional 11-character media shortcode, and
+    // profile grids link every such post that way. The prefix still encodes
+    // the media pk; responses identify the post by the full permalink code.
+    function conventionalShortcode(value) {
+      const code = safeText(value, 80).trim();
+      return code.length === 39 && /^[a-z0-9_-]{39}$/i.test(code) ? code.slice(0, 11) : code;
+    }
     const routeShortcodeAliases = new Set();
     let queryShortcode = safeText(route.shortcode, 80).trim();
     if (route.kind === "post" || route.kind === "reel") {
       routeShortcodeAliases.add(queryShortcode);
-      // New private/share permalinks may append an opaque capability suffix to
-      // the conventional 11-character media shortcode. Instagram's structured
-      // response and first-party query still identify that post by the prefix.
-      if (queryShortcode.length === 39 && /^[a-z0-9_-]{39}$/i.test(queryShortcode)) {
-        queryShortcode = queryShortcode.slice(0, 11);
-        routeShortcodeAliases.add(queryShortcode);
-      }
+      queryShortcode = conventionalShortcode(queryShortcode);
+      routeShortcodeAliases.add(queryShortcode);
     }
     function exactShortcodeMatches(value) {
       return routeShortcodeAliases.has(safeText(value, 80).trim());
@@ -390,8 +397,8 @@
     function mediaIdFromShortcode(shortcode) {
       const value = safeText(shortcode, 80).trim();
       // Conventional Instagram shortcodes encode the numeric media pk in a
-      // base64url alphabet. Newer opaque share codes can be much longer and
-      // must use the shortcode/HTML fallbacks instead.
+      // base64url alphabet. Other long share codes are opaque and must use the
+      // shortcode/HTML fallbacks instead; callers strip known suffixes first.
       if (!value || value.length > 16 || typeof BigInt !== "function") {
         return "";
       }
@@ -2227,6 +2234,10 @@
 
     async function fetchInstagramJson(rawUrl, purpose, reportAsRelated, rawTimeoutMs, graphQuery) {
       if (!networkAllowed()) return null;
+      if (graphQuery && graphqlUnavailable) {
+        noteRequest(purpose, "GraphQL unavailable");
+        return null;
+      }
       const remaining = remainingCollectionTime();
       if (!remaining) return null;
       if (totalDocumentBytes >= settings.maxTotalDocumentBytes) {
@@ -2265,15 +2276,25 @@
         if (controller && typeof setTimeout === "function") {
           timer = setTimeout(() => controller.abort(), timeoutMs);
         }
-        const headers = { Accept: "application/json", "X-IG-App-ID": INSTAGRAM_WEB_APP_ID };
+        const headers = { Accept: graphQuery ? "*/*" : "application/json", "X-IG-App-ID": INSTAGRAM_WEB_APP_ID };
         let body;
         if (graphQuery) {
-          // The token stays in the page and is sent only to Instagram's own
+          // These tokens stay in the page and are sent only to Instagram's own
           // read-only GraphQL endpoint with the existing browser session.
-          const csrf = safeText(safeProperty(document, "cookie"), 65536)
-            .match(/(?:^|;\s*)csrftoken=([a-z0-9_-]{1,256})(?:;|$)/i);
+          const cookies = safeText(safeProperty(document, "cookie"), 65536);
+          const csrf = cookies.match(/(?:^|;\s*)csrftoken=([a-z0-9_-]{1,256})(?:;|$)/i);
           if (csrf) headers["X-CSRFToken"] = csrf[1];
           const form = new URLSearchParams();
+          // A signed-in session answers with its HTML page unless the request
+          // carries the page's async flags and fb_dtsg, as Instagram's client sends.
+          const viewer = cookies.match(/(?:^|;\s*)ds_user_id=(\d{1,30})(?:;|$)/);
+          if (viewer) form.set("av", viewer[1]);
+          form.set("__d", "www");
+          form.set("__user", "0");
+          form.set("__a", "1");
+          form.set("__comet_req", "7");
+          const dtsg = pageDtsgToken();
+          if (dtsg) form.set("fb_dtsg", dtsg);
           const lsd = pageLsdToken();
           if (lsd) {
             form.set("lsd", lsd);
@@ -2319,8 +2340,10 @@
           response.headers && response.headers.get && response.headers.get("content-type"),
           200
         ).toLowerCase();
-        if (contentType && !/(?:application|text)\/[^;]*json/.test(contentType)) {
+        // /api/graphql labels its JSON text/javascript or application/x-javascript.
+        if (contentType && !/(?:application|text)\/(?:[^;]*json|(?:x-)?javascript)/.test(contentType)) {
           noteRequest(purpose, `not JSON (${contentType.split(";")[0]})`);
+          if (graphQuery && /text\/html/.test(contentType)) graphqlUnavailable = true;
           noteUnavailable();
           return null;
         }
@@ -2332,7 +2355,7 @@
         }
         let value;
         try {
-          value = JSON.parse(responseBody.text);
+          value = JSON.parse(responseBody.text.replace(/^for \(;;\);/, ""));
         } catch (_error) {
           noteRequest(purpose, "invalid JSON");
           noteUnavailable();
@@ -2340,6 +2363,15 @@
         }
         if (safeProperty(value, "status") === "fail") {
           const payloadFailure = failureCodeFromPayload(value);
+          if (payloadFailure) {
+            stopForFailure(payloadFailure, response);
+            return null;
+          }
+        }
+        // A rejected GraphQL query reports a rate limit as an error without data.
+        const graphErrors = graphQuery ? objectList(safeProperty(value, "errors")) : [];
+        if (graphErrors.length && !safeProperty(value, "data")) {
+          const payloadFailure = failureCodeFromPayload(graphErrors[0]);
           if (payloadFailure) {
             stopForFailure(payloadFailure, response);
             return null;
@@ -2460,15 +2492,14 @@
         return;
       }
 
+      const query = postQuery();
       const fetched = await fetchInstagramJson(
         new URL(INSTAGRAM_GRAPHQL_PATH, route.pageUrl).href,
         "exact-post-query",
         false,
         EXACT_FETCH_TIMEOUT_MS,
-        { docId: INSTAGRAM_POST_QUERY_DOC_ID, variables: {
-          shortcode: queryShortcode,
-          __relay_internal__pv__PolarisShortDramaEnabledrelayprovider: false,
-          __relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider: false
+        { docId: query.docId, name: query.name, variables: {
+          shortcode: queryShortcode, ...query.provided
         } }
       );
       if (fetched) {
@@ -3074,13 +3105,15 @@
       const visitedPosts = new Set();
       const requests = [];
       function queuePost(shortcode, kind = "post") {
-        const mediaId = mediaIdFromShortcode(shortcode);
-        if (!mediaId || visitedPosts.has(shortcode) || profilePostIsComplete(shortcode)) {
+        if (!shortcode || visitedPosts.has(shortcode) || profilePostIsComplete(shortcode)) {
           return;
         }
         visitedPosts.add(shortcode);
+        // An opaque code has no media pk; its post query and page still resolve it.
+        const mediaId = mediaIdFromShortcode(conventionalShortcode(shortcode));
         requests.push({ shortcode, mediaId,
-          endpoint: new URL(`/api/v1/media/${encodeURIComponent(mediaId)}/info/`, route.pageUrl).href,
+          endpoint: mediaId
+            ? new URL(`/api/v1/media/${encodeURIComponent(mediaId)}/info/`, route.pageUrl).href : "",
           postUrl: new URL(`/${kind === "reel" ? "reel" : "p"}/${encodeURIComponent(shortcode)}/`,
             route.pageUrl).href });
       }
@@ -3148,8 +3181,8 @@
           }
           seen.add(value);
           inspected += 1;
-          if (!Array.isArray(value) &&
-            (objectIdentifier(value) === request.shortcode || objectId(value) === request.mediaId) &&
+          if (!Array.isArray(value) && (objectIdentifier(value) === request.shortcode ||
+            request.mediaId && objectId(value) === request.mediaId) &&
             ownerFromObject(value) === route.username) {
             const children = childMedia(value);
             if ((children.length || hasMediaShape(value) || imageVariants(value, request.postUrl).length) &&
@@ -3178,12 +3211,11 @@
         return exactPostFromValues(values(), request);
       }
       async function fetchPostGraphql(request) {
+        const query = postQuery();
         const fetched = await fetchInstagramJson(
           new URL(INSTAGRAM_GRAPHQL_PATH, route.pageUrl).href, "profile-post-query", false,
-          EXACT_FETCH_TIMEOUT_MS, { docId: INSTAGRAM_POST_QUERY_DOC_ID, variables: {
-            shortcode: request.shortcode,
-            __relay_internal__pv__PolarisShortDramaEnabledrelayprovider: false,
-            __relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider: false
+          EXACT_FETCH_TIMEOUT_MS, { docId: query.docId, name: query.name, variables: {
+            shortcode: request.shortcode, ...query.provided
           } }
         );
         if (!fetched || objectList(safeProperty(fetched.value, "errors")).length) return null;
@@ -3208,9 +3240,9 @@
       }
       async function fetchPost(request) {
         let exact = null;
-        const fetched = await fetchInstagramJson(
+        const fetched = request.endpoint ? await fetchInstagramJson(
           request.endpoint, "profile-post", false, EXACT_FETCH_TIMEOUT_MS
-        );
+        ) : null;
         const item = fetched && feedPageFrom(fetched.value).items.find((candidate) =>
           (objectIdentifier(candidate) === request.shortcode ||
           objectId(candidate) === request.mediaId) && ownerFromObject(candidate) === route.username
@@ -3398,23 +3430,32 @@
       let after = "";
       const cursors = new Set();
       while (!itemLimitReached && !payloadLimitReached) {
+        const query = reels
+          ? loadedQuery(["PolarisProfileReelsTabContentQuery_connection"], INSTAGRAM_REELS_QUERY_DOC_ID, {
+            __relay_internal__pv__PolarisFeedShareMenurelayprovider: false
+          })
+          : loadedQuery(["PolarisProfilePostsTabContentQuery_connection"], INSTAGRAM_PROFILE_QUERY_DOC_ID, {
+            include_multi_captions: false,
+            __relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider: false,
+            __relay_internal__pv__PolarisShortDramaEnabledrelayprovider: false,
+            __relay_internal__pv__PolarisSEOIsCrawlerrelayprovider: false,
+            __relay_internal__pv__PolarisThreadsStyleCommentsEnabledrelayprovider: false,
+            __relay_internal__pv__PolarisReelsRecoDebugOverlayEnabledrelayprovider: false
+          });
         const variables = {
           data: reels
             ? { page_size: 12, include_feed_video: true, target_user_id: pk }
-            : { count: 12, include_relationship_info: true,
+            : { count: 12, include_reel_media_seen_timestamp: true, include_relationship_info: true,
               latest_besties_reel_media: true, latest_reel_media: true },
           first: 12, before: null, last: null,
-          __relay_internal__pv__PolarisFeedShareMenurelayprovider: false
+          ...query.provided
         };
         if (!reels) variables.username = route.username;
         if (after) variables.after = after;
-        const query = reels
-          ? loadedQuery(["PolarisProfileReelsTabContentQuery_connection"], INSTAGRAM_REELS_QUERY_DOC_ID)
-          : loadedQuery(["PolarisProfilePostsTabContentQuery_connection"], INSTAGRAM_PROFILE_QUERY_DOC_ID);
         const fetched = await fetchInstagramJson(
           new URL(INSTAGRAM_GRAPHQL_PATH, route.pageUrl).href,
           reels ? "profile-reels" : "profile-timeline", false, FETCH_TIMEOUT_MS,
-          { ...query, variables }
+          { docId: query.docId, name: query.name, variables }
         );
         if (!fetched) return false;
         const purpose = reels ? "profile-reels" : "profile-timeline";
@@ -3428,8 +3469,12 @@
           noteRequest(purpose, graphError || "unexpected response");
           return false;
         }
-        for (const node of timelineItems(connection)) {
-          const item = reels ? safeProperty(node, "media") : node;
+        const items = timelineItems(connection).map((node) => reels ? safeProperty(node, "media") : node)
+          .filter((item) => item && typeof item === "object");
+        // Instagram can report a failed field on a post and still return it.
+        // Only an error that dropped a post makes this page incomplete.
+        const droppedPosts = items.length < safeProperty(connection, "edges").length;
+        for (const item of items) {
           // The reels connection can expose a shortcode and player sources
           // without its author. Resolve that exact post to verify ownership.
           const shortcode = objectIdentifier(item);
@@ -3444,8 +3489,8 @@
           if (itemLimitReached || payloadLimitReached) return false;
         }
         if (graphErrors.length) {
-          noteRequest(reels ? "profile-reels" : "profile-timeline", graphError);
-          return false;
+          noteRequest(purpose, graphError);
+          if (droppedPosts) return false;
         }
         const page = safeProperty(connection, "page_info");
         if (safeProperty(page, "has_next_page") === false) return true;
@@ -3457,10 +3502,38 @@
       return false;
     }
 
+    // Relay sends a query's provided variables with every request; persisted
+    // queries reject requests that omit them. Read the page's current values,
+    // keeping the fallback for any provider that is missing or fails.
+    function providedVariables(params, fallback) {
+      const values = Object.assign({}, fallback);
+      const providers = safeProperty(params, "providedVariables");
+      if (!providers || typeof providers !== "object") return values;
+      let keys = [];
+      try {
+        keys = Object.keys(providers).slice(0, 32);
+      } catch (_error) {
+        return values;
+      }
+      for (const key of keys) {
+        if (!/^[A-Za-z0-9_]{1,120}$/.test(key)) continue;
+        try {
+          const provider = safeProperty(providers, key);
+          const get = safeProperty(provider, "get");
+          const value = typeof get === "function" ? get.call(provider) : undefined;
+          if (typeof value === "boolean" || Number.isSafeInteger(value)) values[key] = value;
+        } catch (_error) {
+          // Keep the fallback value for this provider.
+        }
+      }
+      return values;
+    }
+
     // Instagram rotates persisted query IDs. Prefer the ID of a known query the
-    // page has already loaded; read only that query's metadata. Do not inspect
-    // the module registry, evaluate script text, or load remote bundles.
-    function loadedQuery(queryNames, fallbackId) {
+    // page has already loaded; read only that query's metadata and provided
+    // variable values. Do not inspect the module registry, evaluate script
+    // text, or load remote bundles.
+    function loadedQuery(queryNames, fallbackId, fallbackProvided) {
       const requireModule = safeProperty(window, "require");
       if (typeof requireModule === "function") {
         for (const queryName of queryNames) {
@@ -3470,7 +3543,7 @@
               const id = safeText(safeProperty(params, "id"), 80);
               if (safeProperty(params, "name") === queryName &&
                 safeProperty(params, "operationKind") === "query" && /^\d{5,40}$/.test(id)) {
-                return { docId: id, name: queryName };
+                return { docId: id, name: queryName, provided: providedVariables(params, fallbackProvided) };
               }
             } catch (_error) {
               // The page may not have loaded this query's module yet.
@@ -3478,11 +3551,36 @@
           }
         }
       }
-      return { docId: fallbackId, name: queryNames[0] || "" };
+      return { docId: fallbackId, name: queryNames[0] || "", provided: Object.assign({}, fallbackProvided) };
     }
 
-    function currentStoryQueryDocId() {
-      return loadedQuery(["PolarisStoriesV3ReelPageGalleryQuery"], INSTAGRAM_STORIES_CONNECTION_QUERY_DOC_ID).docId;
+    // A signed-in page's GraphQL requests carry this per-session token.
+    function pageDtsgToken() {
+      const requireModule = safeProperty(window, "require");
+      if (typeof requireModule !== "function") return "";
+      for (const name of ["DTSGInitData", "DTSGInitialData"]) {
+        try {
+          const token = safeText(safeProperty(requireModule(name), "token"), 400);
+          if (/^[A-Za-z0-9_:.+/=-]{8,400}$/.test(token)) return token;
+        } catch (_error) {
+          // Logged-out pages do not define a token.
+        }
+      }
+      return "";
+    }
+
+    function postQuery() {
+      return loadedQuery([INSTAGRAM_POST_QUERY_NAME], INSTAGRAM_POST_QUERY_DOC_ID, {
+        __relay_internal__pv__PolarisShortDramaEnabledrelayprovider: false,
+        __relay_internal__pv__PolarisThreadsStyleCommentsEnabledrelayprovider: false,
+        __relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider: false
+      });
+    }
+
+    function currentStoryQuery() {
+      return loadedQuery(["PolarisStoriesV3ReelPageGalleryQuery"], INSTAGRAM_STORIES_CONNECTION_QUERY_DOC_ID, {
+        __relay_internal__pv__PolarisCommunityNoteStoriesLabelEnabledrelayprovider: true
+      });
     }
 
     // The page's own GraphQL requests carry this per-page request token.
@@ -3513,14 +3611,16 @@
       // Current viewers use a Relay connection; both the legacy endpoint and
       // standalone query can fail for an otherwise accessible active story.
       // Request just this owner's reel, within the shared request/byte budget.
+      const storyQuery = currentStoryQuery();
       const connectionResult = await fetchInstagramJson(
         new URL(INSTAGRAM_GRAPHQL_PATH, route.pageUrl).href,
         purpose, false, FETCH_TIMEOUT_MS, {
-          docId: currentStoryQueryDocId(),
+          docId: storyQuery.docId,
+          name: storyQuery.name,
           variables: {
             initial_reel_id: reelId, reel_ids: [reelId], first: 1,
             last: null, after: null, before: null, is_highlight: false,
-            __relay_internal__pv__PolarisCommunityNoteStoriesLabelEnabledrelayprovider: true
+            ...storyQuery.provided
           }
         }
       );
