@@ -64,7 +64,7 @@ const trackingJs = fs.readFileSync(path.join(root, "tracking/tracking.js"), "utf
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.name, "AnyDownload — Page Media Downloader");
-assert.equal(manifest.version, "1.26.3");
+assert.equal(manifest.version, "1.27.0");
 assert.equal(manifest.action.default_title, "Download page media");
 assert.equal(Core.MAX_BATCH_TOTAL_URL_LENGTH, 2000000);
 assert.deepEqual(manifest.permissions.sort(), ["activeTab", "alarms", "downloads", "menus", "notifications", "scripting", "storage"]);
@@ -145,16 +145,18 @@ for (const resourcePath of popupResourcePaths) {
 assert.match(popupCss, /html,\s*body\s*\{[^}]*width:\s*780px;[^}]*height:\s*600px;[^}]*min-width:\s*0;[^}]*min-height:\s*0;/s);
 assert.doesNotMatch(popupCss, /html,\s*body\s*\{[^}]*max-(?:width|height):/s);
 assert.match(popupCss, /\.app-shell\s*\{[^}]*height:\s*600px;[^}]*min-height:\s*0;[^}]*overflow:\s*hidden;/s);
-assert.match(popupCss, /\.media-workspace\s*\{[^}]*grid-template-rows:\s*auto auto auto minmax\(0,\s*1fr\) auto auto;/s);
+assert.match(popupCss, /\.media-workspace\s*\{[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto auto;/s);
 assert.match(
   popupCss,
-  /\.media-workspace\s*\{[^}]*grid-template-areas:\s*"controls"\s*"notice"\s*"undo"\s*"media"\s*"pagination"\s*"actions";/s,
-  "Hidden notices must not shift the footer into the flexible media row during scanning"
+  /\.media-workspace\s*\{[^}]*grid-template-areas:\s*"controls"\s*"media"\s*"pagination"\s*"actions";/s,
+  "Notices must not shift the footer into the flexible media row during scanning"
 );
 for (const [selector, area] of [
   ["app-header", "header"],
   ["controls", "controls"],
-  ["notice", "notice"],
+  // Notices and Undo float over the media, so showing them never moves the grid.
+  ["notice", "media"],
+  ["gallery-undo", "media"],
   ["image-list", "media"],
   ["action-bar", "actions"]
 ]) {

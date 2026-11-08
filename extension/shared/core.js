@@ -252,6 +252,11 @@
     return filenameForMedia(url, index, "image");
   }
 
+  // Per used-name set: the next suffix worth trying for each duplicated name.
+  // Suffixes below it were taken when it was stored; a set that shrank since
+  // (a deleted name) starts over, so results match a search from -2.
+  const nextFilenameSuffixes = new WeakMap();
+
   function uniquifyFilename(filename, usedNames) {
     const safeFilename = sanitizeFilename(filename, "image");
     const lowerName = safeFilename.toLocaleLowerCase("en-US");
@@ -265,7 +270,12 @@
       ? safeFilename.slice(-(extensionName.length + 1))
       : "";
     const stem = extension ? safeFilename.slice(0, -extension.length) : safeFilename;
-    let suffix = 2;
+    let resume = nextFilenameSuffixes.get(usedNames);
+    if (!resume || resume.size > usedNames.size) {
+      resume = { size: 0, suffixes: new Map() };
+      nextFilenameSuffixes.set(usedNames, resume);
+    }
+    let suffix = resume.suffixes.get(lowerName) || 2;
     let candidate = "";
 
     do {
@@ -279,6 +289,8 @@
     } while (usedNames.has(candidate.toLocaleLowerCase("en-US")));
 
     usedNames.add(candidate.toLocaleLowerCase("en-US"));
+    resume.suffixes.set(lowerName, suffix);
+    resume.size = usedNames.size;
     return candidate;
   }
 

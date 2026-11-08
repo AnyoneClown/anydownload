@@ -1533,6 +1533,26 @@ async function testProgressEventsAvoidDurableWriteAmplification() {
     "Transient progress can remain in memory until reconciliation"
   );
 
+  // Open managers ask for statuses after every queue write; reconciling a
+  // running download's byte counters must not write again and loop.
+  harness.downloads.get(1).bytesReceived = 2048;
+  harness.downloads.get(1).totalBytes = 4096;
+  for (let request = 0; request < 3; request += 1) {
+    await harness.send({
+      type: "GET_MEDIA_DOWNLOAD_STATUS",
+      pageUrl: "https://progress.example/page",
+      incognito: false,
+      items: [{ url: "https://progress.example/photo.jpg" }]
+    });
+  }
+  const dashboard = await harness.send({ type: "GET_DOWNLOAD_DASHBOARD", incognito: false });
+  assert.equal(
+    harness.local.setCallCount,
+    writesBeforeProgress,
+    "Status and dashboard reconciles of byte-only progress must not rewrite the durable queue"
+  );
+  assert.equal(dashboard.snapshot.jobs[0].tasks[0].bytesReceived, 2048, "Live byte counters still reach the dashboard");
+
   await harness.emitDownloadChange(1, {
     state: "complete",
     bytesReceived: 4096,

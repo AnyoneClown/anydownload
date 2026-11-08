@@ -692,8 +692,11 @@ for (const embedded of [false, true]) {
   assert.equal(rows().length, 350);
   const focusedSelection = rows()[0].children[0];
   focusedSelection.focus();
+  const firstThumbnail = rows()[0].anydownloadThumbnail;
+  const thumbnailWrites = firstThumbnail.srcWrites;
   ui.renderImages();
-  assert.notEqual(rows()[0].children[0], focusedSelection);
+  assert.equal(rows()[0].children[0], focusedSelection, "Gallery updates reuse unchanged cards");
+  assert.equal(rows()[0].anydownloadThumbnail.srcWrites, thumbnailWrites, "Reused cards keep their loaded thumbnail");
   assert.equal(context.document.activeElement, rows()[0].children[0],
     "Gallery updates preserve keyboard focus on the equivalent media control");
   const detachedPreviewOpener = rows()[0].children.at(-1).children[0];
@@ -778,7 +781,9 @@ for (const embedded of [false, true]) {
     ? { ok: true, statuses: message.items.map(item => ({ status: item.url === measured.url ? "queued" : "new" })) }
     : statusSender(message);
   await ui.refreshDownloadStatuses();
-  assert.notEqual(get("image-list").children[0], unchangedPage, "Changed status still refreshes visible cards");
+  assert.equal(get("image-list").children[0], unchangedPage, "Changed status updates the card in place");
+  assert.equal(unchangedPage.anydownloadParts.statusBadge.textContent, "Queued", "Changed status still refreshes visible cards");
+  assert.match(unchangedPage.anydownloadParts.statusBadge.className, /\bqueued\b/);
   assert.equal(ui.state.selected.has(measured.url), false, "Queued media are removed from selection during status refresh");
   assert.equal(rows()[0].children[0].disabled, true);
   context.browser.runtime.sendMessage = statusSender;

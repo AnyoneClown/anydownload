@@ -28,6 +28,7 @@
   const MAX_ARCHIVE_FETCH_CONCURRENCY = 2;
   const MAX_ARCHIVE_FETCH_TIMEOUT_MS = 120000;
   const DOWNLOAD_RETENTION_POLL_MS = 1000;
+  const DOWNLOAD_RETENTION_POLL_MAX_MS = 30000;
   const DOWNLOAD_RETENTION_MAX_MS = 24 * 60 * 60 * 1000;
   const MAX_IGNORED_PER_SITE = 500;
   const MAX_IGNORED_RULES = 5000;
@@ -862,7 +863,8 @@
         objectUrl,
         resolve,
         startedAt: Date.now(),
-        pollTimer: null
+        pollTimer: null,
+        pollDelay: DOWNLOAD_RETENTION_POLL_MS
       };
       retainedObjectUrls.set(downloadId, retained);
 
@@ -888,7 +890,10 @@
           );
           return;
         }
-        retained.pollTimer = setTimeout(poll, DOWNLOAD_RETENTION_POLL_MS);
+        // downloads.onChanged is the primary signal; this fallback backs off
+        // so a long or paused download is not searched every second for hours.
+        retained.pollTimer = setTimeout(poll, retained.pollDelay);
+        retained.pollDelay = Math.min(DOWNLOAD_RETENTION_POLL_MAX_MS, retained.pollDelay * 2);
       }
 
       poll();
@@ -1490,14 +1495,20 @@
   }
 
   function durableQueueTaskSignature(task) {
+    // Byte counters of a running download stay in this background context's
+    // memory, as in updateQueueForDownload. Persisting them on every status
+    // reconcile rewrote the whole queue several times a second and woke every
+    // open manager through storage.onChanged.
+    const settled = task.needsReconciliation === true ||
+      ["complete", "interrupted", "cancelled"].includes(task.status);
     return JSON.stringify([
       task.status,
       task.downloadId,
       task.attempt,
       task.recordedAttempt,
       task.needsReconciliation === true,
-      task.bytesReceived,
-      task.totalBytes,
+      settled ? task.bytesReceived : null,
+      settled ? task.totalBytes : null,
       task.filename,
       task.error,
       task.completedAt,

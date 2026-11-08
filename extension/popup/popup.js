@@ -715,11 +715,14 @@
   const LIVE_CAPTURE_INTERVAL_MS = 1600;
   const LIVE_RETRY_INTERVAL_MS = 4000;
   const LIVE_FORCE_SCAN_MS = 12000;
+  // Safety-net rescans of an unchanged page back off up to this interval.
+  const LIVE_FORCE_SCAN_MAX_MS = 60000;
   const INSTAGRAM_AUTOMATIC_NETWORK_MS = 10 * 60 * 1000;
   const INSTAGRAM_RATE_LIMIT_COOLDOWN_MS = 5 * 60 * 1000;
   const MAX_INSTAGRAM_NETWORK_SCOPES = 64;
   const SIDEBAR_SCAN_DEBOUNCE_MS = 140;
   const FILTER_RENDER_DEBOUNCE_MS = 90;
+  const SUCCESS_NOTICE_MS = 8000;
   const SIDEBAR_ALL_URLS_PERMISSION = Object.freeze({ origins: ["<all_urls>"] });
   const launchUrl = globalScope.location && globalScope.location.href;
   const launchSourceTabId = sourceTabIdFromUrl(launchUrl);
@@ -747,6 +750,7 @@
   let filenamePreviewTemplateValue = "";
   let filenamePreviewContext = null;
   let filterRenderTimer = null;
+  let noticeTimer = null;
   let uploadClient = null;
   let uploadConnections = [];
   let uploadPickerItems = [];
@@ -819,6 +823,9 @@
   const ignoredKeyByImage = new WeakMap();
   const renderedMetaNodes = new Map();
   const renderedNameNodes = new Map();
+  // Rendered cards by identity, so a gallery update keeps loaded thumbnails
+  // and scroll position instead of rebuilding every tile.
+  let renderedRowCache = new Map();
   let renderedInstagramGroups = [];
   const searchTextCache = new WeakMap();
   const sortNameCache = new WeakMap();
@@ -835,7 +842,10 @@
   let liveCaptureGeneration = 0;
   let liveFingerprint = "";
   let liveLastFullScanAt = 0;
+  let liveForceScanMs = LIVE_FORCE_SCAN_MS;
   let liveRetryNoticeText = "";
+  let renderDeferred = false;
+  let ignoredKeysLoadedFor = "";
   // Instagram network collection is expensive and uses the signed-in session.
   // Automatic scans (live updates, Sidebar follow, page reloads) request it at
   // most once per route every few minutes; explicit scans always may.
@@ -997,10 +1007,21 @@
     }
   }
 
+  // Success toasts clear themselves; errors and guidance stay until replaced.
   function setNotice(message, type) {
+    if (noticeTimer !== null) {
+      clearTimeout(noticeTimer);
+      noticeTimer = null;
+    }
     elements.notice.textContent = message || "";
     elements.notice.className = `notice${type ? ` ${type}` : ""}`;
     elements.notice.hidden = !message;
+    if (message && type === "success") {
+      noticeTimer = setTimeout(() => {
+        noticeTimer = null;
+        if (elements.notice.textContent === message) elements.notice.hidden = true;
+      }, SUCCESS_NOTICE_MS);
+    }
   }
 
   function trackerPermissionPattern(pageUrl) {
@@ -1622,25 +1643,43 @@
           records.delete(record);
           continue;
         }
-        record.label.textContent = filename;
-        record.container.title = image.alt || filename;
-        if (record.number) record.number.textContent = selectionNumberText(image);
-        record.checkbox.setAttribute(
-          "aria-label",
-          downloadStatusFor(image) === "downloaded"
-            ? `Select ${filename} to download it again`
-            : `Select ${filename}`
-        );
-        record.previewButton.setAttribute("aria-label", `Preview ${filename}`);
-        updateRenderedCardActions(record);
-        if (record.moreButton) {
-          record.moreButton.title = `Actions for ${filename}`;
-          record.moreButton.setAttribute("aria-label", `Actions for ${filename}`);
-        }
+        applyRenderedFilename(record, image, filename);
       }
       if (!records.size) {
         renderedNameNodes.delete(url);
       }
+    }
+  }
+
+  function setText(node, value) {
+    if (node.textContent !== value) node.textContent = value;
+  }
+
+  function setTitle(node, value) {
+    if (node.title !== value) node.title = value;
+  }
+
+  function setLabel(node, value) {
+    if (node.getAttribute("aria-label") !== value) node.setAttribute("aria-label", value);
+  }
+
+  // Writes only changed values so a refresh does not dirty every card's style.
+  function applyRenderedFilename(record, image, filename) {
+    if (record.row) {
+      const className = imageRowClassName(image);
+      if (record.row.className !== className) record.row.className = className;
+    }
+    setText(record.label, filename);
+    setTitle(record.container, image.alt || filename);
+    if (record.number) setText(record.number, selectionNumberText(image));
+    setLabel(record.checkbox, downloadStatusFor(image) === "downloaded"
+      ? `Select ${filename} to download it again`
+      : `Select ${filename}`);
+    setLabel(record.previewButton, `Preview ${filename}`);
+    updateRenderedCardActions(record);
+    if (record.moreButton) {
+      setTitle(record.moreButton, `Actions for ${filename}`);
+      setLabel(record.moreButton, `Actions for ${filename}`);
     }
   }
 
@@ -1827,7 +1866,8 @@
     }
     const tick = async () => {
       queueBadgeTimer = null;
-      await refreshQueueBadge();
+      // A background manager tab catches up when it is shown again.
+      if (document.visibilityState !== "hidden") await refreshQueueBadge();
       if (!queueBadgePollingStopped) {
         queueBadgeTimer = setTimeout(tick, 2500);
       }
@@ -1935,6 +1975,7 @@
     state.showIgnored = false;
     state.siteKey = "";
     state.ignoredKeys.clear();
+    ignoredKeysLoadedFor = "";
     elements["image-list"].replaceChildren();
     elements["page-label"].textContent = label;
     updateFilenameTemplateUi();
@@ -2046,11 +2087,13 @@
   }
 
   async function loadIgnoredKeys() {
+    ignoredKeysLoadedFor = "";
     if (!state.siteKey) {
       state.ignoredKeys.clear();
       return;
     }
 
+    const loadedFor = `${state.incognito ? "session" : "local"}\u0000${state.siteKey}`;
     const area = ignoreStorageArea(state.incognito);
     const prefix = ignoreStoragePrefix(state.siteKey);
     const stored = await pruneIgnoredStorage(area, await area.get(null));
@@ -2060,6 +2103,14 @@
       .filter(validIgnoredKey)
       .slice(0, MAX_IGNORED_PER_SITE);
     state.ignoredKeys = new Set(keys);
+    ignoredKeysLoadedFor = loadedFor;
+  }
+
+  // handleIgnoredStorageChanges keeps loaded rules current, so live rescans
+  // of the same site skip reading the whole storage area again.
+  function ignoredKeysAreCurrent() {
+    return Boolean(state.siteKey) &&
+      ignoredKeysLoadedFor === `${state.incognito ? "session" : "local"}\u0000${state.siteKey}`;
   }
 
   function handleIgnoredStorageChanges(changes, areaName) {
@@ -2866,13 +2917,13 @@
   }
 
   // On an Instagram profile, story and highlights sit in a strip above the posts.
-  function appendMediaRows(target, images) {
+  function buildMediaNodes(images, rowFor = makeImageRow) {
     const instagramProfile = Boolean(instagramProfileUsername(state.pageUrl));
     elements["image-list"].classList.toggle("instagram-layout", instagramProfile);
     if (!instagramProfile) {
-      for (const image of images) target.appendChild(makeImageRow(image));
-      return;
+      return images.map((image) => rowFor(image));
     }
+    const target = [];
     const groups = new Map();
     const posts = [];
     for (const image of images) {
@@ -2898,7 +2949,7 @@
       return node;
     };
     if (groups.size) {
-      target.appendChild(heading("Story and highlights"));
+      target.push(heading("Story and highlights"));
       const strip = document.createElement("div");
       strip.className = "ig-strip";
       strip.setAttribute("role", "presentation");
@@ -2924,15 +2975,34 @@
         const tiles = document.createElement("div");
         tiles.className = "ig-group-tiles";
         tiles.setAttribute("role", "presentation");
-        for (const image of group.images) tiles.appendChild(makeImageRow(image));
+        tiles.append(...group.images.map((image) => rowFor(image)));
         wrapper.append(button, tiles);
         strip.appendChild(wrapper);
       }
-      target.appendChild(strip);
-      if (posts.length) target.appendChild(heading("Posts and reels", posts.length));
+      target.push(strip);
+      if (posts.length) target.push(heading("Posts and reels", posts.length));
     }
-    for (const image of posts) target.appendChild(makeImageRow(image));
+    for (const image of posts) target.push(rowFor(image));
     updateInstagramGroupToggles();
+    return target;
+  }
+
+  // Leaves an unchanged gallery untouched and appends live discoveries
+  // without detaching the cards already on screen.
+  function reconcileListChildren(list, nodes) {
+    const current = Array.from(list.children);
+    const prefixMatches = current.length <= nodes.length && current.every((node, index) => node === nodes[index]);
+    if (prefixMatches && current.length === nodes.length) {
+      return false;
+    }
+    if (prefixMatches) {
+      list.append(...nodes.slice(current.length));
+      return true;
+    }
+    const scrollTop = list.scrollTop;
+    list.replaceChildren(...nodes);
+    if (scrollTop && list.scrollTop !== scrollTop) list.scrollTop = scrollTop;
+    return true;
   }
 
   function updateInstagramCollectionFilterUi() {
@@ -3337,13 +3407,18 @@
     }
     for (const meta of nodes) {
       if (meta.isConnected) {
-        meta.textContent = meta.dataset.metaFormat === "size" ? imageSizeText(image) : imageMetaText(image);
+        setText(meta, meta.dataset.metaFormat === "size" ? imageSizeText(image) : imageMetaText(image));
       } else {
         nodes.delete(meta);
       }
     }
     if (!nodes.size) {
       renderedMetaNodes.delete(url);
+    }
+    // A measured size can turn a tile into a small-media tile without a render.
+    const className = imageRowClassName(image);
+    for (const record of renderedNameNodes.get(url) || []) {
+      if (record.row && record.row.className !== className) record.row.className = className;
     }
   }
 
@@ -3450,6 +3525,14 @@
       }
     }
     updateInstagramGroupToggles();
+    let renderedSelection = false;
+    for (const row of renderedRowCache.values()) {
+      if (row.isConnected && / selected\b/.test(row.className)) {
+        renderedSelection = true;
+        break;
+      }
+    }
+    elements["image-list"].classList.toggle("has-selection", renderedSelection);
     elements["page-label"].title = elements["page-label"].textContent;
     scheduleGallerySave();
     const total = state.images.length;
@@ -3612,28 +3695,73 @@
     elements["media-action-preview-button"].focus();
   }
 
+  function downloadStatusBadgeText(status) {
+    return status === "downloaded" ? "Downloaded" : status === "queued" ? "Queued" : status === "failed" ? "Failed" : "New";
+  }
+
+  function downloadStatusBadgeTitle(image, status) {
+    return status === "downloaded" && image.downloadedAt
+      ? `Completed ${new Date(image.downloadedAt).toLocaleString()}`
+      : status === "downloaded"
+        ? "This media has already completed through AnyDownload on this website"
+        : status === "queued"
+          ? "This media is already in the download queue"
+          : status === "failed"
+            ? "The latest queued attempt failed"
+            : "This media has not completed through AnyDownload on this website";
+  }
+
+  // "selected" mirrors the checkbox as a class: :has(input:checked) made
+  // every checkbox change restyle the whole grid.
+  function imageRowClassName(image) {
+    const video = mediaTypeFor(image) === "video";
+    const ignored = isImageIgnored(image);
+    const smallMedia = !video && image.width > 0 && image.height > 0 && Math.max(image.width, image.height) < 200;
+    const selected = !ignored && state.selected.has(image.url) && imageCanBeSelected(image);
+    return `image-row${video ? " video" : ""}${ignored ? " ignored" : ""}${downloadStatusFor(image) === "downloaded" ? " downloaded" : ""}${smallMedia ? " small-media" : ""}${selected ? " selected" : ""}`;
+  }
+
+  function thumbnailUrlFor(image) {
+    return mediaTypeFor(image) === "video" ? image.previewUrl || "" : image.previewUrl || image.url;
+  }
+
+  function slideCountText(image) {
+    const placement = instagramPlacement(image);
+    return placement && placement.total > 1 && ["post", "reel"].includes(placement.kind)
+      ? `${placement.position}/${placement.total}`
+      : "";
+  }
+
+  // Only the card structure is part of the signature; status, selection,
+  // names and sizes are refreshed in place by bindImageRow.
+  function imageRowSignature(image) {
+    const video = mediaTypeFor(image) === "video";
+    return [
+      image.url,
+      video ? "video" : "image",
+      isImageIgnored(image) ? "ignored" : "",
+      thumbnailUrlFor(image),
+      slideCountText(image),
+      video ? formatMediaDuration(image.duration) : ""
+    ].join("\u0001");
+  }
+
+  function imageRowCacheKey(image) {
+    return `${mediaIdentityKey(image)}\u0000${image.url}`;
+  }
+
   function makeImageRow(image) {
     const ignored = isImageIgnored(image);
     const video = mediaTypeFor(image) === "video";
-    const downloadStatus = downloadStatusFor(image);
     const row = document.createElement("article");
-    const smallMedia = !video && image.width > 0 && image.height > 0 && Math.max(image.width, image.height) < 200;
-    row.className = `image-row${video ? " video" : ""}${ignored ? " ignored" : ""}${downloadStatus === "downloaded" ? " downloaded" : ""}${smallMedia ? " small-media" : ""}`;
     row.setAttribute("role", "listitem");
 
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
-    checkbox.checked = state.selected.has(image.url) && imageCanBeSelected(image);
-    checkbox.disabled = (state.busy && !state.liveScanning) || downloadStatus === "queued";
-    checkbox.setAttribute(
-      "aria-label",
-      downloadStatus === "downloaded"
-        ? `Select ${friendlyFilename(image)} to download it again`
-        : `Select ${friendlyFilename(image)}`
-    );
     checkbox.addEventListener("change", () => {
-      if (!selectImage(image, checkbox.checked)) {
-        checkbox.checked = state.selected.has(image.url) && imageCanBeSelected(image);
+      const current = row.anydownloadImage;
+      if (!selectImage(current, checkbox.checked)) {
+        checkbox.checked = state.selected.has(current.url) && imageCanBeSelected(current);
       } else if (state.showSelected) {
         renderImages();
       }
@@ -3644,18 +3772,17 @@
     previewButton.className = "row-action-button preview";
     previewButton.textContent = "Preview";
     previewButton.title = `Preview ${video ? "video" : "image"}`;
-    previewButton.setAttribute("aria-label", `Preview ${friendlyFilename(image)}`);
-    previewButton.disabled = state.busy;
-    previewButton.addEventListener("click", () => openGalleryPreview(image, previewButton));
+    previewButton.addEventListener("click", () => openGalleryPreview(row.anydownloadImage, previewButton));
 
     const thumbnailFrame = document.createElement("div");
     thumbnailFrame.className = `thumbnail-frame${video ? " video" : ""}`;
     let thumbnail = null;
-    const thumbnailUrl = video ? image.previewUrl : image.previewUrl || image.url;
+    const thumbnailUrl = thumbnailUrlFor(image);
     if (thumbnailUrl) {
       thumbnail = document.createElement("img");
       thumbnail.alt = "";
       thumbnail.loading = "lazy";
+      thumbnail.decoding = "async";
       thumbnail.referrerPolicy = "no-referrer";
       thumbnail.dataset.src = thumbnailUrl;
       thumbnail.addEventListener("error", () => thumbnail.classList.add("broken"));
@@ -3669,15 +3796,14 @@
     const selectionNumber = document.createElement("span");
     selectionNumber.className = "selection-number";
     selectionNumber.setAttribute("aria-hidden", "true");
-    selectionNumber.textContent = selectionNumberText(image);
     const facts = document.createElement("span");
     facts.className = "thumbnail-facts";
     facts.setAttribute("aria-hidden", "true");
-    const placement = instagramPlacement(image);
-    if (placement && placement.total > 1 && ["post", "reel"].includes(placement.kind)) {
+    const slideCount = slideCountText(image);
+    if (slideCount) {
       const slides = document.createElement("span");
       slides.className = "thumbnail-fact slides";
-      slides.textContent = `${placement.position}/${placement.total}`;
+      slides.textContent = slideCount;
       facts.appendChild(slides);
     }
     if (video) {
@@ -3689,8 +3815,6 @@
     const size = document.createElement("span");
     size.className = "thumbnail-fact size";
     size.dataset.metaFormat = "size";
-    size.textContent = imageSizeText(image);
-    registerImageMeta(size, image);
     facts.appendChild(size);
     thumbnailFrame.append(selectionNumber, facts);
 
@@ -3699,9 +3823,6 @@
     const name = document.createElement("div");
     name.className = "image-name";
     const filenameLabel = document.createElement("span");
-    const initialFilename = friendlyFilename(image);
-    filenameLabel.textContent = initialFilename;
-    name.title = image.alt || initialFilename;
     name.append(filenameLabel);
     if (video) {
       const mediaBadge = document.createElement("span");
@@ -3711,59 +3832,14 @@
       name.append(mediaBadge);
     }
     const statusBadge = document.createElement("span");
-    statusBadge.className = `download-status-badge ${downloadStatus}`;
-    statusBadge.textContent = downloadStatus === "downloaded"
-      ? "Downloaded"
-      : downloadStatus === "queued"
-        ? "Queued"
-        : downloadStatus === "failed"
-          ? "Failed"
-          : "New";
-    statusBadge.title = downloadStatus === "downloaded" && image.downloadedAt
-      ? `Completed ${new Date(image.downloadedAt).toLocaleString()}`
-      : downloadStatus === "queued"
-        ? "This media is already in the download queue"
-        : downloadStatus === "failed"
-          ? "The latest queued attempt failed"
-          : "This media has not completed through AnyDownload on this website";
     name.append(statusBadge);
-    let nameRecords = renderedNameNodes.get(image.url);
-    if (!nameRecords) {
-      nameRecords = new Set();
-      renderedNameNodes.set(image.url, nameRecords);
-    }
-    nameRecords.add({
-      label: filenameLabel,
-      container: name,
-      checkbox,
-      previewButton,
-      number: selectionNumber
-    });
     const url = document.createElement("div");
     url.className = "image-url";
     url.textContent = image.url;
     url.title = image.url;
     const meta = document.createElement("div");
     meta.className = "image-meta";
-    meta.textContent = imageMetaText(image);
-    registerImageMeta(meta, image);
     copy.append(name, url, meta);
-
-    if (thumbnail) {
-      thumbnail.anydownloadImage = image;
-      thumbnail.anydownloadGeneration = renderGeneration;
-    }
-    row.anydownloadImage = image;
-    row.anydownloadThumbnail = thumbnail;
-    row.anydownloadGeneration = renderGeneration;
-    if (thumbnail && thumbnailObserver) {
-      thumbnailObserver.observe(thumbnail);
-    } else if (thumbnail) {
-      loadVisibleThumbnail(thumbnail);
-    }
-    if (!video && dimensionObserver) {
-      dimensionObserver.observe(row);
-    }
 
     const actions = document.createElement("div");
     actions.className = "row-actions";
@@ -3771,15 +3847,9 @@
     more.type = "button";
     more.className = "row-action-button row-more-button";
     more.textContent = "More";
-    more.title = `Actions for ${initialFilename}`;
-    more.setAttribute("aria-label", `Actions for ${initialFilename}`);
     more.setAttribute("aria-expanded", "false");
     more.setAttribute("aria-controls", "media-actions-panel");
-    more.disabled = state.busy;
-    more.addEventListener("click", () => openMediaActions(image, more));
-    for (const record of nameRecords) {
-      if (record.checkbox === checkbox) record.moreButton = more;
-    }
+    more.addEventListener("click", () => openMediaActions(row.anydownloadImage, more));
     actions.append(previewButton, more);
     if (ignored) {
       row.append(thumbnailFrame, copy, actions);
@@ -3793,6 +3863,67 @@
     }
     checkbox.dataset.focusKey = `${mediaIdentityKey(image)}:select`;
     for (const action of actions.children) action.dataset.focusKey = `${mediaIdentityKey(image)}:${action.className}`;
+    row.anydownloadParts = { checkbox, previewButton, more, thumbnail, filenameLabel, name, statusBadge, selectionNumber, size, meta };
+    row.anydownloadSignature = imageRowSignature(image);
+    bindImageRow(row, image);
+    return row;
+  }
+
+  // Connects a new or reused card to the current render and refreshes the
+  // parts that change without rebuilding it.
+  function bindImageRow(row, image) {
+    const parts = row.anydownloadParts;
+    const { checkbox, previewButton, more, thumbnail, statusBadge, size, meta } = parts;
+    const downloadStatus = downloadStatusFor(image);
+    const className = imageRowClassName(image);
+    if (row.className !== className) row.className = className;
+    row.anydownloadImage = image;
+    row.anydownloadThumbnail = thumbnail;
+    row.anydownloadGeneration = renderGeneration;
+
+    const checked = state.selected.has(image.url) && imageCanBeSelected(image);
+    if (checkbox.checked !== checked) checkbox.checked = checked;
+    const checkboxDisabled = (state.busy && !state.liveScanning) || downloadStatus === "queued";
+    if (checkbox.disabled !== checkboxDisabled) checkbox.disabled = checkboxDisabled;
+
+    const badgeClass = `download-status-badge ${downloadStatus}`;
+    if (statusBadge.className !== badgeClass) statusBadge.className = badgeClass;
+    setText(statusBadge, downloadStatusBadgeText(downloadStatus));
+    setTitle(statusBadge, downloadStatusBadgeTitle(image, downloadStatus));
+
+    let nameRecords = renderedNameNodes.get(image.url);
+    if (!nameRecords) {
+      nameRecords = new Set();
+      renderedNameNodes.set(image.url, nameRecords);
+    }
+    const record = {
+      row,
+      label: parts.filenameLabel,
+      container: parts.name,
+      checkbox,
+      previewButton,
+      number: parts.selectionNumber,
+      moreButton: more
+    };
+    nameRecords.add(record);
+    applyRenderedFilename(record, image, friendlyFilename(image));
+
+    setText(size, imageSizeText(image));
+    registerImageMeta(size, image);
+    setText(meta, imageMetaText(image));
+    registerImageMeta(meta, image);
+
+    if (thumbnail) {
+      thumbnail.anydownloadImage = image;
+      thumbnail.anydownloadGeneration = renderGeneration;
+      if (thumbnail.dataset.src) {
+        if (thumbnailObserver) thumbnailObserver.observe(thumbnail);
+        else loadVisibleThumbnail(thumbnail);
+      }
+    }
+    if (mediaTypeFor(image) !== "video" && dimensionObserver) {
+      dimensionObserver.observe(row);
+    }
     return row;
   }
 
@@ -3834,6 +3965,13 @@
   }
 
   function renderImages() {
+    // A manager tab in the background keeps collecting; its cards are drawn
+    // once when it is shown again.
+    if (document.visibilityState === "hidden") {
+      renderDeferred = true;
+      return;
+    }
+    renderDeferred = false;
     const focusedKey = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.focusKey;
     if (filterRenderTimer !== null) {
       clearTimeout(filterRenderTimer);
@@ -3928,7 +4066,8 @@
       thumbnailObserver = null;
       dimensionObserver = null;
     }
-    elements["image-list"].replaceChildren();
+    const previousRows = renderedRowCache;
+    renderedRowCache = new Map();
     const visible = filteredImages();
     state.galleryPage = Math.max(0, Math.min(state.galleryPage, Math.ceil(visible.length / MAX_RENDERED_ROWS) - 1));
     const first = state.galleryPage * MAX_RENDERED_ROWS;
@@ -3970,15 +4109,26 @@
         reset.addEventListener("click", resetMediaFilters);
         empty.appendChild(reset);
       }
-      elements["image-list"].appendChild(empty);
+      elements["image-list"].replaceChildren(empty);
       updateSummary(visible);
       if (focusedKey) focusCollectionControl();
       return;
     }
 
-    const fragment = document.createDocumentFragment();
-    appendMediaRows(fragment, visible.slice(first, first + MAX_RENDERED_ROWS));
-    elements["image-list"].appendChild(fragment);
+    const rowFor = (image) => {
+      const key = imageRowCacheKey(image);
+      const cached = previousRows.get(key);
+      let row;
+      if (cached && cached.anydownloadSignature === imageRowSignature(image)) {
+        previousRows.delete(key);
+        row = bindImageRow(cached, image);
+      } else {
+        row = makeImageRow(image);
+      }
+      if (!renderedRowCache.has(key)) renderedRowCache.set(key, row);
+      return row;
+    };
+    reconcileListChildren(elements["image-list"], buildMediaNodes(visible.slice(first, first + MAX_RENDERED_ROWS), rowFor));
 
     updateSummary(visible);
     if (focusedKey) {
@@ -4089,6 +4239,7 @@
     if (!context || gallery.siteKey !== context.siteKey) {
       return;
     }
+    let changed = false;
     if (gallery.epoch !== context.epoch) {
       stopGalleryCollection();
       stopLiveCapture();
@@ -4097,13 +4248,19 @@
       state.selected.clear();
       context.sent.clear();
       context.epoch = gallery.epoch;
+      changed = true;
     }
     const current = new Map(state.images.map((image) => [Gallery.recordKey(image), image]));
     for (const record of gallery.records) {
       const key = Gallery.recordKey(record);
       const existing = current.get(key);
       const local = existing && savedRecord(existing);
-      if (!local || JSON.stringify(local) === context.sent.get(key)) {
+      const localJson = local ? JSON.stringify(local) : "";
+      const recordJson = JSON.stringify(record);
+      // The echo of this page's own save matches what it holds; keeping that
+      // media object keeps its download status and caches.
+      if ((!local || localJson === context.sent.get(key)) && localJson !== recordJson) {
+        changed = true;
         const next = { ...record };
         if (existing && Gallery.youtubeUrl(existing) && existing.url !== Gallery.youtubeUrl(existing)) {
           next.url = existing.url;
@@ -4116,7 +4273,10 @@
           state.selected.add(next.url);
         }
       }
-      context.sent.set(key, JSON.stringify(record));
+      context.sent.set(key, recordJson);
+    }
+    if (!changed) {
+      return;
     }
     state.images = accumulateLiveImages([], Array.from(current.values()), {
       maxImages: MAX_DISCOVERED_IMAGES
@@ -4160,6 +4320,7 @@
     state.images = gallery.records;
     state.selected = new TrackedSelectionSet(gallery.records.filter((record) => record.selected).map((record) => record.url));
     state.ignoredKeys = sameContext ? state.ignoredKeys : new Set();
+    if (!sameContext) ignoredKeysLoadedFor = "";
     state.explicitRedownloads.clear();
     state.showIgnored = false;
     if (!samePageScope) state.instagramCollectionFilter = "all";
@@ -4822,7 +4983,7 @@
         state.instagramCollectionFilter = "all";
       }
       try {
-        await loadIgnoredKeys();
+        if (!(settings.live && preserveThisPage && ignoredKeysAreCurrent())) await loadIgnoredKeys();
       } catch (error) {
         state.ignoredKeys = preserveThisPage ? previousIgnoredKeys : new Set();
         merged.warnings.push(`Firefox could not load ignored-media rules: ${error.message || error}`);
@@ -4965,6 +5126,7 @@
         downloadStatusGeneration += 1;
         state.siteKey = "";
         state.ignoredKeys.clear();
+        ignoredKeysLoadedFor = "";
         state.sourceWindowId = null;
         state.pageTitle = "";
         state.pageUrl = "";
@@ -5498,6 +5660,7 @@
     liveCaptureGeneration += 1;
     liveFingerprint = "";
     liveLastFullScanAt = 0;
+    liveForceScanMs = LIVE_FORCE_SCAN_MS;
     liveRetryNoticeText = "";
     if (liveCaptureTimer !== null) {
       clearTimeout(liveCaptureTimer);
@@ -5575,8 +5738,10 @@
         typeof Instagram.isInstagramUrl === "function" &&
         Instagram.isInstagramUrl(state.pageUrl)
       );
-      const forceScan = !instagramPage && now - liveLastFullScanAt >= LIVE_FORCE_SCAN_MS;
+      const forceScan = !instagramPage && now - liveLastFullScanAt >= liveForceScanMs;
       if (changed || scopeChanged || forceScan) {
+        const knownBefore = new Set(state.images.map(mediaIdentityKey));
+        const countBefore = state.images.length;
         const scanned = await scanPage({
           preserveSelection: true,
           quiet: true,
@@ -5590,6 +5755,13 @@
           return;
         }
         liveLastFullScanAt = Date.now();
+        const discovered = state.images.length !== countBefore ||
+          state.images.some((image) => !knownBefore.has(mediaIdentityKey(image)));
+        // A page that keeps changing is rescanned on its fingerprint anyway;
+        // the periodic safety net only needs to stay frequent while it finds media.
+        liveForceScanMs = changed || scopeChanged || discovered
+          ? LIVE_FORCE_SCAN_MS
+          : Math.min(LIVE_FORCE_SCAN_MAX_MS, liveForceScanMs * 2);
       }
       liveFingerprint = fingerprint.fingerprint;
       scheduleLiveCapturePoll(generation);
@@ -6047,6 +6219,13 @@
   }
 
   function wireEvents() {
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") return;
+      if (renderDeferred) renderImages();
+      if (queueBadgeTimer !== null && !queueBadgePollingStopped) {
+        refreshQueueBadge().catch(() => undefined);
+      }
+    });
     for (const type of ["any", "image", "video"]) {
       elements[`media-type-${type}-button`].addEventListener("click", () => {
         elements["media-type-filter-select"].value = type;

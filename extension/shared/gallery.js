@@ -163,8 +163,11 @@
     return Ledger.mediaFingerprint(record);
   }
 
+  let utf8Encoder = null;
+
   function byteLength(value) {
-    return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+    utf8Encoder = utf8Encoder || new TextEncoder();
+    return utf8Encoder.encode(JSON.stringify(value)).byteLength;
   }
 
   function normalizeSite(value) {
@@ -174,6 +177,7 @@
       return null;
     }
     const records = new Map();
+    const recordBytes = new Map();
     const sources = new Map();
     let bytes = 0;
     let urls = 0;
@@ -188,7 +192,8 @@
       if (previous && previous.originalMediaType === 1 && record.originalMediaType !== 1) {
         record = { ...previous, selected: record.selected };
       }
-      const addedBytes = byteLength(record) - (previous ? byteLength(previous) : 0);
+      const size = byteLength(record);
+      const addedBytes = size - (previous ? recordBytes.get(key) : 0);
       const addedUrls = record.url.length + record.previewUrl.length -
         (previous ? previous.url.length + previous.previewUrl.length : 0);
       if ((!previous && records.size >= MAX_ITEMS) ||
@@ -197,6 +202,7 @@
         continue;
       }
       records.set(key, record);
+      recordBytes.set(key, size);
       bytes += addedBytes;
       urls += addedUrls;
     }
@@ -237,9 +243,10 @@
     let bytes = byteLength(gallery);
     for (const raw of remaining.slice(0, MAX_SITES)) {
       const site = normalizeSite(raw);
-      if (site && kept.length < MAX_SITES && bytes + byteLength(site) <= MAX_BYTES) {
+      const size = site && kept.length < MAX_SITES ? byteLength(site) : 0;
+      if (site && kept.length < MAX_SITES && bytes + size <= MAX_BYTES) {
         kept.push(site);
-        bytes += byteLength(site);
+        bytes += size;
       }
     }
     return { sites: kept, gallery, stale: false };

@@ -129,13 +129,22 @@
     };
   }
 
+  // States returned by hydrate are already normalized, deduplicated and
+  // sorted; recognizing them skips re-parsing up to 5,000 URLs per call.
+  const hydratedStates = new WeakSet();
+
   function emptyState() {
-    return { schemaVersion: SCHEMA_VERSION, entries: [] };
+    const state = { schemaVersion: SCHEMA_VERSION, entries: [] };
+    hydratedStates.add(state);
+    return state;
   }
 
   function hydrate(value) {
     if (!value || typeof value !== "object") {
       return emptyState();
+    }
+    if (hydratedStates.has(value)) {
+      return value;
     }
     const version = Number(safeProperty(value, "schemaVersion"));
     if (Number.isFinite(version) && version > SCHEMA_VERSION) {
@@ -161,7 +170,9 @@
       siteCounts.set(entry.siteKey, siteCount + 1);
       entries.push(entry);
     }
-    return { schemaVersion: SCHEMA_VERSION, entries };
+    const state = { schemaVersion: SCHEMA_VERSION, entries };
+    hydratedStates.add(state);
+    return state;
   }
 
   function recordCompletions(inputState, additions, options) {

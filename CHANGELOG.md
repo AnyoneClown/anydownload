@@ -4,6 +4,27 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.27.0] - 2026-11-08
+
+### Changed
+
+- Keep media tiles in place when the collection updates. Live updates, download status changes, and saved-gallery syncs now update the existing tiles instead of rebuilding up to 350 of them, so thumbnails no longer blank and reload, and the scroll position and keyboard focus stay put.
+- Show status messages as a toast over the bottom of the media instead of a row above it, so a message no longer pushes the grid down. Success messages disappear after 8 seconds. The Undo bar for a cleared collection floats the same way.
+- Stop toolbar and footer controls from shifting. Tab labels keep one weight and use fixed-width digits, the download button and selection count keep a minimum width, the destination stays on one line, the download queue count is a corner badge on Downloads, and the media list reserves its scrollbar space.
+- Fade buttons that are disabled for a moment only after a short delay, so short background work such as a live update does not make them blink.
+- Fade unselected media with opacity only and track selection with a class instead of `:has()`, so a selection change no longer restyles the whole grid. Deselecting 350 cards takes about 13 ms instead of 72 ms in Firefox.
+- Stop the Downloads page Refresh button from blinking on every automatic refresh.
+
+### Performance
+
+- Stop rewriting the whole download queue to storage several times a second while a download runs. Byte progress stays in memory between status changes, as it already did for Firefox's progress events, and open managers no longer refresh download status in a loop.
+- Make filename de-duplication linear. Selecting 1,500 files that share a name took about 1.7 seconds per click and now takes about 25 ms. Building the download batch is about 300 times faster for the same files.
+- Normalize the completed-download ledger once per update instead of four times.
+- Back off automatic safety rescans of an unchanged page from every 12 seconds to at most once a minute. Live updates of the same site no longer read all extension storage to reload ignore rules, and the manager no longer re-renders and re-reads download status when its own gallery save comes back unchanged.
+- Pause the Downloads page refresh and the queue badge while their tab is hidden, and draw a hidden manager tab's live updates once it is shown again.
+- Skip computed-style reads for elements that cannot show a CSS image (scripts, metadata, SVG shapes) and read the mask image once, which reduces work on the scanned page.
+- Check a paused data: or blob: download less often over time instead of every second.
+
 ## [1.26.3] - 2026-11-06
 
 ### Fixed

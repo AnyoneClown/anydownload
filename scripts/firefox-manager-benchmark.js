@@ -224,6 +224,39 @@ globalThis.runFirefoxManagerBenchmark = async function ({ samples = 7 } = {}) {
     byId("sort-select").dispatchEvent(new Event("change", { bubbles: true }));
     await paint();
 
+    // Live updates, status refreshes and gallery echoes re-render an unchanged
+    // view. Count visible tiles that are blank right after that render (what
+    // the user sees as a flash) and whether the scroll position survives.
+    const list = byId("image-list");
+    const visibleRows = () => {
+      const bounds = list.getBoundingClientRect();
+      return rows().filter((row) => {
+        const rect = row.getBoundingClientRect();
+        return rect.bottom > bounds.top && rect.top < bounds.bottom;
+      });
+    };
+    const thumbnailShown = (row) => {
+      const image = row.querySelector(".thumbnail-frame img");
+      return Boolean(image && image.getAttribute("src") && image.complete && image.naturalWidth > 0);
+    };
+    list.scrollTop = 1200;
+    await paint();
+    await waitFor(() => visibleRows().length > 0 && visibleRows().every(thumbnailShown), "visible thumbnails load");
+    const stableBefore = visibleRows();
+    const scrollBefore = list.scrollTop;
+    bench.renderImages();
+    const stableAfter = visibleRows();
+    observations.rerenderStability = {
+      visibleTiles: stableAfter.length,
+      blankTilesAfterRender: stableAfter.filter((row) => !thumbnailShown(row)).length,
+      reusedTiles: stableAfter.filter((row) => stableBefore.includes(row)).length,
+      scrollTopBefore: scrollBefore,
+      scrollTopAfter: list.scrollTop
+    };
+    await runSamples("unchangedRerender", () => bench.renderImages());
+    list.scrollTop = 0;
+    await paint();
+
     const beforeStatusRow = rows()[0];
     const statusTiming = await measure(() => bench.refreshDownloadStatuses());
     observations.unchangedStatusRefresh = { ...statusTiming, preservesCardNode: beforeStatusRow === rows()[0] };

@@ -590,7 +590,7 @@ async function checkSelectionDuringScan() {
   started = harness.delayStatuses(new Promise(resolve => { release = resolve; }));
   scanning = popup.scanPage({ preserveSelection: true, live: true });
   await started;
-  const displayed = elements.get("image-list").children[0].children[0].children[0];
+  const displayed = elements.get("image-list").children[0].children[0];
   displayed.checked = true;
   displayed.listeners.get("change")();
   assert.deepEqual(Array.from(popup.state.selected), [refreshedTwo.url],

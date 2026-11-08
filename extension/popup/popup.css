@@ -38,6 +38,9 @@ button {
 button:disabled {
   cursor: default;
   opacity: .45;
+  /* Short background work (live updates, status refreshes) finishes before
+     the fade starts, so controls do not blink; re-enabling is immediate. */
+  transition: opacity var(--motion-fast) var(--motion-ease) 260ms;
 }
 
 h1,
@@ -100,8 +103,8 @@ html.responsive-surface .app-shell {
   grid-area: workspace;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
-  grid-template-areas: "controls" "notice" "undo" "media" "pagination" "actions";
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-areas: "controls" "media" "pagination" "actions";
   min-height: 0;
   overflow: hidden;
 }
@@ -266,6 +269,7 @@ html.responsive-surface .app-shell {
 
 .page-status {
   flex: 0 1000 auto;
+  font-variant-numeric: tabular-nums;
   min-width: 0;
   margin: 0;
   overflow: hidden;
@@ -308,18 +312,25 @@ html.responsive-surface .app-shell {
   border-radius: 6px;
 }
 
+/* A corner badge, so queue changes never resize the navigation. */
 .queue-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
   display: grid;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
   place-items: center;
-  border-radius: 9px;
+  border-radius: 8px;
   color: var(--on-brand);
   background: var(--brand);
-  font-size: 11px;
+  box-shadow: 0 0 0 2px var(--surface);
+  font-size: 10px;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
+  line-height: 1;
+  pointer-events: none;
 }
 
 /* Toolbar: every control at the same quiet weight in one row. */
@@ -359,6 +370,7 @@ html.responsive-surface .app-shell {
   background: transparent;
   font-size: 12px;
   font-weight: 550;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -367,13 +379,13 @@ html.responsive-surface .app-shell {
   color: var(--ink);
 }
 
+/* Same weight as the idle tabs, so switching tabs never shifts the toolbar. */
 .media-type-tabs [aria-pressed="true"],
 .collection-tabs [aria-pressed="true"],
 .view-switch [aria-pressed="true"] {
   color: var(--ink);
   background: var(--surface);
   box-shadow: 0 0 0 1px var(--line);
-  font-weight: 650;
 }
 
 .view-switch .icon-button {
@@ -500,14 +512,20 @@ html.responsive-surface .app-shell {
   height: 12px;
 }
 
-/* Status messages stay one compact line above the media. */
+/* Status messages float over the bottom of the media as a toast, so they
+   never push the grid down; the list reserves room to scroll past them. */
 .notice {
-  grid-area: notice;
+  grid-area: media;
+  z-index: 5;
+  align-self: end;
   max-height: 64px;
-  margin: 0 8px 8px;
+  margin: 0 12px 10px;
   padding: 6px 10px;
   overflow-y: auto;
   border-radius: 6px;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
+  cursor: default;
+  animation: notice-in var(--motion-fast) var(--motion-ease);
   color: var(--brand-ink);
   background: var(--brand-soft);
   font-size: 12px;
@@ -530,6 +548,23 @@ html.responsive-surface .app-shell {
   background: var(--warning-soft);
 }
 
+.media-workspace:has(> .notice:not([hidden])) .image-list {
+  padding-bottom: 80px;
+}
+
+@keyframes notice-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notice {
+    animation: none;
+  }
+}
+
 .gallery-pagination,
 .gallery-undo {
   display: flex;
@@ -547,10 +582,13 @@ html.responsive-surface .app-shell {
 }
 
 .gallery-undo {
-  grid-area: undo;
-  margin: 0 8px 8px;
+  grid-area: media;
+  z-index: 5;
+  align-self: start;
+  margin: 0 12px;
   border: 0;
   border-radius: 6px;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
   color: var(--brand-ink);
   background: var(--brand-soft);
 }
@@ -569,6 +607,8 @@ html.responsive-surface .app-shell {
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
+  /* A scrollbar appearing mid-scan must not resize every tile. */
+  scrollbar-gutter: stable;
 }
 
 .image-list:focus-visible {
@@ -604,7 +644,7 @@ html.responsive-surface .app-shell {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transition: opacity var(--motion-fast) var(--motion-ease), filter var(--motion-fast) var(--motion-ease);
+  transition: opacity var(--motion-fast) var(--motion-ease);
 }
 
 .thumbnail-frame img.broken {
@@ -629,8 +669,12 @@ html.responsive-surface .app-shell {
   font-weight: 600;
 }
 
-/* Unselected media fades once something is selected, so exclusions stand out. */
-.image-list:has(.image-row > input:checked) .image-row:not(:has(> input:checked)) .thumbnail-frame img,
+/* Unselected media fades once something is selected, so exclusions stand out.
+   Opacity only: a filter on hundreds of tiles makes selection and scrolling stutter. */
+.image-list.has-selection .image-row:not(.selected) .thumbnail-frame img {
+  opacity: .35;
+}
+
 .image-row.ignored .thumbnail-frame img {
   opacity: .35;
   filter: grayscale(.6);
@@ -696,7 +740,7 @@ html.responsive-surface .app-shell {
   pointer-events: none;
 }
 
-.image-row:has(> input:checked) .selection-number:not(:empty) {
+.image-row.selected .selection-number:not(:empty) {
   display: grid;
 }
 
@@ -986,7 +1030,7 @@ html.responsive-surface .app-shell {
   font-size: 11px;
 }
 
-.image-list[data-view="list"]:has(.image-row > input:checked) .image-row:not(:has(> input:checked)) .image-copy {
+.image-list[data-view="list"].has-selection .image-row:not(.selected) .image-copy {
   opacity: .6;
 }
 
@@ -1175,8 +1219,10 @@ html.responsive-surface .app-shell {
 }
 
 .selection-review-button {
+  min-width: 92px;
   min-height: 28px;
   padding: 0 8px;
+  text-align: left;
   border: 0;
   border-radius: 6px;
   color: var(--ink);
@@ -1234,10 +1280,9 @@ html.responsive-surface .app-shell {
   white-space: nowrap;
 }
 
+/* The full error stays in the title; wrapping here would shrink the media. */
 .destination-button.active span {
   color: var(--danger);
-  white-space: normal;
-  overflow-wrap: anywhere;
 }
 
 .action-buttons {
@@ -1247,11 +1292,13 @@ html.responsive-surface .app-shell {
 }
 
 .action-buttons #download-button {
+  min-width: 156px;
   min-height: 34px;
   padding: 0 14px;
   border-radius: 6px 0 0 6px;
   font-size: 13px;
   font-weight: 650;
+  font-variant-numeric: tabular-nums;
 }
 
 .action-buttons .download-options-button {
@@ -2060,7 +2107,7 @@ html.tracker-editor body { overflow: auto; }
 .tracker-editor #tracker-panel { display: block; position: static; width: min(760px, calc(100% - 28px)); max-height: none; margin: 16px auto; padding: 20px; box-shadow: none; }
 .tracker-editor #tracker-panel > .popover-heading { display: none; }
 .tracker-editor .action-bar { width: min(760px, 100%); margin: auto; min-height: 48px; border: 0; background: transparent; box-shadow: none; }
-.tracker-editor .notice { margin: 12px auto; max-width: 732px; }
+.tracker-editor .notice { margin: 12px auto; max-width: 732px; box-shadow: none; animation: none; }
 .tracker-page-field { margin-bottom: 20px; }
 .tracker-page-field input {
   width: 100%;

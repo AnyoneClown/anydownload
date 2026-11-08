@@ -1054,6 +1054,17 @@
       }
     }
 
+    // Elements that never paint a CSS image: computed styles there only cost
+    // page time. SVG shapes do not draw CSS backgrounds either.
+    const NON_RENDERING_STYLE_TAGS = new Set([
+      "base", "br", "col", "colgroup", "head", "link", "meta", "noscript", "param",
+      "script", "source", "style", "template", "title", "track", "wbr"
+    ]);
+    function nonRenderingStyleElement(element, tagName) {
+      if (NON_RENDERING_STYLE_TAGS.has(tagName)) return true;
+      return element.namespaceURI === "http://www.w3.org/2000/svg" && tagName !== "svg";
+    }
+
     let embeddedFrameCount = 0;
     for (let elementIndex = 0; elementIndex < allElements.length; elementIndex += 1) {
       const element = allElements[elementIndex];
@@ -1139,16 +1150,18 @@
 
       if (
         elementIndex < generalElementCount && settings.includeBackgrounds &&
-        !telegramPage && !truncated && !payloadLimitReached
+        !telegramPage && !truncated && !payloadLimitReached &&
+        !nonRenderingStyleElement(element, tagName)
       ) {
         try {
           const style = sourceDocument ? element.style : getComputedStyle(element);
+          // Gecko's -webkit-mask-image is an alias of mask-image; read it only
+          // where the standard property is missing.
           const values = [
             style.backgroundImage,
             style.borderImageSource,
             style.listStyleImage,
-            style.maskImage,
-            style.webkitMaskImage
+            style.maskImage === undefined ? style.webkitMaskImage : style.maskImage
           ];
           for (const value of values) {
             if (!value || value === "none") {

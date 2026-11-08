@@ -465,6 +465,11 @@
     return false;
   }
 
+  // Per used-name registry: the last suffix tried for each duplicated name,
+  // so a batch of identical names stays linear. A registry that shrank since
+  // (a deleted name) starts over, so results match a search from -2.
+  const lastUniquifySuffixes = new WeakMap();
+
   function uniquify(value, extension, fallback, usedNames) {
     if (!usedNames) {
       return value;
@@ -475,8 +480,16 @@
 
     let candidate = value;
     let suffix = 1;
+    const resumeKey = `${value}\u0000${extension || ""}\u0000${fallback || ""}`;
+    const usedSize = Number(usedNames.size);
+    let resume = lastUniquifySuffixes.get(usedNames);
+    if (!resume || !Number.isFinite(usedSize) || resume.size > usedSize) {
+      resume = { size: 0, suffixes: new Map() };
+      lastUniquifySuffixes.set(usedNames, resume);
+    }
+    const resumeFrom = resume.suffixes.get(resumeKey) || 1;
     while (hasUsedName(usedNames, usedNameKey(candidate))) {
-      suffix += 1;
+      suffix = Math.max(suffix, resumeFrom - 1) + 1;
       const existingExtension = extensionFromFilename(value);
       const suffixText = `-${suffix}`;
       const extensionText = existingExtension ? `.${existingExtension}` : "";
@@ -497,6 +510,8 @@
     const managed = managedUsedNames.get(usedNames);
     if (managed) addManagedName(managed, key);
     else usedNames.add(key);
+    if (suffix > 1) resume.suffixes.set(resumeKey, suffix);
+    resume.size = Number(usedNames.size);
     return candidate;
   }
 

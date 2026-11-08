@@ -567,19 +567,29 @@
   function schedulePoll() {
     if (pollTimer !== null) {
       clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+    // A hidden page refreshes once it is shown again.
+    if (root.document && root.document.visibilityState === "hidden") {
+      return;
     }
     const summary = snapshot && snapshot.summary || {};
     const active = Number(summary.active || 0) + Number(summary.queued || 0) + Number(summary.paused || 0);
     pollTimer = setTimeout(refresh, active ? POLL_ACTIVE_MS : POLL_IDLE_MS);
   }
 
-  async function refresh() {
+  // Only a manual refresh shows its busy state; background polls would
+  // otherwise blink the button every second while downloads run.
+  async function refresh(options) {
     if (refreshing) {
       return;
     }
+    const manual = Boolean(options && options.manual);
     refreshing = true;
-    elements["refresh-button"].disabled = true;
-    elements["refresh-button"].setAttribute("aria-busy", "true");
+    if (manual) {
+      elements["refresh-button"].disabled = true;
+      elements["refresh-button"].setAttribute("aria-busy", "true");
+    }
     try {
       const response = await browser.runtime.sendMessage({
         type: "GET_DOWNLOAD_DASHBOARD",
@@ -605,8 +615,10 @@
       }
     } finally {
       refreshing = false;
-      elements["refresh-button"].disabled = false;
-      elements["refresh-button"].setAttribute("aria-busy", "false");
+      if (manual) {
+        elements["refresh-button"].disabled = false;
+        elements["refresh-button"].setAttribute("aria-busy", "false");
+      }
       schedulePoll();
     }
   }
@@ -634,7 +646,12 @@
   }
 
   function wireEvents() {
-    elements["refresh-button"].addEventListener("click", refresh);
+    elements["refresh-button"].addEventListener("click", () => refresh({ manual: true }));
+    if (root.document && typeof root.document.addEventListener === "function") {
+      root.document.addEventListener("visibilitychange", () => {
+        if (root.document.visibilityState !== "hidden" && pollTimer === null && !refreshing) refresh();
+      });
+    }
     const canOpenFolder = browser.downloads && typeof browser.downloads.showDefaultFolder === "function";
     elements["open-folder-button"].disabled = !canOpenFolder;
     elements["open-folder-button"].hidden = !canOpenFolder;
