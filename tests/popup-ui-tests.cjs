@@ -189,7 +189,10 @@ const context = vm.createContext({
     },
     createElement: tagName => new Element(tagName),
     createDocumentFragment: () => new Element(),
-    addEventListener() {}
+    body: new Element("body"),
+    listeners: {},
+    querySelector: () => null,
+    addEventListener(name, callback) { this.listeners[name] = callback; }
   }
 });
 let source = fs.readFileSync(path.join(__dirname, "../extension/popup/popup.js"), "utf8");
@@ -432,6 +435,59 @@ assert.equal(ui.state.explicitRedownloads.size, 0);
 assert.equal(ui.state.selected.size, 0);
 delete first.downloadStatus;
 delete first.downloadFingerprint;
+
+{
+  const range = ["a", "b", "c", "d", "e"].map(name => ({
+    url: `https://photos.example/range-${name}.jpg`, width: 1000, height: 600, kinds: ["image"]
+  }));
+  range[3].downloadStatus = "downloaded";
+  range[3].downloadFingerprint = "range-d";
+  ui.state.images = range;
+  ui.state.selected.clear();
+  const list = get("image-list");
+  const ownQuery = list.querySelectorAll;
+  let rows = [];
+  list.querySelectorAll = selector => selector === ".image-row" ? rows : ownQuery.call(list, selector);
+  rows = range.map(image => Object.assign(ui.makeImageRow(image), { getClientRects: () => [{}] }));
+  const shiftClick = (row, target = row) => {
+    let prevented = false;
+    row.listeners.click({ target, shiftKey: true, preventDefault() { prevented = true; } });
+    return prevented;
+  };
+  shiftClick(rows[2]);
+  assert.deepEqual([...ui.state.selected], [range[2].url], "Shift+click without an anchor selects one card");
+  rows[0].click();
+  shiftClick(rows[4]);
+  assert.deepEqual([...ui.state.selected].sort(), [range[0], range[1], range[2], range[4]].map(image => image.url).sort(),
+    "Shift+click selects every card between the anchor and the target, skipping completed media");
+  const checkbox = rows[1].children[0];
+  checkbox.checked = false; // Firefox flips the checkbox before the click reaches the card.
+  assert.equal(shiftClick(rows[1], checkbox), true, "A Shift+click on a checkbox replaces its own toggle");
+  assert.deepEqual([...ui.state.selected], [range[0].url], "Shift+click on a selected card deselects the range");
+  ui.state.busy = true;
+  shiftClick(rows[4]);
+  assert.deepEqual([...ui.state.selected], [range[0].url], "Busy cards refuse range selection");
+  ui.state.busy = false;
+
+  const keydown = context.document.listeners.keydown;
+  const press = (key, extra = {}) => {
+    let prevented = false;
+    keydown({ key, ctrlKey: true, target: context.document.body, preventDefault() { prevented = true; }, ...extra });
+    return prevented;
+  };
+  ui.updateSummary();
+  get("select-all-button").getClientRects = () => [{}];
+  assert.equal(press("a", { target: { closest: selector => /textarea/.test(selector) ? get("filter-input") : null } }), false, "Ctrl+A in the search field selects its text");
+  assert.equal(press("a"), true);
+  assert.deepEqual([...ui.state.selected].sort(), [range[0], range[1], range[2], range[4]].map(image => image.url).sort(),
+    "Ctrl/Cmd+A selects every selectable card like Select all");
+  ui.state.selected.clear();
+  assert.equal(press("a", { ctrlKey: false, metaKey: true }), true, "Cmd+A works on macOS");
+  assert.equal(ui.state.selected.size, 4);
+  list.querySelectorAll = ownQuery;
+  ui.state.images = [first, second];
+}
+ui.state.selected.clear();
 ui.state.selected.add(first.url);
 ui.state.selected.add(second.url);
 

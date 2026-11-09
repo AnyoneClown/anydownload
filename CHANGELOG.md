@@ -4,6 +4,14 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Select media like in a file manager: Shift+click a card to select or deselect every card between it and the last one you clicked, and press Ctrl+A (Cmd+A on macOS) to select all. A plain or Ctrl/Cmd+click still toggles one card. Ranges skip media that already completed, as Select all does.
+
+### Fixed
+
+- Stop carrying one profile's media into another. Opening a different Instagram account or Fapello profile now clears the saved collection for that website instead of adding the new profile's media to the old ones. Pages that belong to no single profile, such as a post or the feed, keep the current collection. Downloaded files and history are kept.
+
 ## [1.27.0] - 2026-11-08
 
 ### Changed

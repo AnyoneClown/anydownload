@@ -826,6 +826,10 @@
   // Rendered cards by identity, so a gallery update keeps loaded thumbnails
   // and scroll position instead of rebuilding every tile.
   let renderedRowCache = new Map();
+  // The card a plain or Ctrl/Cmd click last toggled; Shift+click extends from it.
+  let selectionAnchorUrl = "";
+  const shortcutModifier = typeof navigator === "object" &&
+    /Mac|iPhone|iPad/i.test(String(navigator.platform || "")) ? "Cmd" : "Ctrl";
   let renderedInstagramGroups = [];
   const searchTextCache = new WeakMap();
   const sortNameCache = new WeakMap();
@@ -2469,6 +2473,35 @@
     return true;
   }
 
+  // Shift+click applies the clicked card's new state to every card between it
+  // and the anchor, in on-screen order, like a checkbox list in a mail client.
+  // Returns false when there is no anchor on screen, so the click acts alone.
+  function selectImageRange(target, selected) {
+    const rows = Array.from(elements["image-list"].querySelectorAll(".image-row"))
+      .filter((row) => row.anydownloadImage && row.getClientRects().length);
+    const from = rows.findIndex((row) => row.anydownloadImage.url === selectionAnchorUrl);
+    const to = rows.findIndex((row) => row.anydownloadImage === target);
+    if (!target || from < 0 || to < 0 || from === to) return false;
+    if (state.busy && !state.liveScanning) return true;
+    for (const row of rows.slice(Math.min(from, to), Math.max(from, to) + 1)) {
+      const image = row.anydownloadImage;
+      const status = downloadStatusFor(image);
+      if (isImageIgnored(image) || status === "queued") continue;
+      if (!selected) {
+        state.selected.delete(image.url);
+        if (image.downloadFingerprint) state.explicitRedownloads.delete(image.downloadFingerprint);
+      } else if (status !== "downloaded" || image === target) {
+        // Like Select all, a range skips media that already completed; click
+        // one directly to download it again.
+        if (status === "downloaded" && image.downloadFingerprint) state.explicitRedownloads.add(image.downloadFingerprint);
+        state.selected.add(image.url);
+      }
+    }
+    selectionAnchorUrl = target.url;
+    renderImages();
+    return true;
+  }
+
   async function openImagePreview(image) {
     if (Gallery.youtubeUrl(image)) {
       const createProperties = { active: true, url: `https://www.youtube.com/watch?v=${image.videoId}` };
@@ -3583,6 +3616,7 @@
     );
     elements["select-none-button"].disabled = selectionBusy || selected === 0;
     elements["select-all-button"].textContent = hasFilter ? "Select matches only" : "Select all";
+    elements["select-all-button"].title = `${hasFilter ? "Select every matching file" : "Select every file"} (${shortcutModifier}+A). Shift+click a card to select a range.`;
     elements["select-none-button"].textContent = "Deselect";
     elements["download-button"].hidden = state.showIgnored;
     elements["archive-footer-button"].hidden = state.showIgnored;
@@ -3762,8 +3796,9 @@
       const current = row.anydownloadImage;
       if (!selectImage(current, checkbox.checked)) {
         checkbox.checked = state.selected.has(current.url) && imageCanBeSelected(current);
-      } else if (state.showSelected) {
-        renderImages();
+      } else {
+        selectionAnchorUrl = current.url;
+        if (state.showSelected) renderImages();
       }
     });
 
@@ -3855,10 +3890,20 @@
       row.append(thumbnailFrame, copy, actions);
     } else {
       row.append(checkbox, thumbnailFrame, copy, actions);
+      // A click anywhere on the card toggles it, so Ctrl/Cmd+click adds or
+      // removes one card as in a file manager; Shift+click selects a range.
       row.addEventListener("click", (event) => {
-        if (!checkbox.disabled && !event.target.closest("button, input")) {
-          checkbox.click();
+        const onCheckbox = event.target === checkbox;
+        if (checkbox.disabled || (!onCheckbox && event.target.closest("button, input"))) return;
+        if (event.shiftKey) {
+          // The checkbox has already flipped by the time the click bubbles here.
+          const selected = onCheckbox ? checkbox.checked : !checkbox.checked;
+          if (selectImageRange(row.anydownloadImage, selected)) {
+            if (onCheckbox) event.preventDefault();
+            return;
+          }
         }
+        if (!onCheckbox) checkbox.click();
       });
     }
     checkbox.dataset.focusKey = `${mediaIdentityKey(image)}:select`;
@@ -4210,7 +4255,7 @@
     // Send only changed records so another tab's discoveries and selection edits survive.
     galleryWritePromise = browser.runtime.sendMessage({
       type: "SITE_GALLERY", action: "save", siteKey: context.siteKey,
-      incognito: context.incognito, epoch: context.epoch, records
+      incognito: context.incognito, epoch: context.epoch, profileKey: context.profileKey, records
     }).then((result) => {
       if (!result || !result.ok) {
         throw new Error(result && result.error || "Firefox could not save the gallery.");
@@ -4291,16 +4336,20 @@
     if (!siteKey) {
       return;
     }
-    const sameContext = galleryContext && galleryContext.siteKey === siteKey &&
+    const profileKey = Gallery.profileKeyForUrl(tab.url);
+    let sameContext = galleryContext && galleryContext.siteKey === siteKey &&
       galleryContext.incognito === Boolean(tab.incognito);
     const samePageScope = sameContext && state.pageScopeKey === pageScopeKeyForUrl(tab.url);
-    if (sameContext && settings.live) {
+    const otherProfile = sameContext && Boolean(profileKey && galleryContext.profileKey) &&
+      profileKey !== galleryContext.profileKey;
+    if (sameContext && settings.live && !otherProfile) {
       return;
     }
-    if (!sameContext) resetCollectionView();
+    if (!sameContext || otherProfile) resetCollectionView();
     await saveCurrentGallery();
+    const incognito = Boolean(tab.incognito);
     const result = await browser.runtime.sendMessage({
-      type: "SITE_GALLERY", action: "get", siteKey, incognito: Boolean(tab.incognito)
+      type: "SITE_GALLERY", action: "get", siteKey, incognito
     });
     if (!scanSourceStillCurrent(settings, generation)) {
       return;
@@ -4308,9 +4357,29 @@
     if (!result || !result.ok) {
       throw new Error(result && result.error || "Firefox could not restore this website's gallery.");
     }
-    const gallery = Gallery.normalizeSite(result.gallery);
+    let gallery = Gallery.normalizeSite(result.gallery);
+    let profileCleared = false;
+    if (Gallery.profileChanged(gallery, profileKey)) {
+      // Another profile's media must not carry over into this one. Detach the
+      // view first so the clear's own storage echo cannot restart this scan.
+      galleryContext = null;
+      sameContext = false;
+      clearedGallery = null;
+      const cleared = await browser.runtime.sendMessage({
+        type: "SITE_GALLERY", action: "clear", siteKey, incognito, profileKey
+      });
+      if (!scanSourceStillCurrent(settings, generation)) {
+        return;
+      }
+      if (!cleared || !cleared.ok) {
+        throw new Error(cleared && cleared.error || "Firefox could not clear the previous profile's media.");
+      }
+      gallery = Gallery.normalizeSite(cleared.gallery);
+      profileCleared = true;
+    }
     galleryContext = {
-      siteKey, incognito: Boolean(tab.incognito), epoch: gallery.epoch, pending: 0,
+      siteKey, incognito, epoch: gallery.epoch, pending: 0,
+      profileKey: profileKey || Gallery.galleryProfileKey(gallery),
       sent: new Map(gallery.records.map((record) => [Gallery.recordKey(record), JSON.stringify(record)]))
     };
     state.siteKey = siteKey;
@@ -4326,6 +4395,9 @@
     if (!samePageScope) state.instagramCollectionFilter = "all";
     state.instagramCollectionMode = state.images.some((image) => image.instagramCollections.length);
     elements["page-label"].textContent = displayPageTitle(state.pageTitle, state.pageUrl);
+    if (profileCleared) {
+      setNotice("Opened another profile. The previous profile's media were cleared; downloaded files and history are kept.");
+    }
     markFilenamePreviewsDirty();
     renderImages();
   }
@@ -4343,7 +4415,8 @@
     await saveCurrentGallery();
     try {
       const result = await browser.runtime.sendMessage({
-        type: "SITE_GALLERY", action: "clear", siteKey: context.siteKey, incognito: context.incognito
+        type: "SITE_GALLERY", action: "clear", siteKey: context.siteKey, incognito: context.incognito,
+        profileKey: context.profileKey
       });
       if (!result || !result.ok) {
         throw new Error(result && result.error || "Firefox could not clear this gallery.");
@@ -4393,7 +4466,8 @@
     updateSummary();
     try {
       const result = await browser.runtime.sendMessage({ type: "SITE_GALLERY", action: "save",
-        siteKey: undo.context.siteKey, incognito: undo.context.incognito, epoch: undo.epoch, records: undo.records });
+        siteKey: undo.context.siteKey, incognito: undo.context.incognito, epoch: undo.epoch,
+        profileKey: undo.context.profileKey, records: undo.records });
       if (!result || !result.ok) throw new Error(result && result.error || "Firefox could not restore this collection.");
       if (galleryContext !== undo.context) return;
       if (result.stale) {
@@ -6154,7 +6228,14 @@
           if (state.liveCapture) {
             stopLiveCapture();
           }
-          if (state.siteKey && Core.siteKeyForUrl(nextUrl) === state.siteKey &&
+          const nextProfileKey = Gallery.profileKeyForUrl(nextUrl);
+          if (galleryContext && galleryContext.siteKey === state.siteKey && nextProfileKey &&
+            galleryContext.profileKey && nextProfileKey !== galleryContext.profileKey) {
+            resetSidebarPageState(
+              tab && tab.title || "Loading another profile…",
+              "Opened another profile. The previous profile's media will be cleared from this collection."
+            );
+          } else if (state.siteKey && Core.siteKeyForUrl(nextUrl) === state.siteKey &&
             !/^https:\/\/web\.telegram\.org\//i.test(nextUrl)) {
             state.pageUrl = nextUrl;
             state.pageScopeKey = nextPageScopeKey;
@@ -6454,6 +6535,27 @@
       closeMediaFilters();
     });
     elements["clear-ignored-button"].addEventListener("click", restoreAllIgnoredImages);
+    // Shift+click would otherwise select the card text between two clicks.
+    elements["image-list"].addEventListener("mousedown", (event) => {
+      if (event.shiftKey && event.button === 0 && event.target.closest(".image-row") &&
+        !event.target.closest("button")) {
+        event.preventDefault();
+      }
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.defaultPrevented || event.altKey || event.shiftKey || !(event.ctrlKey || event.metaKey) ||
+        String(event.key).toLowerCase() !== "a") {
+        return;
+      }
+      const target = event.target && typeof event.target.closest === "function" ? event.target : null;
+      const button = elements["select-all-button"];
+      if ((target && target.closest("input:not([type='checkbox']), textarea, select, [contenteditable]")) ||
+        document.querySelector("dialog[open]") || button.hidden || button.disabled || !button.getClientRects().length) {
+        return;
+      }
+      event.preventDefault();
+      button.click();
+    });
     elements["select-all-button"].addEventListener("click", () => {
       state.selected = new TrackedSelectionSet(filteredImages()
         .filter((image) => downloadStatusFor(image) !== "downloaded" && imageCanBeSelected(image))

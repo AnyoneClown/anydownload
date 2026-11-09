@@ -464,6 +464,65 @@ async function checkInstagramCollectionRefresh() {
   }
 }
 
+async function checkProfileSwitch() {
+  assert.equal(Gallery.profileKeyForUrl("https://www.instagram.com/Alice/"), "instagram:alice");
+  assert.equal(Gallery.profileKeyForUrl("https://www.instagram.com/alice/reels/"), "instagram:alice");
+  assert.equal(Gallery.profileKeyForUrl("https://www.instagram.com/alice/p/CODE123/"), "instagram:alice");
+  assert.equal(Gallery.profileKeyForUrl("https://www.instagram.com/stories/alice/123/"), "instagram:alice");
+  for (const url of ["https://www.instagram.com/", "https://www.instagram.com/p/CODE123/",
+    "https://www.instagram.com/explore/", "https://www.instagram.com/stories/highlights/1/", `${siteKey}/alice`]) {
+    assert.equal(Gallery.profileKeyForUrl(url), "", `${url} belongs to no single profile`);
+  }
+  assert.equal(Gallery.profileKeyForUrl(`${fapelloSite}/alice/page-3/`), `fapello:${fapelloSite}/alice/`);
+
+  const instagram = "https://www.instagram.com";
+  const media = (name, page) => ({ ...photo(name), pageUrl: `${instagram}/${page}` });
+  const harness = popupHarness();
+  const { popup, tab, stored, elements } = harness;
+  tab.url = `${instagram}/alice/`;
+  harness.setImages([media("alice-1", "alice/"), media("alice-2", "alice/")]);
+  assert.equal(await popup.scanPage(), true);
+  assert.equal(popup.state.images.length, 2);
+  assert.equal(Gallery.getSite(stored.local, instagram).profileKey, "instagram:alice");
+
+  tab.url = `${instagram}/bob/`;
+  harness.setImages([media("bob-1", "bob/")]);
+  assert.equal(await popup.scanPage(), true);
+  assert.deepEqual(Array.from(popup.state.images, (image) => image.pageTitle), ["bob-1"],
+    "Opening another profile must not carry over the previous profile's media");
+  assert.deepEqual([...popup.state.selected], [media("bob-1", "bob/").url]);
+  assert.deepEqual(Array.from(Gallery.getSite(stored.local, instagram).records, (record) => record.pageTitle), ["bob-1"]);
+  assert.equal(Gallery.getSite(stored.local, instagram).profileKey, "instagram:bob");
+  assert.match(elements.get("notice").textContent, /another profile/);
+
+  tab.url = `${instagram}/p/CODE123/`;
+  harness.setImages([media("bob-post", "p/CODE123/")]);
+  assert.equal(await popup.scanPage(), true);
+  assert.equal(popup.state.images.length, 2, "A post page without an owner keeps the current profile's media");
+
+  harness.navigate(`${instagram}/carol/`);
+  assert.equal(popup.state.images.length, 0, "Navigating to another profile drops the old media at once");
+  harness.setImages([media("carol-1", "carol/")]);
+  assert.equal(await popup.scanPage(), true);
+  assert.deepEqual(Array.from(popup.state.images, (image) => image.pageTitle), ["carol-1"]);
+
+  // Galleries saved before profiles were recorded fall back to their pages.
+  const legacy = Gallery.updateSites([], { siteKey: instagram, epoch: 0, records: [media("old", "alice/")] }).sites;
+  delete legacy[0].profileKey;
+  assert.equal(Gallery.normalizeSite(legacy[0]).profileKey, "");
+  const reopened = popupHarness({ local: legacy, session: [] });
+  reopened.tab.url = `${instagram}/bob/`;
+  reopened.setImages([media("bob-1", "bob/")]);
+  assert.equal(await reopened.popup.scanPage(), true);
+  assert.deepEqual(Array.from(reopened.popup.state.images, (image) => image.pageTitle), ["bob-1"]);
+
+  const sameProfile = popupHarness({ local: legacy, session: [] });
+  sameProfile.tab.url = `${instagram}/alice/`;
+  sameProfile.setImages([media("new", "alice/")]);
+  assert.equal(await sameProfile.popup.scanPage(), true);
+  assert.equal(sameProfile.popup.state.images.length, 2, "Returning to the same profile keeps its collection");
+}
+
 async function checkInstagramNetworkScope() {
   const harness = popupHarness();
   const { popup, tab, elements } = harness;
@@ -922,6 +981,7 @@ function checkScrolling() {
   await checkRefreshMedia();
   await checkInstagramCollectionRefresh();
   await checkInstagramNetworkScope();
+  await checkProfileSwitch();
   await checkSelectionDuringScan();
   await checkSavedCollectionView();
   await checkFixedPageLimit();

@@ -86,6 +86,60 @@
     return "";
   }
 
+  const INSTAGRAM_RESERVED = new Set([
+    "about", "accounts", "api", "challenge", "developer", "direct", "directory",
+    "emails", "explore", "legal", "p", "press", "privacy", "reel", "reels",
+    "static", "stories", "terms", "tv", "web"
+  ]);
+
+  // Identifies whose media a page shows (an Instagram account or a Fapello
+  // profile), or "" when the page belongs to no single profile. A saved
+  // gallery is cleared when the user opens a different profile.
+  function profileKeyForUrl(value) {
+    const url = parsedPageUrl(value);
+    if (!url) return "";
+    if (/(^|\.)instagram\.com$/i.test(url.hostname)) {
+      let segments;
+      try {
+        segments = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+      } catch (_error) {
+        return "";
+      }
+      const first = String(segments[0] || "").toLowerCase();
+      const name = first === "stories" && String(segments[1] || "").toLowerCase() !== "highlights"
+        ? String(segments[1] || "").toLowerCase()
+        : INSTAGRAM_RESERVED.has(first) ? "" : first;
+      return /^[a-z0-9._]{1,80}$/.test(name) ? `instagram:${name}` : "";
+    }
+    const fapello = fapelloProfileUrl(url.href);
+    return fapello ? `fapello:${fapello}` : "";
+  }
+
+  function validProfileKey(value) {
+    const key = String(value || "");
+    return key.length <= 300 && /^(?:instagram|fapello):\S+$/.test(key) ? key : "";
+  }
+
+  // The profile a saved gallery was collected from. Galleries saved before
+  // this was stored fall back to the profile of their first profile page.
+  function galleryProfileKey(gallery) {
+    if (!gallery) return "";
+    if (gallery.profileKey) return gallery.profileKey;
+    for (const record of Array.isArray(gallery.records) ? gallery.records.slice(0, MAX_ITEMS) : []) {
+      const key = profileKeyForUrl(record && record.pageUrl);
+      if (key) return key;
+    }
+    return "";
+  }
+
+  // True when a page of profile `profileKey` must not inherit this gallery.
+  function profileChanged(gallery, profileKey) {
+    const next = validProfileKey(profileKey);
+    const current = galleryProfileKey(gallery);
+    return Boolean(next && current && next !== current &&
+      gallery && Array.isArray(gallery.records) && gallery.records.length);
+  }
+
   function youtubeUrl(image) {
     if (image && image.sourceProvider === "youtube" &&
       /^[A-Za-z0-9_-]{11}$/.test(image.videoId) &&
@@ -209,6 +263,7 @@
     return {
       siteKey,
       epoch: Number.isSafeInteger(value.epoch) && value.epoch >= 0 ? value.epoch : 0,
+      profileKey: validProfileKey(value.profileKey),
       updatedAt: Number.isFinite(value.updatedAt) ? value.updatedAt : 0,
       records: Array.from(records.values()),
       trimmed
@@ -228,9 +283,14 @@
     if (message.action !== "clear" && message.epoch !== current.epoch) {
       return { sites, gallery: current, stale: true };
     }
+    const clearing = message.action === "clear";
     const gallery = normalizeSite({
       ...current,
-      epoch: message.action === "clear" ? current.epoch + 1 : current.epoch,
+      epoch: clearing ? current.epoch + 1 : current.epoch,
+      // A clear starts a new collection for the profile it names; a save only
+      // claims a gallery that does not belong to a profile yet.
+      profileKey: clearing ? validProfileKey(message.profileKey)
+        : galleryProfileKey(current) || validProfileKey(message.profileKey),
       updatedAt: now,
       records: message.action === "clear" ? [] : [
         ...current.records,
@@ -339,6 +399,7 @@
   return {
     STORAGE_KEY, MAX_SITES, MAX_BYTES, MAX_ITEMS, MAX_PAGES, MAX_FAPELLO_PAGES, MAX_STEPS, MAX_DURATION_MS,
     pageUrl, isFapelloUrl, fapelloProfileUrl, fapelloNextPageUrl,
+    profileKeyForUrl, galleryProfileKey, profileChanged,
     youtubeUrl, normalizeRecord, recordKey, normalizeSite, getSite, updateSites, scrollPage, fetchPage
   };
 });
