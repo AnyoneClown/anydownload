@@ -7,6 +7,12 @@ All notable changes to AnyDownload are documented here.
 ### Added
 
 - Select media like in a file manager: Shift+click a card to select or deselect every card between it and the last one you clicked, and press Ctrl+A (Cmd+A on macOS) to select all. A plain or Ctrl/Cmd+click still toggles one card. Ranges skip media that already completed, as Select all does.
+- Show media while a long scan is still running. Collecting an Instagram account's history, its stories and highlights, or a FapFolder group's posts now adds what it has found to the collection every second, and you can select it right away. Stop scanning ends the run and keeps everything found so far; downloads start once the scan ends or is stopped. If a scan fails partway, the media it already found stays. Media found so far is also saved every few seconds, so closing the popup keeps it.
+
+### Changed
+
+- Mark every video in the grid. A video tile always shows a play chip with the video's length, or "Video" while the length is unknown, and a video without a poster shows a play mark instead of a text label. When a page does not report a video's length or size, AnyDownload reads only the file's metadata for the videos on screen, two at a time, and saves what it learns with the collection. Opening a video in the preview fills them in too.
+- Name the media type before downloading. A selection of only videos or only images reads "Download 4 videos" or "Download 8 images", and a mixed selection shows how many videos it includes, such as "12 selected · 4 videos".
 
 ### Fixed
 

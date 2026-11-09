@@ -113,9 +113,14 @@ function popupHarness(stored = { local: [], session: [] }) {
   const scriptCalls = [];
   let resultExtras = {};
   let collectorError = null;
+  // Reads of a running collector's progress slot, and the reply they get.
+  const progressCalls = [];
+  let progressReply = null;
+  const progressTimers = [];
   const tab = { id: 1, url: `${siteKey}/one`, title: "one", incognito: false, windowId: 1, active: true };
   const context = {
     URL, TextEncoder, TextDecoder, console, Date,
+    crypto: require("node:crypto").webcrypto,
     location: { href: "moz-extension://test/popup/popup.html?sourceTabId=1" },
     addEventListener() {},
     document: {
@@ -132,6 +137,9 @@ function popupHarness(stored = { local: [], session: [] }) {
       const id = ++timerId;
       if (delay === 1200) {
         timers.set(id, setTimeout(callback, 0));
+      }
+      if (delay === 1000) {
+        progressTimers.push(callback);
       }
       return id;
     },
@@ -193,6 +201,10 @@ function popupHarness(stored = { local: [], session: [] }) {
       scripting: {
         async executeScript({ func, args }) {
           scriptCalls.push({ name: func.name, args });
+          if (func.name === "readCollectorProgress") {
+            progressCalls.push(args[0]);
+            return [{ frameId: 0, result: progressReply ? progressReply(args[0]) : { active: false } }];
+          }
           if (func.name === "scrollPage") {
             scrolls += 1;
             if (profilePages) {
@@ -255,6 +267,10 @@ function popupHarness(stored = { local: [], session: [] }) {
     popup, tab, stored, elements, fetchedPages, scriptCalls,
     setResultExtras(extras) { resultExtras = extras || {}; },
     failCollector(error) { collectorError = error; },
+    progressCalls,
+    setProgress(reply) { progressReply = reply; },
+    // Fires the progress-read timers the popup scheduled so far.
+    runProgressTimers() { for (const callback of progressTimers.splice(0)) callback(); },
     enableNextPages() { continuePagination = true; },
     setProfilePages(pages, sourceUrl) {
       profilePages = pages;
@@ -660,6 +676,81 @@ async function checkSelectionDuringScan() {
   assert.equal(popup.state.liveScanning, false);
 }
 
+// A long Instagram network run shows what it has found while it works, keeps
+// selection usable, can be stopped, and its own result replaces the preview.
+async function checkProgressiveScan() {
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const harness = popupHarness();
+  const { popup, tab, elements } = harness;
+  tab.url = "https://www.instagram.com/alice/";
+  const first = { ...photo("first"), pageUrl: tab.url };
+  const second = { ...photo("second"), pageUrl: tab.url };
+  const late = { ...photo("late"), pageUrl: tab.url };
+  harness.setProgress(() => ({
+    active: true, changed: [["k1", first], ["k2", second]], removed: [], order: ["k1", "k2"]
+  }));
+  let release;
+  const started = harness.delayScan(new Promise((resolve) => { release = resolve; }));
+  const scanning = popup.scanPage();
+  await started;
+  const collector = harness.scriptCalls.find((call) => call.name === "collectFromPage");
+  assert.match(collector.args[0].progressKey, /^anydownloadProgress[A-Za-z0-9]{16,64}$/,
+    "A network run publishes its progress under a random key");
+  assert.equal(elements.get("stop-gallery-button").hidden, false, "A long run can be stopped");
+  assert.equal(popup.state.images.length, 0);
+
+  harness.runProgressTimers();
+  await settle();
+  assert.deepEqual(Array.from(popup.state.images, (image) => image.url), [first.url, second.url],
+    "Media found so far appears before the run finishes");
+  assert.equal(popup.state.busy, true);
+  assert.equal(popup.state.liveScanning, true, "Selection stays usable while the run continues");
+  assert.deepEqual(Array.from(popup.state.selected), [first.url, second.url]);
+  assert.match(elements.get("gallery-status").textContent, /Still collecting · 2 items found so far/);
+  assert.equal(harness.progressCalls[0].key, collector.args[0].progressKey);
+  assert.equal(harness.progressCalls[0].stop, false);
+  popup.state.selected.delete(first.url);
+
+  popup.stopGalleryCollection();
+  await settle();
+  assert.equal(harness.progressCalls.at(-1).stop, true, "Stop reaches the collector without waiting for the next read");
+  assert.equal(elements.get("stop-gallery-button").disabled, true);
+  assert.match(elements.get("gallery-status").textContent, /Stopping/);
+
+  harness.setImages([first, second, late]);
+  harness.setResultExtras({ stopped: true });
+  release();
+  assert.equal(await scanning, true);
+  assert.deepEqual(Array.from(popup.state.images, (image) => image.url), [first.url, second.url, late.url]);
+  assert.deepEqual(Array.from(popup.state.selected), [second.url, late.url],
+    "Choices made during the run are kept; media found after it is selected");
+  assert.match(elements.get("notice").textContent, /^Stopped scanning\. Kept 3 media items found so far\./);
+  assert.equal(elements.get("stop-gallery-button").hidden, true);
+  assert.equal(popup.state.liveScanning, false);
+  const reads = harness.progressCalls.length;
+  harness.runProgressTimers();
+  await settle();
+  assert.equal(harness.progressCalls.length, reads, "A finished run is not read again");
+
+  // A collector that fails after showing results keeps them.
+  const failing = popupHarness();
+  failing.tab.url = "https://www.instagram.com/bob/";
+  const kept = { ...photo("kept"), pageUrl: failing.tab.url };
+  failing.setProgress(() => ({ active: true, changed: [["k1", kept]], removed: [], order: ["k1"] }));
+  let fail;
+  const failingStarted = failing.delayScan(new Promise((resolve) => { fail = resolve; }));
+  const failingScan = failing.popup.scanPage();
+  await failingStarted;
+  failing.runProgressTimers();
+  await settle();
+  failing.failCollector({ message: "boom" });
+  fail();
+  assert.equal(await failingScan, true);
+  assert.deepEqual(Array.from(failing.popup.state.images, (image) => image.url), [kept.url],
+    "Results shown before a collector error stay in the collection");
+  assert.match(failing.elements.get("notice").textContent, /stopped with an error/);
+}
+
 async function checkSavedCollectionView() {
   const first = popupHarness();
   await first.popup.scanPage();
@@ -983,6 +1074,7 @@ function checkScrolling() {
   await checkInstagramNetworkScope();
   await checkProfileSwitch();
   await checkSelectionDuringScan();
+  await checkProgressiveScan();
   await checkSavedCollectionView();
   await checkFixedPageLimit();
   await checkAutomaticLargeCollection();

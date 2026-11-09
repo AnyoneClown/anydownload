@@ -135,6 +135,32 @@
     const ownerCache = new WeakMap();
     const warnings = new Set();
     const found = new Map();
+    // While this run works, the popup reads `found` from a slot named by its
+    // random key, so results appear as they are collected; it sets `stopped`
+    // to end the run early with what was found.
+    const progressKey = typeof options.progressKey === "string" &&
+      /^anydownloadProgress[A-Za-z0-9]{16,64}$/.test(options.progressKey) ? options.progressKey : "";
+    let progress = null;
+    let stoppedByUser = false;
+    if (progressKey) {
+      try {
+        progress = {
+          found,
+          stopped: false,
+          // Called by the popup's read, so requests in flight end at once
+          // instead of when they would next check the deadline.
+          stop() {
+            progress.stopped = true;
+            remainingCollectionTime();
+          }
+        };
+        Object.defineProperty(globalThis, progressKey, {
+          value: progress, configurable: true, enumerable: false, writable: false
+        });
+      } catch (_error) {
+        progress = null;
+      }
+    }
     const foundRecordKeysByUrl = new Map();
     const owners = new Set();
     const profilePks = new Set();
@@ -2034,7 +2060,27 @@
       return { ok: true, text, bytes };
     }
 
+    function abortActiveRequests() {
+      for (const controller of activeRequestControllers) {
+        try {
+          controller.abort();
+        } catch (_error) {
+          // A completed request may no longer accept an abort signal.
+        }
+      }
+      activeRequestControllers.clear();
+    }
+
+    // A stop from the popup ends the run like the deadline does: no request
+    // starts after it, and the ones in flight are cancelled.
     function remainingCollectionTime() {
+      if (progress && progress.stopped === true) {
+        if (!stoppedByUser) {
+          stoppedByUser = true;
+          abortActiveRequests();
+        }
+        return 0;
+      }
       const remaining = Math.max(0, COLLECTION_TIMEOUT_MS - (Date.now() - collectionStartedAt));
       if (!remaining) collectionTimeLimitReached = true;
       return remaining;
@@ -2107,14 +2153,7 @@
         httpStatus: Number.isSafeInteger(status) && status >= 100 && status <= 599 ? status : 0,
         retryAfterSeconds: code === "rate_limited" ? retryAfterSeconds(response) : 0
       };
-      for (const controller of activeRequestControllers) {
-        try {
-          controller.abort();
-        } catch (_error) {
-          // A completed request may no longer accept an abort signal.
-        }
-      }
-      activeRequestControllers.clear();
+      abortActiveRequests();
     }
 
     async function inspectFailedResponse(response) {
@@ -3767,6 +3806,9 @@
 
     while (route.kind === "profile" &&
       (settings.includeStories || settings.includeHighlights) && queuedDocuments.length) {
+      if (!remainingCollectionTime()) {
+        break;
+      }
       if (fetchedDocumentCount >= settings.maxDocuments) {
         documentLimitReached = true;
         break;
@@ -3887,8 +3929,20 @@
       );
     }
 
+    if (progressKey && progress) {
+      try {
+        delete globalThis[progressKey];
+      } catch (_error) {
+        // The slot holds only this run's results and goes with the page.
+      }
+    }
+    if (stoppedByUser && profileCollection) {
+      profileCollection.complete = false;
+    }
+
     let failure = null;
-    const warningList = Array.from(warnings);
+    // A run the person stopped is partial by choice; what is missing is not a problem to report.
+    const warningList = stoppedByUser ? [] : Array.from(warnings);
     if (blockingFailure) {
       failure = Object.assign({}, blockingFailure);
       const waitMinutes = Math.ceil(failure.retryAfterSeconds / 60);
@@ -3908,7 +3962,8 @@
       images: Array.from(found.values()),
       warnings: warningList,
       profileCollection,
-      failure
+      failure,
+      stopped: stoppedByUser
     };
   }
 

@@ -13,6 +13,7 @@ const {
   mediaIdentityKey,
   matchesInstagramCollectionFilter,
   mergeInstagramCollections,
+  readCollectorProgress,
   reconcileScanSelection,
   renderFilenameBatch,
   sourceTabIdFromUrl
@@ -555,6 +556,85 @@ async function flushMicrotasks() {
     obsoleteLoad();
     await flushMicrotasks();
     assert.equal(harness.scheduler.activeCount, 0);
+  }
+
+  // Video probes read only metadata, report the length, and drop the file's
+  // connection once it is known, on failure, or on timeout.
+  {
+    const videos = [];
+    const timers = new Map();
+    let nextTimer = 1;
+    const scheduler = createDimensionProbeScheduler({
+      kind: "video",
+      maxConcurrency: 1,
+      timeoutMs: 10000,
+      createImage() {
+        throw new Error("A video probe must not create an image");
+      },
+      createVideo() {
+        const video = {
+          attributes: {}, loads: 0, videoWidth: 0, videoHeight: 0, duration: NaN,
+          set src(value) { this.attributes.src = value; },
+          get src() { return this.attributes.src || ""; },
+          removeAttribute(name) { delete this.attributes[name]; },
+          load() { this.loads += 1; }
+        };
+        videos.push(video);
+        return video;
+      },
+      setTimer(callback) { const id = nextTimer++; timers.set(id, callback); return id; },
+      clearTimer(id) { timers.delete(id); }
+    });
+    const clip = scheduler.request("https://videos.test/clip.mp4", { generation: 1 });
+    const second = scheduler.request("https://videos.test/second.mp4", { generation: 1 });
+    assert.equal(videos.length, 1, "Video probes respect their own concurrency");
+    assert.equal(videos[0].preload, "metadata", "A video probe must not download the whole file");
+    assert.equal(videos[0].muted, true);
+    assert.equal(videos[0].src, "https://videos.test/clip.mp4");
+    Object.assign(videos[0], { videoWidth: 1280, videoHeight: 720, duration: 42.5 });
+    videos[0].onloadedmetadata();
+    assert.deepEqual(await clip, { width: 1280, height: 720, cancelled: false, duration: 42.5 });
+    assert.equal(videos[0].src, "", "A finished probe releases its source");
+    assert.equal(videos[0].loads, 1, "Reloading without a source closes the connection");
+    assert.equal(videos.length, 2);
+    Array.from(timers.values())[0]();
+    assert.deepEqual(await second, { width: 0, height: 0, cancelled: false, duration: 0 });
+    assert.equal(videos[1].src, "", "A timed-out probe releases its source");
+    const live = scheduler.request("https://videos.test/live.mp4", { generation: 1 });
+    Object.assign(videos[2], { videoWidth: 640, videoHeight: 360, duration: Infinity });
+    videos[2].onloadedmetadata();
+    assert.equal((await live).duration, 0, "A stream without a finite length reports none");
+  }
+
+  // A progress read returns only what changed since the previous read.
+  {
+    const key = "anydownloadProgressReadTest0123456789";
+    const found = new Map([["a", { url: "https://cdn.test/a.jpg" }], ["b", { url: "https://cdn.test/b.jpg" }]]);
+    const slot = { found, stopped: false };
+    globalThis[key] = slot;
+    try {
+      assert.deepEqual(readCollectorProgress({ key: "bad key" }), { active: false });
+      assert.deepEqual(readCollectorProgress({ key: "anydownloadProgressMissing0123456789" }), { active: false });
+      const first = readCollectorProgress({ key, maxRecords: 1 });
+      assert.deepEqual(first.changed.map(([recordKey]) => recordKey), ["a"], "A read is bounded");
+      assert.deepEqual(first.order, ["a", "b"]);
+      const second = readCollectorProgress({ key });
+      assert.deepEqual(second.changed.map(([recordKey]) => recordKey), ["b"], "Unsent records follow next");
+      assert.equal(second.order, undefined, "An unchanged order is not resent");
+      assert.deepEqual(readCollectorProgress({ key }).changed, []);
+      found.get("a").duration = 12;
+      found.delete("b");
+      found.set("c", { url: "https://cdn.test/c.mp4" });
+      const third = readCollectorProgress({ key });
+      assert.deepEqual(third.changed.map(([recordKey]) => recordKey), ["a", "c"], "Updated records are resent");
+      assert.deepEqual(third.removed, ["b"]);
+      assert.deepEqual(third.order, ["a", "c"]);
+      assert.equal(slot.stopped, false);
+      readCollectorProgress({ key, stop: true });
+      assert.equal(slot.stopped, true);
+    } finally {
+      delete globalThis[key];
+    }
   }
 
   console.log("All dimension-probe scheduler checks passed.");

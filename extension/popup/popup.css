@@ -663,10 +663,18 @@ html.responsive-surface .app-shell {
   object-fit: contain;
 }
 
+/* A video without a poster shows a play mark; its chip says "Video". */
 .video-placeholder {
+  width: 32px;
+  height: 32px;
   color: var(--ink-muted);
-  font-size: 12px;
-  font-weight: 600;
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.6%22%3E%3Ccircle%20cx%3D%2212%22%20cy%3D%2212%22%20r%3D%2210%22/%3E%3Cpath%20d%3D%22M10%208.5v7l5.5-3.5z%22%20fill%3D%22black%22/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+[data-view="list"] .video-placeholder {
+  width: 20px;
+  height: 20px;
 }
 
 /* Unselected media fades once something is selected, so exclusions stand out.

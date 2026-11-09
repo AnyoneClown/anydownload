@@ -2,6 +2,7 @@
 
 const assert = require("assert").strict;
 const Instagram = require("../extension/shared/instagram.js");
+const { readCollectorProgress } = require("../extension/popup/popup.js");
 const collectFromPage = new Function(`return (${Instagram.collectFromPage.toString()});`)();
 
 function jsonResponse(url, value) {
@@ -11,12 +12,13 @@ function jsonResponse(url, value) {
 }
 
 async function fixture({ url, payload, anchors = [], options, elapsedBeforeFetch = 0, fetchValue,
-  expireDuringFetch = false }) {
+  expireDuringFetch = false, stopDuringFetch = false }) {
   const startedAt = 1000000;
   let now = startedAt;
   const timers = [];
   const clearedTimers = [];
   const requests = [];
+  const progressSeen = [];
   const script = {
     textContent: JSON.stringify(payload),
     getAttribute(name) { return name === "type" ? "application/json" : null; }
@@ -41,6 +43,10 @@ async function fixture({ url, payload, anchors = [], options, elapsedBeforeFetch
     async fetch(requestUrl, init) {
       requests.push({ url: requestUrl, signal: init.signal });
       if (expireDuringFetch) now = startedAt + 120000;
+      if (stopDuringFetch) {
+        // The popup's progress read sees the run and asks it to stop.
+        progressSeen.push(readCollectorProgress({ key: options.progressKey, stop: true }));
+      }
       return jsonResponse(requestUrl, fetchValue);
     }
   };
@@ -55,7 +61,7 @@ async function fixture({ url, payload, anchors = [], options, elapsedBeforeFetch
   }
   try {
     return { result: await collectFromPage({ maxItems: 1500, maxDocuments: 512, ...options }),
-      requests, timers, clearedTimers };
+      requests, timers, clearedTimers, progressSeen };
   } finally {
     Object.defineProperty(Date, "now", savedNow);
     for (const [name, descriptor] of savedGlobals) {
@@ -120,6 +126,30 @@ async function run() {
   assert.equal(related.requests.length, 32);
   assert.ok(related.result.warnings.some((warning) => /bounded document/.test(warning)));
   assert.ok(!related.result.warnings.some((warning) => /2-minute safety limit/.test(warning)));
+  // A stop from the popup ends a profile run like the deadline, without the
+  // deadline's warnings: the person chose the partial result.
+  const progressKey = "anydownloadProgress0123456789abcdefXYZ";
+  const stopped = await fixture({
+    url: "https://www.instagram.com/alice/", payload: { user: partial.user },
+    options: { includeProfileReels: true, progressKey },
+    stopDuringFetch: true,
+    fetchValue: { items: [partial], more_available: true, next_max_id: "NEXT-PAGE" }
+  });
+  assert.equal(stopped.progressSeen.length, 1);
+  assert.equal(stopped.progressSeen[0].active, true, "The progress slot exists while the run works");
+  assert.equal(stopped.requests.length, 1, "No request starts after a stop");
+  assert.equal(stopped.requests[0].signal.aborted, true, "A stop cancels requests in flight");
+  assert.equal(stopped.result.stopped, true);
+  assert.deepEqual(stopped.result.warnings, []);
+  assert.equal(stopped.result.profileCollection.complete, false);
+  assert.equal(Object.prototype.hasOwnProperty.call(globalThis, progressKey), false,
+    "A finished run removes its progress slot");
+  const unkeyed = await fixture({
+    url: "https://www.instagram.com/p/DEADLINE1/", payload: { shortcode_media: partial },
+    options: { progressKey: "not a progress key" }, fetchValue: { items: [partial] }
+  });
+  assert.equal(unkeyed.result.stopped, false);
+  assert.equal(Object.prototype.hasOwnProperty.call(globalThis, "not a progress key"), false);
   console.log("Instagram deadline tests passed");
 }
 

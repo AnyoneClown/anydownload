@@ -265,6 +265,41 @@ async function run() {
     assert.ok(result.warnings.some((warning) => /1 FapFolder post requires login/i.test(warning)));
   });
 
+  // Videos from finished posts appear in the progress slot while later posts
+  // load; a stop leaves the rest uninspected without calling them failures.
+  {
+    const { readCollectorProgress } = require("../extension/popup/popup.js");
+    const progressKey = "anydownloadProgressFapFolder0123456789";
+    const fetched = [];
+    const reads = [];
+    await withGlobals({
+      location: { href: "https://fapfolder.club/groups/larapechika/videos" },
+      document: listing,
+      DOMParser: FakeDOMParser,
+      fetch: async (url, options) => {
+        fetched.push(url);
+        if (url === secondPost) {
+          reads.push(readCollectorProgress({ key: progressKey, stop: true }));
+          assert.equal(options.signal.aborted, true, "A stop cancels the post request in flight");
+          return response(secondPost, "second-html");
+        }
+        return response(firstPost, "first-html");
+      }
+    }, async () => {
+      const result = await collectFromPage({
+        maxConcurrency: 1, maxPosts: 10, successCacheTtlMs: 0, emptyCacheTtlMs: 0, progressKey
+      });
+      assert.equal(reads[0].active, true);
+      assert.deepEqual(reads[0].changed.map(([key]) => key), ["https://fap.onl/uploads/videos/first.mp4"],
+        "A finished post's video is readable before the run ends");
+      assert.deepEqual(fetched, [firstPost, secondPost], "No post starts after a stop");
+      assert.equal(result.stopped, true);
+      assert.equal(result.warnings.some((warning) => /could not be inspected|requires login/i.test(warning)), false);
+      assert.equal(Object.prototype.hasOwnProperty.call(globalThis, progressKey), false,
+        "A finished run removes its progress slot");
+    });
+  }
+
   let cachedFetches = 0;
   await withGlobals({
     location: { href: "https://fapfolder.club/groups/larapechika/videos" },

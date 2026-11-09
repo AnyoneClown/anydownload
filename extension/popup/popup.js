@@ -1,26 +1,36 @@
 (function exposeDimensionProbeScheduler(globalScope) {
   "use strict";
 
+  // kind "video" reads a video's metadata (duration and frame size) through a
+  // detached <video preload="metadata"> and drops its connection afterwards.
   function createDimensionProbeScheduler(options) {
     const settings = Object.assign({
+      kind: "image",
       maxConcurrency: 3,
       timeoutMs: 15000,
       createImage: () => new Image(),
+      createVideo: () => document.createElement("video"),
       setTimer: (callback, delay) => setTimeout(callback, delay),
       clearTimer: (timerId) => clearTimeout(timerId),
       isPaused: () => false,
       canStart: () => true
     }, options || {});
+    const video = settings.kind === "video";
     const records = new Map();
     const queue = [];
     let activeCount = 0;
 
     function safeResult(result) {
-      return {
+      const safe = {
         width: Number(result && result.width) || 0,
         height: Number(result && result.height) || 0,
         cancelled: Boolean(result && result.cancelled)
       };
+      if (video) {
+        const duration = Number(result && result.duration);
+        safe.duration = Number.isFinite(duration) && duration > 0 && duration <= 1000000 ? duration : 0;
+      }
+      return safe;
     }
 
     function cancelRecord(record) {
@@ -42,6 +52,14 @@
       let timerId = null;
       let settled = false;
 
+      function detach() {
+        if (probe) {
+          probe.onload = null;
+          probe.onerror = null;
+          probe.onloadedmetadata = null;
+        }
+      }
+
       function finish(result) {
         if (settled) {
           return;
@@ -50,9 +68,15 @@
         if (timerId !== null) {
           settings.clearTimer(timerId);
         }
-        if (probe) {
-          probe.onload = null;
-          probe.onerror = null;
+        detach();
+        if (video && probe) {
+          // Metadata is all a probe needs; stop the rest of the file.
+          try {
+            probe.removeAttribute("src");
+            probe.load();
+          } catch (_error) {
+            // A detached element without a source holds no connection.
+          }
         }
         activeCount = Math.max(0, activeCount - 1);
         record.status = "settled";
@@ -62,28 +86,39 @@
       }
 
       try {
-        probe = settings.createImage();
+        probe = video ? settings.createVideo() : settings.createImage();
         if (!probe) {
-          throw new Error("The image probe could not be created.");
+          throw new Error("The media probe could not be created.");
         }
-        probe.referrerPolicy = "no-referrer";
-        probe.decoding = "async";
-        probe.fetchPriority = "low";
-        probe.onload = () => finish({
-          width: probe.naturalWidth,
-          height: probe.naturalHeight
-        });
+        if (video) {
+          probe.preload = "metadata";
+          probe.muted = true;
+          probe.onloadedmetadata = () => finish({
+            width: probe.videoWidth,
+            height: probe.videoHeight,
+            duration: probe.duration
+          });
+        } else {
+          probe.referrerPolicy = "no-referrer";
+          probe.decoding = "async";
+          probe.fetchPriority = "low";
+          probe.onload = () => finish({
+            width: probe.naturalWidth,
+            height: probe.naturalHeight
+          });
+        }
         probe.onerror = () => finish({ width: 0, height: 0 });
         timerId = settings.setTimer(() => {
           if (settled) {
             return;
           }
-          probe.onload = null;
-          probe.onerror = null;
-          try {
-            probe.src = "";
-          } catch (_error) {
-            // The failure result below still releases the queue slot.
+          detach();
+          if (!video) {
+            try {
+              probe.src = "";
+            } catch (_error) {
+              // The failure result below still releases the queue slot.
+            }
           }
           finish({ width: 0, height: 0 });
         }, settings.timeoutMs);
@@ -369,6 +404,84 @@
         cache?.observer?.disconnect();
         if (globalThis[cacheKey] === cache) delete globalThis[cacheKey];
       }
+    }
+    return result;
+  }
+
+  // Runs in the source tab, in the same world as a long collector run (see
+  // the progress slot in instagram.js and fapfolder.js), while that run is
+  // still working. Returns the records added or changed since the previous
+  // read, keys that disappeared, and the record order when it changed.
+  // Firefox serializes this function, so it uses nothing from outside it.
+  function readCollectorProgress(options) {
+    "use strict";
+
+    const key = String(options && options.key || "");
+    if (!/^anydownloadProgress[A-Za-z0-9]{16,64}$/.test(key)) {
+      return { active: false };
+    }
+    let slot = null;
+    try {
+      slot = globalThis[key];
+    } catch (_error) {
+      slot = null;
+    }
+    const found = slot && slot.found;
+    if (!found || typeof found.forEach !== "function") {
+      return { active: false };
+    }
+    if (options.stop === true) {
+      slot.stopped = true;
+      try {
+        if (typeof slot.stop === "function") {
+          slot.stop();
+        }
+      } catch (_error) {
+        // The flag alone still ends the run at its next request.
+      }
+    }
+    const maxRecords = Math.max(1, Math.min(2000, Math.floor(Number(options.maxRecords) || 400)));
+    if (!(slot.sent instanceof Map)) {
+      slot.sent = new Map();
+    }
+    const sent = slot.sent;
+    const changed = [];
+    const keys = [];
+    found.forEach((record, recordKey) => {
+      if (typeof recordKey !== "string") {
+        return;
+      }
+      keys.push(recordKey);
+      // Records left out stay unsent and go with the next read.
+      if (changed.length >= maxRecords) {
+        return;
+      }
+      let signature = "";
+      try {
+        signature = JSON.stringify(record);
+      } catch (_error) {
+        return;
+      }
+      if (sent.get(recordKey) !== signature) {
+        sent.set(recordKey, signature);
+        changed.push([recordKey, record]);
+      }
+    });
+    const removed = [];
+    if (sent.size > keys.length) {
+      const current = new Set(keys);
+      for (const recordKey of sent.keys()) {
+        if (!current.has(recordKey)) {
+          sent.delete(recordKey);
+          removed.push(recordKey);
+        }
+      }
+    }
+    const result = { active: true, changed, removed };
+    const order = keys.join("\n");
+    if (slot.sentOrder !== order) {
+      slot.sentOrder = order;
+      result.order = keys;
     }
     return result;
   }
@@ -677,6 +790,7 @@
       mediaIdentityKey,
       matchesInstagramCollectionFilter,
       mergeInstagramCollections,
+      readCollectorProgress,
       reconcileScanSelection,
       renderFilenameBatch,
       sourceTabIdFromUrl
@@ -709,6 +823,16 @@
   const MAX_RENDERED_ROWS = 350;
   const MAX_DIMENSION_PROBE_CONCURRENCY = 3;
   const DIMENSION_PROBE_TIMEOUT_MS = 15000;
+  const MAX_VIDEO_PROBE_CONCURRENCY = 2;
+  const VIDEO_PROBE_TIMEOUT_MS = 10000;
+  // Probed video durations reach the saved gallery in batches, not per file.
+  const VIDEO_METADATA_SAVE_DELAY_MS = 3000;
+  // A long collector run is read this often while it works.
+  const PROGRESS_POLL_INTERVAL_MS = 1000;
+  const PROGRESS_MAX_RECORDS = 400;
+  const PROGRESS_STATUS_REFRESH_MS = 3000;
+  // Results found so far are saved this often, so closing the popup keeps them.
+  const PROGRESS_SAVE_INTERVAL_MS = 5000;
   const MAX_IGNORED_PER_SITE = 500;
   const MAX_IGNORED_RULES = 5000;
   const IGNORE_STORAGE_PREFIX = "ignoredImage:";
@@ -869,6 +993,8 @@
   let gallerySaveTimer = null;
   let galleryWritePromise = Promise.resolve();
   let galleryCollection = null;
+  // The collector run whose results are shown while it works (runProgressiveCollector).
+  let progressiveScan = null;
   let sourceRescanTimer = null;
   let clearedGallery = null;
   let previewItems = [];
@@ -889,23 +1015,36 @@
     return [date.getFullYear(), date.getMonth() + 1, date.getDate()].join("-");
   }
 
+  // A probe starts only while its card is still on screen in the current render.
+  function probeRowStillVisible(url, context) {
+    const visible = visibleDimensionRows.get(url);
+    return Boolean(
+      context &&
+      context.generation === renderGeneration &&
+      visible &&
+      visible.generation === context.generation &&
+      visible.row &&
+      visible.row.isConnected &&
+      elements["image-list"] &&
+      elements["image-list"].contains(visible.row)
+    );
+  }
+
   const dimensionProbeScheduler = createDimensionProbeScheduler({
     maxConcurrency: MAX_DIMENSION_PROBE_CONCURRENCY,
     timeoutMs: DIMENSION_PROBE_TIMEOUT_MS,
     isPaused: () => state.busy,
-    canStart: (url, context) => {
-      const visible = visibleDimensionRows.get(url);
-      return Boolean(
-        context &&
-        context.generation === renderGeneration &&
-        visible &&
-        visible.generation === context.generation &&
-        visible.row &&
-        visible.row.isConnected &&
-        elements["image-list"] &&
-        elements["image-list"].contains(visible.row)
-      );
-    }
+    canStart: probeRowStillVisible
+  });
+
+  // Video metadata reads a few bytes per file, but each probe is a connection
+  // to the video host, so fewer run at once than image probes.
+  const videoProbeScheduler = createDimensionProbeScheduler({
+    kind: "video",
+    maxConcurrency: MAX_VIDEO_PROBE_CONCURRENCY,
+    timeoutMs: VIDEO_PROBE_TIMEOUT_MS,
+    isPaused: () => state.busy,
+    canStart: probeRowStillVisible
   });
 
   function cacheElements() {
@@ -2384,7 +2523,15 @@
         loading.remove();
         stage.setAttribute("aria-busy", "false");
       };
-      media.addEventListener(video ? "loadedmetadata" : "load", finishLoading, { once: true });
+      media.addEventListener(video ? "loadedmetadata" : "load", () => {
+        finishLoading();
+        // The player already read the file's length and size; keep them.
+        if (video && media.isConnected && applyVideoProbeResult(image.url, {
+          width: media.videoWidth, height: media.videoHeight, duration: media.duration
+        })) {
+          elements["media-preview-meta"].textContent = imageMetaText(image);
+        }
+      }, { once: true });
       media.addEventListener("error", () => {
         if (!media.isConnected) return;
         finishLoading();
@@ -3180,7 +3327,13 @@
     });
     let changed = false;
     for (const image of state.images) {
-      const status = byIdentity.get(mediaIdentityKey(image)) || {};
+      const key = mediaIdentityKey(image);
+      // Media a running scan added after this lookup started keeps its
+      // status unknown, so the next lookup still asks for it.
+      if (!byIdentity.has(key)) {
+        continue;
+      }
+      const status = byIdentity.get(key) || {};
       const downloadStatus = ["queued", "downloaded", "failed"].includes(status.status)
         ? status.status
         : "new";
@@ -3387,13 +3540,19 @@
       : `${minutes}:${String(remainder).padStart(2, "0")}`;
   }
 
+  // The video chip on a tile: its length, or "Video" until the length is known,
+  // so a video never looks like a photo.
+  function videoFactText(image) {
+    return formatMediaDuration(image.duration) || "Video";
+  }
+
   function imageMetaText(image) {
     const video = mediaTypeFor(image) === "video";
     let dimensions = video ? "resolution unknown" : "size unknown";
     if (image.width && image.height) {
       dimensions = `${Math.round(image.width).toLocaleString()} × ${Math.round(image.height).toLocaleString()}`;
-    } else if (!video && image.dimensionStatus === "loading") {
-      dimensions = "checking full size…";
+    } else if (image.dimensionStatus === "loading") {
+      dimensions = video ? "checking video…" : "checking full size…";
     } else if (!video && image.dimensionStatus === "unavailable") {
       dimensions = "full size unavailable";
     }
@@ -3440,7 +3599,9 @@
     }
     for (const meta of nodes) {
       if (meta.isConnected) {
-        setText(meta, meta.dataset.metaFormat === "size" ? imageSizeText(image) : imageMetaText(image));
+        const format = meta.dataset.metaFormat;
+        setText(meta, format === "size" ? imageSizeText(image)
+          : format === "duration" ? videoFactText(image) : imageMetaText(image));
       } else {
         nodes.delete(meta);
       }
@@ -3473,14 +3634,82 @@
   }
 
   function resetCancelledDimensionStatus(url) {
-    if (dimensionProbeScheduler.getStatus(url) !== "none") {
+    if (dimensionProbeScheduler.getStatus(url) !== "none" || videoProbeScheduler.getStatus(url) !== "none") {
       return;
     }
     const image = currentImageForUrl(url);
-    if (image && (!image.width || !image.height) && image.dimensionStatus === "loading") {
+    if (image && (!image.width || !image.height || mediaTypeFor(image) === "video") &&
+      image.dimensionStatus === "loading") {
       delete image.dimensionStatus;
       updateImageMetas(url);
     }
+  }
+
+  // Direct http(s) video files missing a length or frame size. YouTube reports
+  // its own length, and Telegram files are reachable only through the page.
+  function videoNeedsMetadata(image) {
+    return mediaTypeFor(image) === "video" &&
+      (!image.duration || !image.width || !image.height) &&
+      image.dimensionStatus !== "unavailable" &&
+      /^https?:\/\//i.test(String(image.url || "")) &&
+      !Gallery.youtubeUrl(image) &&
+      !(Telegram && Telegram.isMediaUrl(image.url));
+  }
+
+  // Fills only what the page did not report; a probe never overrides it.
+  function applyVideoProbeResult(url, result) {
+    const image = currentImageForUrl(url);
+    if (!image) {
+      return false;
+    }
+    const matchedBefore = Filters.matchesSmartFilters(image, state.smartFilters);
+    const width = validPixelDimension(result.width);
+    const height = validPixelDimension(result.height);
+    const duration = Number(result.duration) > 0 ? Number(result.duration) : 0;
+    let changed = false;
+    if (width && height && (!image.width || !image.height)) {
+      image.width = width;
+      image.height = height;
+      changed = true;
+      const template = filenameTemplateStatus();
+      if (template.ok && (template.tokens.includes("width") || template.tokens.includes("height"))) {
+        markFilenamePreviewsDirty();
+      }
+    }
+    if (duration && !image.duration) {
+      image.duration = duration;
+      changed = true;
+    }
+    image.dimensionStatus = changed || (image.width && image.height) ? "known" : "unavailable";
+    updateImageMetas(url);
+    if (changed && filenamePreviewsDirty) {
+      refreshRenderedFilenamePreviews();
+    }
+    if (matchedBefore !== Filters.matchesSmartFilters(image, state.smartFilters)) {
+      scheduleSmartFilterRefresh();
+    }
+    if (changed) {
+      scheduleVideoMetadataSave();
+    }
+    return changed;
+  }
+
+  function probeVideoMetadata(image, generation) {
+    const cached = videoProbeScheduler.getResult(image.url);
+    if (cached && !cached.cancelled) {
+      return Promise.resolve(applyVideoProbeResult(image.url, cached));
+    }
+    image.dimensionStatus = "loading";
+    updateImageMetas(image.url);
+    return videoProbeScheduler
+      .request(image.url, { generation })
+      .then((result) => {
+        if (result.cancelled) {
+          resetCancelledDimensionStatus(image.url);
+          return false;
+        }
+        return applyVideoProbeResult(image.url, result);
+      });
   }
 
   function probeFullImageDimensions(image, generation) {
@@ -3581,7 +3810,10 @@
     ).length;
     const selectedItems = selectedDownloadableImages();
     const selected = selectedItems.length;
-    const selectedHasVideo = selectedItems.some((item) => mediaTypeFor(item) === "video");
+    const selectedVideos = selectedItems.filter((item) => mediaTypeFor(item) === "video").length;
+    const selectedHasVideo = selectedVideos > 0;
+    // A mixed selection names its videos, so photos and videos are told apart before downloading.
+    const mixedSelection = selectedHasVideo && selectedVideos < selected;
     const visible = Array.isArray(visibleImages) ? visibleImages : filteredImages();
     const visibleUrls = new Set(visible.map((image) => image.url));
     const hiddenSelected = selectedItems.filter((image) => !visibleUrls.has(image.url)).length;
@@ -3623,10 +3855,10 @@
     elements["upload-button"].hidden = state.showIgnored || state.incognito;
     elements["selected-label"].textContent = state.showIgnored
       ? `${ignoredCount.toLocaleString()} ignored here`
-      : `${selected.toLocaleString()} selected${hiddenSelected ? ` · ${hiddenSelected.toLocaleString()} hidden` : ""}`;
+      : `${selected.toLocaleString()} selected${mixedSelection ? ` · ${countLabel(selectedVideos, "video")}` : ""}${hiddenSelected ? ` · ${hiddenSelected.toLocaleString()} hidden` : ""}`;
     elements["selected-label"].setAttribute("aria-pressed", String(state.showSelected));
     elements["selected-label"].setAttribute("aria-label", state.showSelected ? "Back to collection"
-      : `Review ${selected.toLocaleString()} selected file${selected === 1 ? "" : "s"}${hiddenSelected ? `, including ${hiddenSelected.toLocaleString()} hidden by filters` : ""}`);
+      : `Review ${selected.toLocaleString()} selected file${selected === 1 ? "" : "s"}${mixedSelection ? `: ${countLabel(selected - selectedVideos, "image")} and ${countLabel(selectedVideos, "video")}` : ""}${hiddenSelected ? `, including ${hiddenSelected.toLocaleString()} hidden by filters` : ""}`);
     elements["selected-label"].disabled = state.showIgnored || (!selected && !state.showSelected);
     elements["back-to-collection-button"].hidden = !state.showSelected;
     elements["action-detail"].textContent = editTrackerId || createTrackerMode ? `Downloads/${folder.value || ""}` : state.showIgnored
@@ -3649,7 +3881,9 @@
     elements["selection-warning"].hidden = state.showIgnored || !warning;
     elements["download-button"].textContent = selected === 1
       ? `Download ${mediaTypeFor(selectedItems[0])}`
-      : selected ? `Download ${selected.toLocaleString()} files` : "Download selected";
+      : !selected ? "Download selected"
+        : mixedSelection ? `Download ${selected.toLocaleString()} files`
+          : `Download ${countLabel(selected, selectedHasVideo ? "video" : "image")}`;
     elements["action-detail"].title = elements["action-detail"].textContent;
     elements["download-settings-button"].classList.toggle("active", !folder.ok || !template.ok);
     elements["download-settings-button"].title = folder.ok
@@ -3775,8 +4009,7 @@
       video ? "video" : "image",
       isImageIgnored(image) ? "ignored" : "",
       thumbnailUrlFor(image),
-      slideCountText(image),
-      video ? formatMediaDuration(image.duration) : ""
+      slideCountText(image)
     ].join("\u0001");
   }
 
@@ -3824,8 +4057,9 @@
       thumbnailFrame.appendChild(thumbnail);
     } else {
       const placeholder = document.createElement("span");
+      // The tile's video chip names the media; the placeholder is a play mark.
       placeholder.className = "video-placeholder";
-      placeholder.textContent = "Video";
+      placeholder.setAttribute("aria-hidden", "true");
       thumbnailFrame.appendChild(placeholder);
     }
     const selectionNumber = document.createElement("span");
@@ -3841,10 +4075,12 @@
       slides.textContent = slideCount;
       facts.appendChild(slides);
     }
+    let duration = null;
     if (video) {
-      const duration = document.createElement("span");
+      // Filled by bindImageRow, and in place once a probe learns the length.
+      duration = document.createElement("span");
       duration.className = "thumbnail-fact play";
-      duration.textContent = formatMediaDuration(image.duration);
+      duration.dataset.metaFormat = "duration";
       facts.appendChild(duration);
     }
     const size = document.createElement("span");
@@ -3908,7 +4144,7 @@
     }
     checkbox.dataset.focusKey = `${mediaIdentityKey(image)}:select`;
     for (const action of actions.children) action.dataset.focusKey = `${mediaIdentityKey(image)}:${action.className}`;
-    row.anydownloadParts = { checkbox, previewButton, more, thumbnail, filenameLabel, name, statusBadge, selectionNumber, size, meta };
+    row.anydownloadParts = { checkbox, previewButton, more, thumbnail, filenameLabel, name, statusBadge, selectionNumber, size, duration, meta };
     row.anydownloadSignature = imageRowSignature(image);
     bindImageRow(row, image);
     return row;
@@ -3955,6 +4191,10 @@
 
     setText(size, imageSizeText(image));
     registerImageMeta(size, image);
+    if (parts.duration) {
+      setText(parts.duration, videoFactText(image));
+      registerImageMeta(parts.duration, image);
+    }
     setText(meta, imageMetaText(image));
     registerImageMeta(meta, image);
 
@@ -3966,7 +4206,7 @@
         else loadVisibleThumbnail(thumbnail);
       }
     }
-    if (mediaTypeFor(image) !== "video" && dimensionObserver) {
+    if (dimensionObserver && (mediaTypeFor(image) !== "video" || videoNeedsMetadata(image))) {
       dimensionObserver.observe(row);
     }
     return row;
@@ -4034,7 +4274,10 @@
     renderedMetaNodes.clear();
     renderedNameNodes.clear();
     renderedInstagramGroups = [];
-    const cancelledUrls = dimensionProbeScheduler.cancelQueued(() => true);
+    const cancelledUrls = [
+      ...dimensionProbeScheduler.cancelQueued(() => true),
+      ...videoProbeScheduler.cancelQueued(() => true)
+    ];
     for (const url of cancelledUrls) {
       resetCancelledDimensionStatus(url);
     }
@@ -4087,6 +4330,8 @@
               image.previewUrl !== image.url
             ) {
               probeFullImageDimensions(image, generation);
+            } else if (!state.busy && videoNeedsMetadata(image)) {
+              probeVideoMetadata(image, generation);
             } else {
               updateImageMetas(image.url);
             }
@@ -4097,14 +4342,17 @@
           if (visible && visible.row === row && visible.generation === generation) {
             visibleDimensionRows.delete(image.url);
           }
-          const cancelled = dimensionProbeScheduler.cancelQueued(
-            (url, context) => url === image.url && context && context.generation === generation
-          );
+          const offScreen = (url, context) => url === image.url && context && context.generation === generation;
+          const cancelled = [
+            ...dimensionProbeScheduler.cancelQueued(offScreen),
+            ...videoProbeScheduler.cancelQueued(offScreen)
+          ];
           for (const url of cancelled) {
             resetCancelledDimensionStatus(url);
           }
         }
         dimensionProbeScheduler.pump();
+        videoProbeScheduler.pump();
       }, { root: list, rootMargin: "0px", threshold: 0.01 });
       dimensionObserver = nextDimensionObserver;
     } else {
@@ -4139,7 +4387,7 @@
       } else if (state.images.length && ignoredCount === state.images.length) {
         detail.textContent = `All ${ignoredCount.toLocaleString()} media items on this page are ignored. Open Filters, then Ignored to restore them.`;
       } else if (scanning) {
-        detail.textContent = "Media appears here when the scan finishes.";
+        detail.textContent = "Media appears here as soon as it is found.";
       } else {
         detail.textContent = state.images.length
           ? "Try a different search or clear your filters to see more of your collection."
@@ -4189,13 +4437,23 @@
       return;
     }
     const collecting = Boolean(galleryCollection);
+    const run = progressiveScan && !progressiveScan.closed ? progressiveScan : null;
     elements["refresh-media-button"].hidden = collecting;
     elements["refresh-media-button"].disabled = state.busy || !galleryContext || !Number.isInteger(state.sourceTabId);
-    elements["stop-gallery-button"].hidden = !collecting;
+    elements["stop-gallery-button"].hidden = !collecting && !run;
+    elements["stop-gallery-button"].disabled = Boolean(run && run.stopRequested);
     elements["clear-gallery-button"].disabled = collecting || state.busy || !state.images.length;
     elements["gallery-undo"].hidden = !clearedGallery || clearedGallery.context !== galleryContext || clearedGallery.epoch !== galleryContext.epoch;
     elements["undo-clear-button"].disabled = collecting || state.busy;
-    if (!collecting) {
+    if (run) {
+      const status = run.stopRequested
+        ? "Stopping; media found so far will be kept…"
+        : run.found
+          ? `Still collecting · ${countLabel(run.found, "item")} found so far`
+          : "Collecting media…";
+      setText(elements["gallery-status"], status);
+      setTitle(elements["gallery-status"], status);
+    } else if (!collecting) {
       elements["gallery-status"].textContent = state.siteKey
         ? `${hostFromUrl(state.siteKey)}${state.incognito ? ", private window" : ""}`
         : "Galleries are saved separately for each website.";
@@ -4222,6 +4480,15 @@
       clearTimeout(gallerySaveTimer);
     }
     gallerySaveTimer = setTimeout(saveCurrentGallery, 200);
+  }
+
+  // Unlike an edit, a probed length waits for others: a pending save already
+  // carries it, and probes finishing one by one share a later save.
+  function scheduleVideoMetadataSave() {
+    if (gallerySaveTimer !== null || state.busy || !galleryContext || galleryContext.siteKey !== state.siteKey) {
+      return;
+    }
+    gallerySaveTimer = setTimeout(saveCurrentGallery, VIDEO_METADATA_SAVE_DELAY_MS);
   }
 
   function saveCurrentGallery() {
@@ -4499,10 +4766,263 @@
   }
 
   function stopGalleryCollection() {
+    if (progressiveScan) {
+      stopProgressiveScan();
+      return;
+    }
     if (galleryCollection) {
       galleryCollection.stopped = true;
       galleryCollection.wake?.();
       elements["gallery-status"].textContent = "Stopping scan; media already found will be kept…";
+    }
+  }
+
+  function createProgressKey() {
+    const random = crypto.getRandomValues(new Uint32Array(4));
+    return `anydownloadProgress${Array.from(random, (value) => value.toString(36).padStart(7, "0")).join("")}`;
+  }
+
+  function progressScriptDetails(run, func, args) {
+    const details = { target: { tabId: run.tabId }, func, args };
+    if (run.world) {
+      details.world = run.world;
+    }
+    return details;
+  }
+
+  // Runs a collector that publishes what it finds in a progress slot, reads
+  // that slot while the run works, and hands each new snapshot to onSnapshot.
+  // Resolves with the collector's own executeScript result.
+  async function runProgressiveCollector(tabId, collector, onSnapshot, isCurrent) {
+    const run = {
+      key: createProgressKey(),
+      tabId,
+      world: collector.world || "",
+      records: new Map(),
+      order: [],
+      found: 0,
+      stopRequested: false,
+      stopDelivered: false,
+      closed: false,
+      timer: null,
+      polling: null,
+      onSnapshot,
+      isCurrent
+    };
+    progressiveScan = run;
+    updateGalleryControls();
+    scheduleProgressPoll(run);
+    try {
+      return await browser.scripting.executeScript(progressScriptDetails(run, collector.func,
+        [Object.assign({}, collector.options, { progressKey: run.key })]));
+    } finally {
+      run.closed = true;
+      if (run.timer !== null) {
+        clearTimeout(run.timer);
+        run.timer = null;
+      }
+      if (progressiveScan === run) {
+        progressiveScan = null;
+      }
+      updateGalleryControls();
+    }
+  }
+
+  function scheduleProgressPoll(run) {
+    if (run.closed || run.timer !== null) {
+      return;
+    }
+    run.timer = setTimeout(() => {
+      run.timer = null;
+      pollProgressiveCollector(run).then(() => scheduleProgressPoll(run));
+    }, PROGRESS_POLL_INTERVAL_MS);
+  }
+
+  function pollProgressiveCollector(run) {
+    if (run.closed) {
+      return Promise.resolve();
+    }
+    if (run.polling) {
+      return run.polling;
+    }
+    // Nobody sees a run for a page the popup left, so it stops early.
+    if (!run.stopRequested && !run.isCurrent()) {
+      run.stopRequested = true;
+    }
+    const sendingStop = run.stopRequested;
+    run.polling = browser.scripting.executeScript(progressScriptDetails(run, readCollectorProgress, [{
+      key: run.key, stop: sendingStop, maxRecords: PROGRESS_MAX_RECORDS
+    }])).then((results) => {
+      const progress = results && results[0] && results[0].result;
+      if (!progress || progress.active !== true) {
+        return;
+      }
+      if (sendingStop) {
+        run.stopDelivered = true;
+      }
+      if (run.closed) {
+        return;
+      }
+      let changed = false;
+      for (const entry of Array.isArray(progress.changed) ? progress.changed : []) {
+        if (!Array.isArray(entry) || typeof entry[0] !== "string" || !entry[1] || typeof entry[1] !== "object") {
+          continue;
+        }
+        if (!run.records.has(entry[0]) && run.records.size >= MAX_DISCOVERED_IMAGES) {
+          continue;
+        }
+        run.records.set(entry[0], entry[1]);
+        changed = true;
+      }
+      for (const key of Array.isArray(progress.removed) ? progress.removed : []) {
+        changed = run.records.delete(key) || changed;
+      }
+      if (Array.isArray(progress.order)) {
+        run.order = progress.order.filter((key) => typeof key === "string").slice(0, MAX_DISCOVERED_IMAGES);
+        changed = true;
+      }
+      if (!changed) {
+        return;
+      }
+      const images = [];
+      for (const key of run.order) {
+        const record = run.records.get(key);
+        if (record) {
+          images.push(record);
+        }
+      }
+      run.found = images.length;
+      try {
+        run.onSnapshot(images);
+      } catch (error) {
+        console.error("AnyDownload could not show the media found so far.", error);
+      }
+      updateGalleryControls();
+    }, () => {
+      // The tab navigated or the run just ended; the collector's own result follows.
+    }).finally(() => {
+      run.polling = null;
+    });
+    return run.polling;
+  }
+
+  function stopProgressiveScan() {
+    const run = progressiveScan;
+    if (!run || run.closed || run.stopRequested) {
+      return;
+    }
+    run.stopRequested = true;
+    updateGalleryControls();
+    // Deliver the stop now instead of at the next scheduled read.
+    (run.polling || Promise.resolve()).then(() => {
+      if (run.closed || run.stopDelivered) {
+        return;
+      }
+      if (run.timer !== null) {
+        clearTimeout(run.timer);
+        run.timer = null;
+      }
+      pollProgressiveCollector(run).then(() => scheduleProgressPoll(run));
+    });
+  }
+
+  // Carries sizes and names a page reported earlier onto a fresh scan of the
+  // same site, for records the new scan describes less completely.
+  function inheritPreviousMetadata(images, previousByIdentity) {
+    for (const image of images) {
+      const previous = previousByIdentity.get(mediaIdentityKey(image));
+      if (!previous || image.originalMediaType === 1) {
+        continue;
+      }
+      image.width = image.width || previous.width || 0;
+      image.height = image.height || previous.height || 0;
+      image.duration = image.duration || previous.duration || 0;
+      image.mimeType = image.mimeType || previous.mimeType || "";
+      image.filename = image.filename || previous.filename || "";
+      image.sourceProvider = image.sourceProvider || previous.sourceProvider || "";
+      image.videoId = image.videoId || previous.videoId || "";
+      image.qualityLabel = image.qualityLabel || previous.qualityLabel || "";
+      if (image.hasAudio === null || image.hasAudio === undefined) {
+        image.hasAudio = previous.hasAudio;
+      }
+      image.itag = image.itag || previous.itag || 0;
+      image.previewUrl = image.previewUrl || previous.previewUrl || "";
+      if ((!image.width || !image.height) && previous.dimensionStatus) {
+        image.dimensionStatus = previous.dimensionStatus;
+      } else if (image.width && image.height) {
+        image.dimensionStatus = "known";
+      }
+    }
+  }
+
+  // Keeps the download badges a running scan already looked up, until the
+  // finished scan's own lookup replaces them.
+  function carryDownloadStatuses(images, shownImages) {
+    const shownByIdentity = new Map(shownImages.map((image) => [mediaIdentityKey(image), image]));
+    for (const image of images) {
+      const shown = shownByIdentity.get(mediaIdentityKey(image));
+      if (!shown || image.downloadStatus !== undefined || shown.downloadStatus === undefined) {
+        continue;
+      }
+      image.downloadStatus = shown.downloadStatus;
+      image.downloadFingerprint = shown.downloadFingerprint;
+      image.downloadedAt = shown.downloadedAt;
+      image.downloadedFilename = shown.downloadedFilename;
+    }
+  }
+
+  // Shows what a still-running collector has found, merged as a finished scan
+  // would be, with selection usable. The finished scan's result replaces it.
+  function applyProgressiveSnapshot(scan, records) {
+    if (!state.busy || !scanSourceStillCurrent(scan.settings, scan.generation)) {
+      return;
+    }
+    const merged = mergeScanResults([{
+      frameId: 0,
+      result: {
+        pageUrl: scan.tab.url,
+        pageTitle: String(scan.tab.title || ""),
+        embeddedFrameCount: 0,
+        images: records,
+        warnings: []
+      }
+    }]);
+    if (!merged.page) {
+      return;
+    }
+    const siteKey = Core.siteKeyForUrl(merged.page.pageUrl);
+    const sameSite = Boolean(siteKey) && siteKey === scan.previousSiteKey;
+    if (sameSite) {
+      inheritPreviousMetadata(merged.images, scan.previousByIdentity);
+    }
+    const shownImages = state.images;
+    const base = scan.shown ? shownImages : sameSite ? scan.previousImages : [];
+    const accumulated = accumulateLiveImages(base, merged.images, {
+      maxImages: MAX_DISCOVERED_IMAGES,
+      maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH
+    });
+    state.liveScanning = true;
+    state.images = accumulated.images;
+    markFilenamePreviewsDirty();
+    state.selected = reconcileGallerySelection(shownImages, scan.shown || sameSite);
+    scan.shown = true;
+    renderImages();
+    if (!sameSite) {
+      // Download status and the saved gallery belong to the site the scan
+      // finishes on; the finished scan handles both.
+      return;
+    }
+    const now = Date.now();
+    if (!scan.statusRefresh && now - scan.statusRefreshedAt >= PROGRESS_STATUS_REFRESH_MS &&
+      state.images.some((image) => image.downloadStatus === undefined)) {
+      scan.statusRefreshedAt = now;
+      scan.statusRefresh = refreshDownloadStatuses().catch(() => false).finally(() => {
+        scan.statusRefresh = null;
+      });
+    }
+    if (now - scan.savedAt >= PROGRESS_SAVE_INTERVAL_MS) {
+      scan.savedAt = now;
+      saveCurrentGallery();
     }
   }
 
@@ -4772,6 +5292,51 @@
       setIncognitoContext(tab.incognito);
       state.sourceWindowId = Number.isInteger(tab.windowId) ? tab.windowId : null;
 
+      // Long collector runs (an Instagram account history, FapFolder posts)
+      // show their results while they work and can be stopped early.
+      const progressContext = {
+        settings,
+        generation: scanSourceGeneration,
+        tab,
+        previousImages,
+        previousByIdentity,
+        previousSiteKey,
+        shown: false,
+        records: [],
+        ignoredLoaded: false,
+        statusRefresh: null,
+        statusRefreshedAt: 0,
+        savedAt: Date.now()
+      };
+      const runWithProgress = async (collector) => {
+        // Ignore rules hide media from the first results on, not only the last.
+        if (!ignoredKeysAreCurrent()) {
+          try {
+            await loadIgnoredKeys();
+          } catch (_error) {
+            // The finished scan loads them again and reports the failure.
+          }
+        }
+        progressContext.ignoredLoaded = ignoredKeysAreCurrent();
+        return runProgressiveCollector(tab.id, collector, (images) => {
+          progressContext.records = images;
+          applyProgressiveSnapshot(progressContext, images);
+        }, () => scanSourceStillCurrent(settings, scanSourceGeneration));
+      };
+      // When a run fails after showing results, those results are kept.
+      const partialResults = (warning) => progressContext.records.length ? [{
+        frameId: 0,
+        result: {
+          handled: true,
+          pageUrl: tab.url,
+          pageTitle: String(tab.title || ""),
+          embeddedFrameCount: 0,
+          images: progressContext.records,
+          warnings: warning ? [warning] : []
+        }
+      }] : null;
+      let collectorStopped = false;
+
       const collectorArgs = [{
         includeBackgrounds: elements["backgrounds-input"].checked,
         maxImages: MAX_DISCOVERED_IMAGES,
@@ -4816,26 +5381,31 @@
           elements["page-label"].textContent = "Collecting all profile posts, carousel slides, and reels…";
         }
         try {
-          const instagramResults = await browser.scripting.executeScript({
-            target: { tabId: tab.id },
-            world: "MAIN",
-            func: collectInstagramMediaFromPage,
-            args: [{
-              includeProfilePosts: !settings.instagramCollections,
-              includeStories: Boolean(settings.instagramCollections),
-              includeHighlights: Boolean(settings.instagramCollections),
-              allowNetwork: instagramRun.network,
-              maxItems: MAX_DISCOVERED_IMAGES,
-              maxDocuments: settings.instagramCollections ? 32 : 512,
-              maxDocumentBytes: 4000000,
-              maxTotalDocumentBytes: 32000000,
-              maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH
-            }]
-          });
+          const instagramOptions = {
+            includeProfilePosts: !settings.instagramCollections,
+            includeStories: Boolean(settings.instagramCollections),
+            includeHighlights: Boolean(settings.instagramCollections),
+            allowNetwork: instagramRun.network,
+            maxItems: MAX_DISCOVERED_IMAGES,
+            maxDocuments: settings.instagramCollections ? 32 : 512,
+            maxDocumentBytes: 4000000,
+            maxTotalDocumentBytes: 32000000,
+            maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH
+          };
+          // A network run can take minutes; a page-only run returns at once.
+          const instagramResults = instagramRun.network
+            ? await runWithProgress({ world: "MAIN", func: collectInstagramMediaFromPage, options: instagramOptions })
+            : await browser.scripting.executeScript({
+              target: { tabId: tab.id },
+              world: "MAIN",
+              func: collectInstagramMediaFromPage,
+              args: [instagramOptions]
+            });
           const firstInstagramResult = instagramResults && instagramResults[0];
           const instagramResult = firstInstagramResult && firstInstagramResult.result;
           if (instagramResult && instagramResult.handled && Array.isArray(instagramResult.images)) {
             injectionResults = instagramResults;
+            collectorStopped = instagramResult.stopped === true;
             instagramCollectionSucceeded = Boolean(settings.instagramCollections);
             instagramProfileCollection = instagramResult.profileCollection;
             instagramRun.found = instagramResult.images.length;
@@ -4860,11 +5430,15 @@
             } else if (detail) {
               instagramWarning = `Instagram collection stopped with an error. Reload the Instagram tab and scan again. (${detail})`;
             }
+            injectionResults = partialResults(instagramWarning);
+            if (injectionResults) instagramWarning = "";
           }
         } catch (error) {
           instagramWarning = settings.instagramCollections
             ? `Instagram stories and highlights could not be collected; the existing results were kept. (${error.message || error})`
             : `Instagram-specific collection was unavailable. (${error.message || error})`;
+          injectionResults = partialResults(instagramWarning);
+          if (injectionResults) instagramWarning = "";
         }
       }
 
@@ -4893,10 +5467,9 @@
       if (fapFolderPage && !injectionResults) {
         elements["page-label"].textContent = "Inspecting FapFolder video posts…";
         try {
-          const fapFolderResults = await browser.scripting.executeScript({
-            target: { tabId: tab.id },
+          const fapFolderResults = await runWithProgress({
             func: collectFapFolderMediaFromPage,
-            args: [{
+            options: {
               maxItems: MAX_DISCOVERED_IMAGES,
               maxPosts: 64,
               maxConcurrency: 3,
@@ -4904,18 +5477,24 @@
               maxTotalDocumentBytes: 16000000,
               maxPayloadLength: Core.MAX_BATCH_TOTAL_URL_LENGTH,
               requestTimeoutMs: 8000
-            }]
+            }
           });
           const fapFolderResult = fapFolderResults && fapFolderResults[0] &&
             fapFolderResults[0].result;
           if (fapFolderResult && fapFolderResult.handled && Array.isArray(fapFolderResult.images)) {
             injectionResults = fapFolderResults;
+            collectorStopped = fapFolderResult.stopped === true;
             fapFolderCollectionSucceeded = fapFolderResult.images.some((image) =>
               image && image.mediaType === "video"
             );
+          } else {
+            injectionResults = partialResults("FapFolder post inspection stopped early; the videos found so far were kept.");
           }
         } catch (error) {
-          fapFolderWarning = `FapFolder post inspection was unavailable; the visible page was scanned instead. (${error.message || error})`;
+          injectionResults = partialResults(`FapFolder post inspection stopped early; the videos found so far were kept. (${error.message || error})`);
+          if (!injectionResults) {
+            fapFolderWarning = `FapFolder post inspection was unavailable; the visible page was scanned instead. (${error.message || error})`;
+          }
         }
       }
 
@@ -5057,7 +5636,9 @@
         state.instagramCollectionFilter = "all";
       }
       try {
-        if (!(settings.live && preserveThisPage && ignoredKeysAreCurrent())) await loadIgnoredKeys();
+        if (!((settings.live || progressContext.ignoredLoaded) && preserveThisPage && ignoredKeysAreCurrent())) {
+          await loadIgnoredKeys();
+        }
       } catch (error) {
         state.ignoredKeys = preserveThisPage ? previousIgnoredKeys : new Set();
         merged.warnings.push(`Firefox could not load ignored-media rules: ${error.message || error}`);
@@ -5067,30 +5648,7 @@
       }
 
       if (preserveThisPage) {
-        for (const image of merged.images) {
-          const previous = previousByIdentity.get(mediaIdentityKey(image));
-          if (!previous || image.originalMediaType === 1) {
-            continue;
-          }
-          image.width = image.width || previous.width || 0;
-          image.height = image.height || previous.height || 0;
-          image.duration = image.duration || previous.duration || 0;
-          image.mimeType = image.mimeType || previous.mimeType || "";
-          image.filename = image.filename || previous.filename || "";
-          image.sourceProvider = image.sourceProvider || previous.sourceProvider || "";
-          image.videoId = image.videoId || previous.videoId || "";
-          image.qualityLabel = image.qualityLabel || previous.qualityLabel || "";
-          if (image.hasAudio === null || image.hasAudio === undefined) {
-            image.hasAudio = previous.hasAudio;
-          }
-          image.itag = image.itag || previous.itag || 0;
-          image.previewUrl = image.previewUrl || previous.previewUrl || "";
-          if ((!image.width || !image.height) && previous.dimensionStatus) {
-            image.dimensionStatus = previous.dimensionStatus;
-          } else if (image.width && image.height) {
-            image.dimensionStatus = "known";
-          }
-        }
+        inheritPreviousMetadata(merged.images, previousByIdentity);
       }
 
       const discoveredImages = preservedInstagramFallback ? [] : merged.images;
@@ -5117,9 +5675,17 @@
         merged.images = accumulated.images;
       }
 
+      // After a run that showed results while it worked, selection changes
+      // made meanwhile are kept; new media is selected as usual.
+      const shownImages = state.images;
       state.images = merged.images;
       markFilenamePreviewsDirty();
-      state.selected = reconcileGallerySelection(previousImages, preserveThisPage);
+      if (progressContext.shown) {
+        carryDownloadStatuses(state.images, shownImages);
+        state.selected = reconcileGallerySelection(shownImages, true);
+      } else {
+        state.selected = reconcileGallerySelection(previousImages, preserveThisPage);
+      }
       state.scanWarnings = merged.warnings;
       state.pageTitle = merged.page.pageTitle || "";
       state.pageUrl = merged.page.pageUrl || "";
@@ -5156,6 +5722,11 @@
         setNotice(
           [...merged.warnings, instagramSummary].filter(Boolean).join(" "),
           instagramRun.found ? "warning" : "error"
+        );
+      } else if (collectorStopped) {
+        setNotice(
+          `Stopped scanning. Kept ${countLabel(merged.images.length, "media item")} found so far.${merged.warnings.length ? ` ${merged.warnings.join(" ")}` : ""}`,
+          merged.warnings.length ? "warning" : "success"
         );
       } else if (merged.warnings.length) {
         setNotice([instagramSummary, ...merged.warnings].filter(Boolean).join(" "), "warning");

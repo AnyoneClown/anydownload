@@ -247,7 +247,7 @@ ui.state.selected.add(second.url);
 get("filter-input").value = "lake";
 ui.updateSummary();
 assert.equal(get("selected-label").textContent, "2 selected · 1 hidden");
-assert.equal(get("download-button").textContent, "Download 2 files");
+assert.equal(get("download-button").textContent, "Download 2 images", "A one-type selection names its media type");
 assert.match(get("selection-warning").textContent, /includes 1 file hidden/);
 assert.match(get("selected-label").getAttribute("aria-label"), /including 1 hidden by filters/);
 assert.equal(ui.state.selected.size, 2, "Searching must preserve existing selections");
@@ -638,6 +638,9 @@ for (const embedded of [false, true]) {
   for (const image of ui.state.images) ui.state.selected.add(image.url);
   const selectedBeforeFilters = [...ui.state.selected];
   ui.updateSummary();
+  assert.equal(get("selected-label").textContent, "3 selected · 1 video", "A mixed selection names its videos");
+  assert.match(get("selected-label").getAttribute("aria-label"), /: 2 images and 1 video/);
+  assert.equal(get("download-button").textContent, "Download 3 files");
   assert.equal(get("archive-footer-button").disabled, true, "ZIP refuses mixed image and video selections");
   assert.equal(get("archive-selection-help").hidden, false, "Image-only help explains the disabled ZIP action");
   assert.doesNotMatch(get("selection-warning").textContent, /ZIP/, "ZIP limitations stay beside the ZIP action");
@@ -706,8 +709,13 @@ for (const embedded of [false, true]) {
   assert.equal(firstFacts.find(fact => fact.className === "thumbnail-fact slides").textContent, "2/4",
     "Carousel slides show their position in the post");
   assert.equal(firstFacts.find(fact => fact.className === "thumbnail-fact size").textContent, "1,000 × 600");
-  assert.equal(tilePart(tiles()[2], "thumbnail-facts").children.some(fact => fact.className === "thumbnail-fact play"), true,
-    "Video tiles carry a duration badge");
+  const videoChip = () => tilePart(tiles()[2], "thumbnail-facts").children.find(fact => fact.className === "thumbnail-fact play");
+  assert.equal(videoChip().textContent, "Video", "A video of unknown length is still marked as a video");
+  clip.duration = 83;
+  ui.renderImages();
+  assert.equal(videoChip().textContent, "1:23", "A known length replaces the video label");
+  delete clip.duration;
+  ui.renderImages();
   first.kinds = originalKinds;
   ui.state.selected.clear();
   for (const url of selectedBeforeFilters) ui.state.selected.add(url);

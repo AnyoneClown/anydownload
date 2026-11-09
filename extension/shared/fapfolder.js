@@ -98,6 +98,38 @@
     ).slice(0, 300);
     const warnings = new Set();
     const found = new Map();
+    // Videos from posts inspected so far, read by the popup from a slot named
+    // by its random key while the run works; `stopped` ends the run early.
+    const progressKey = typeof options.progressKey === "string" &&
+      /^anydownloadProgress[A-Za-z0-9]{16,64}$/.test(options.progressKey) ? options.progressKey : "";
+    let progress = null;
+    const activeControllers = new Set();
+    if (progressKey) {
+      try {
+        progress = {
+          found: new Map(),
+          stopped: false,
+          // Called by the popup's read: post requests in flight end at once.
+          stop() {
+            progress.stopped = true;
+            for (const controller of activeControllers) {
+              try {
+                controller.abort();
+              } catch (_error) {
+                // A finished request no longer accepts an abort.
+              }
+            }
+            activeControllers.clear();
+          }
+        };
+        Object.defineProperty(globalThis, progressKey, {
+          value: progress, configurable: true, enumerable: false, writable: false
+        });
+      } catch (_error) {
+        progress = null;
+      }
+    }
+    const stopRequested = () => Boolean(progress && progress.stopped === true);
     let payloadLength = 0;
     let totalDocumentBytes = 0;
     let itemLimitReached = false;
@@ -134,8 +166,19 @@
       return null;
     }
 
+    function releaseProgress() {
+      if (progress) {
+        try {
+          delete globalThis[progressKey];
+        } catch (_error) {
+          // The slot holds only this run's results and goes with the page.
+        }
+      }
+    }
+
     const route = supportedRoute(pageUrl);
     if (!route) {
+      releaseProgress();
       return {
         handled: false,
         pageUrl,
@@ -553,6 +596,7 @@
       const timer = controller
         ? setTimeout(() => controller.abort(), settings.requestTimeoutMs)
         : null;
+      if (controller) activeControllers.add(controller);
       try {
         const response = await fetch(descriptor.url, {
           method: "GET",
@@ -592,6 +636,7 @@
       } catch (_error) {
         return { images: [], loginRequired: false, failed: true };
       } finally {
+        if (controller) activeControllers.delete(controller);
         if (timer !== null) {
           clearTimeout(timer);
         }
@@ -620,10 +665,16 @@
       let cursor = 0;
 
       async function worker() {
-        while (cursor < posts.length) {
+        while (cursor < posts.length && !stopRequested()) {
           const index = cursor;
           cursor += 1;
           results[index] = await collectPost(posts[index]);
+          if (progress && results[index]) {
+            for (const video of results[index].images) {
+              if (progress.found.size >= settings.maxItems) break;
+              if (video && typeof video.url === "string") progress.found.set(video.url, video);
+            }
+          }
         }
       }
 
@@ -635,7 +686,12 @@
       let failedPosts = 0;
       let loginRequiredPosts = 0;
       let emptyPosts = 0;
+      const stopped = stopRequested();
       for (const result of results) {
+        if (stopped && (!result || result.failed)) {
+          // A post the person stopped before or during was not inspected, not failed.
+          continue;
+        }
         if (!result || result.failed) {
           failedPosts += 1;
           continue;
@@ -686,13 +742,15 @@
       warnings.add("Some FapFolder videos were skipped because their combined URL data exceeded the 2 MB safety limit.");
     }
 
+    releaseProgress();
     return {
       handled: true,
       pageUrl,
       pageTitle,
       embeddedFrameCount: 0,
       images: Array.from(found.values()),
-      warnings: Array.from(warnings).slice(0, 12)
+      warnings: Array.from(warnings).slice(0, 12),
+      stopped: stopRequested()
     };
   }
 
