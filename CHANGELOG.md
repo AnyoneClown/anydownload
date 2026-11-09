@@ -4,6 +4,8 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.28.0] - 2026-11-09
+
 ### Added
 
 - Select media like in a file manager: Shift+click a card to select or deselect every card between it and the last one you clicked, and press Ctrl+A (Cmd+A on macOS) to select all. A plain or Ctrl/Cmd+click still toggles one card. Ranges skip media that already completed, as Select all does.
