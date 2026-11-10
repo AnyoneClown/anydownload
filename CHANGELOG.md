@@ -4,6 +4,14 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- Browse many Instagram stories and highlights without a sideways scroll. On a profile, each story and highlight is a chip with its name and file count; click the name to open it and see its files in a grid, or click the round mark to select the whole highlight without opening it. With more than three, only the active story starts open, and Show all / Hide all opens or closes every one. Closed highlights do not load their thumbnails.
+
+### Fixed
+
+- Keep the story and highlights block in place while you work. Selecting files, download status updates, and live scan results no longer rebuild it, which used to jump the highlights strip back to the start.
+
 ## [1.28.0] - 2026-11-09
 
 ### Added

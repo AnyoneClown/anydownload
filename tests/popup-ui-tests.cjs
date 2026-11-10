@@ -144,6 +144,7 @@ const context = vm.createContext({
   AnyDownloadIntegrations: Integrations,
   AnyDownloadTracker: require("../extension/shared/tracker.js"),
   AnyDownloadGallery: require("../extension/shared/gallery.js"),
+  ImageDownloaderInstagram: require("../extension/shared/instagram.js"),
   setTimeout: () => 1, clearTimeout() {}, addEventListener() {},
   browser: {
     storage: {
@@ -918,6 +919,52 @@ for (const embedded of [false, true]) {
     "A later batch failure keeps only unaccepted items selected for retry");
   assert.match(get("notice").textContent, /Added 1,500 of 2,738 downloads/);
   context.browser.runtime.sendMessage = originalSendMessage;
+
+  // Instagram profile: stories and highlights fold into reusable chips.
+  const storyItem = index => ({ url: `https://cdn.example/story-${index}.jpg`, width: 1080, height: 1920,
+    kinds: ["image"], instagramCollections: [{ type: "story", id: "active" }] });
+  const highlightItem = index => ({ url: `https://cdn.example/highlight-${index}.jpg`, width: 1080, height: 1920,
+    kinds: ["image"], instagramCollections: [{ type: "highlight", id: `h${index}`, title: `Trip ${index}` }] });
+  ui.state.pageUrl = "https://www.instagram.com/example_user/";
+  ui.state.images = [storyItem(1), storyItem(2), ...Array.from({ length: 5 }, (_, index) => highlightItem(index)),
+    { url: "https://cdn.example/post.jpg", width: 1080, height: 1350, kinds: ["image"] }];
+  ui.state.selected.clear();
+  ui.renderImages();
+  const igList = get("image-list");
+  const igStrip = igList.children[1];
+  assert.equal(igStrip.className, "ig-strip");
+  const igGroups = () => igStrip.children.map(wrapper => ({
+    wrapper, select: wrapper.children[0].children[0], expand: wrapper.children[0].children[1], tiles: wrapper.children[1]
+  }));
+  assert.equal(igGroups().length, 6);
+  assert.deepEqual(igGroups().map(group => group.tiles.hidden), [false, true, true, true, true, true],
+    "With many highlights only the active story starts open");
+  assert.deepEqual(igGroups().map(group => group.tiles.children.length), [2, 0, 0, 0, 0, 0],
+    "Closed highlights do not build their cards");
+  const igWrappers = igGroups().map(group => group.wrapper);
+  const storyTiles = [...igGroups()[0].tiles.children];
+  ui.state.selected.add(ui.state.images[0].url);
+  ui.renderImages();
+  assert.equal(igList.children[1], igStrip, "A re-render keeps the story and highlights block in place");
+  assert.deepEqual(igGroups().map(group => group.wrapper), igWrappers);
+  assert.deepEqual(igGroups()[0].tiles.children, storyTiles, "Open groups keep their cards across renders");
+  assert.equal(igGroups()[0].select.getAttribute("aria-pressed"), "mixed");
+  igGroups()[1].expand.listeners.click();
+  assert.equal(igGroups()[1].tiles.hidden, false);
+  assert.equal(igGroups()[1].expand.getAttribute("aria-expanded"), "true");
+  assert.equal(igGroups()[1].tiles.children.length, 1);
+  igGroups()[1].select.listeners.click();
+  assert.ok(ui.state.selected.has("https://cdn.example/highlight-0.jpg"), "The chip tick selects the whole highlight");
+  assert.equal(igGroups()[1].select.getAttribute("aria-pressed"), "true");
+  const igToggleAll = igList.children[0].children[2];
+  assert.equal(igToggleAll.textContent, "Show all");
+  igToggleAll.listeners.click();
+  assert.ok(igGroups().every(group => !group.tiles.hidden));
+  assert.equal(igToggleAll.textContent, "Hide all");
+  igToggleAll.listeners.click();
+  assert.ok(igGroups().every(group => group.tiles.hidden));
+  assert.equal(igList.children[2].children[0].textContent, "Posts and reels");
+  ui.state.selected.clear();
   ui.state.pageUrl = previousPageUrl;
   ui.state.images = [first, second];
   ui.state.selected.clear();

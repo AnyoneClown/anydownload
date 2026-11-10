@@ -1069,14 +1069,22 @@ html.responsive-surface .app-shell {
   font-variant-numeric: tabular-nums;
 }
 
+.ig-section-heading .ig-expand-all {
+  min-height: 24px;
+  margin-left: auto;
+  padding: 0 6px;
+  color: var(--ink-muted);
+}
+
+/* Closed stories and highlights wrap as chips; an open one spans the row
+   and lays its tiles out in a grid, so nothing scrolls sideways. */
 .ig-strip {
   display: flex;
+  flex-wrap: wrap;
   grid-column: 1 / -1;
-  gap: 14px;
+  gap: 6px;
   min-width: 0;
   padding-bottom: 6px;
-  overflow-x: auto;
-  scrollbar-width: thin;
 }
 
 .ig-group {
@@ -1084,31 +1092,86 @@ html.responsive-surface .app-shell {
   flex: none;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
+  max-width: 100%;
 }
 
-.ig-group-toggle {
+.ig-group.expanded {
+  flex: 1 0 100%;
+}
+
+.ig-group-header {
   display: inline-flex;
   align-self: flex-start;
   align-items: center;
-  gap: 6px;
-  min-height: 24px;
-  padding: 0 6px 0 3px;
+  max-width: 100%;
+  min-height: 28px;
+  border-radius: 14px;
+  background: var(--surface-subtle);
+}
+
+.ig-group-select,
+.ig-group-expand {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
   border: 0;
-  border-radius: 4px;
   color: var(--ink);
   background: transparent;
   font-size: 12px;
+}
+
+.ig-group-select {
+  flex: none;
+  justify-content: center;
+  width: 30px;
+  padding: 0 0 0 3px;
+  border-radius: 14px 0 0 14px;
+}
+
+.ig-group-expand {
+  gap: 6px;
+  min-width: 0;
+  padding: 0 10px 0 2px;
+  border-radius: 0 14px 14px 0;
   font-weight: 600;
 }
 
-.ig-group-toggle:hover:not(:disabled) {
-  background: var(--surface-subtle);
+.ig-group-select:hover:not(:disabled),
+.ig-group-expand:hover {
+  background: var(--line);
+}
+
+.ig-group.expanded > .ig-group-header {
+  background: var(--brand-soft);
+}
+
+.ig-group-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ig-group-count {
   color: var(--ink-muted);
   font-weight: 400;
   font-variant-numeric: tabular-nums;
+}
+
+.ig-chevron {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-left: 1px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  color: var(--ink-muted);
+  transform: translateY(-1px) rotate(-45deg);
+  transition: transform .12s ease;
+}
+
+.ig-group.expanded .ig-chevron {
+  transform: translateY(-2px) rotate(45deg);
 }
 
 .ig-tick {
@@ -1139,12 +1202,17 @@ html.responsive-surface .app-shell {
 }
 
 .ig-group-tiles {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
   gap: 4px;
+  padding-bottom: 4px;
+}
+
+.ig-group-tiles[hidden] {
+  display: none;
 }
 
 .ig-group-tiles > .image-row {
-  width: 76px;
   aspect-ratio: 9 / 16;
 }
 
@@ -1156,19 +1224,13 @@ html.responsive-surface .app-shell {
   display: none;
 }
 
-[data-view="list"] .ig-strip,
-[data-view="list"] .ig-group,
 [data-view="list"] .ig-group-tiles {
-  display: contents;
-}
-
-[data-view="list"] .ig-group-toggle {
-  grid-column: 1 / -1;
-  margin: 6px 0 0 4px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
 }
 
 [data-view="list"] .ig-group-tiles > .image-row {
-  width: auto;
+  aspect-ratio: auto;
 }
 
 .empty-state {

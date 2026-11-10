@@ -955,6 +955,11 @@
   const shortcutModifier = typeof navigator === "object" &&
     /Mac|iPhone|iPad/i.test(String(navigator.platform || "")) ? "Cmd" : "Ctrl";
   let renderedInstagramGroups = [];
+  // Story and highlight chips are reused across renders; open/closed choices
+  // last for this profile until another profile is shown.
+  const INSTAGRAM_EXPANDED_GROUP_LIMIT = 3;
+  let instagramLayout = null;
+  const instagramGroupExpansion = new Map();
   const searchTextCache = new WeakMap();
   const sortNameCache = new WeakMap();
   const filenameCollator = new Intl.Collator(undefined, { numeric: true });
@@ -3092,17 +3097,123 @@
       group.tick.className = `ig-tick${all ? " all" : selected ? " some" : ""}`;
       group.button.disabled = !selectable.length || (state.busy && !state.liveScanning);
       group.button.setAttribute("aria-pressed", all ? "true" : selected ? "mixed" : "false");
-      group.button.setAttribute("aria-label", `${all ? "Deselect" : "Select"} ${group.title}, ${group.images.length.toLocaleString()} file${group.images.length === 1 ? "" : "s"}`);
+      const label = `${all ? "Deselect" : "Select"} ${group.title}, ${group.images.length.toLocaleString()} file${group.images.length === 1 ? "" : "s"}`;
+      group.button.setAttribute("aria-label", label);
+      group.button.title = label;
     }
   }
 
-  // On an Instagram profile, story and highlights sit in a strip above the posts.
+  // Replaces a container's children only when they differ, so reused nodes
+  // keep their place and nothing is detached on a routine re-render.
+  function syncChildren(container, nodes) {
+    const current = container.children;
+    if (current.length === nodes.length && nodes.every((node, index) => current[index] === node)) {
+      return false;
+    }
+    container.replaceChildren(...nodes);
+    return true;
+  }
+
+  function instagramGroupExpanded(key, groupCount) {
+    if (instagramGroupExpansion.has(key)) {
+      return instagramGroupExpansion.get(key);
+    }
+    return groupCount <= INSTAGRAM_EXPANDED_GROUP_LIMIT || key.startsWith("story:");
+  }
+
+  function setInstagramGroupsExpanded(keys, expanded) {
+    for (const key of keys) {
+      instagramGroupExpansion.set(key, expanded);
+    }
+    renderImages();
+  }
+
+  function makeInstagramGroupNode(key) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "ig-group";
+    wrapper.setAttribute("role", "presentation");
+    const header = document.createElement("div");
+    header.className = "ig-group-header";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ig-group-select";
+    button.dataset.focusKey = `ig-select:${key}`;
+    const tick = document.createElement("span");
+    tick.className = "ig-tick";
+    tick.setAttribute("aria-hidden", "true");
+    button.appendChild(tick);
+    const expand = document.createElement("button");
+    expand.type = "button";
+    expand.className = "ig-group-expand";
+    expand.dataset.focusKey = `ig-expand:${key}`;
+    const title = document.createElement("span");
+    title.className = "ig-group-title";
+    const count = document.createElement("span");
+    count.className = "ig-group-count";
+    const chevron = document.createElement("span");
+    chevron.className = "ig-chevron";
+    chevron.setAttribute("aria-hidden", "true");
+    expand.append(title, count, chevron);
+    header.append(button, expand);
+    const tiles = document.createElement("div");
+    tiles.className = "ig-group-tiles";
+    tiles.setAttribute("role", "presentation");
+    wrapper.append(header, tiles);
+    const record = { key, wrapper, button, tick, expand, titleNode: title, countNode: count, tiles, title: "", images: [] };
+    button.addEventListener("click", () => toggleInstagramGroup(record));
+    expand.addEventListener("click", () => {
+      instagramGroupExpansion.set(key, !record.expanded);
+      renderImages();
+    });
+    return record;
+  }
+
+  function instagramSectionHeading(text) {
+    const node = document.createElement("div");
+    node.className = "ig-section-heading";
+    node.setAttribute("role", "presentation");
+    const label = document.createElement("span");
+    label.textContent = text;
+    const note = document.createElement("span");
+    note.className = "ig-section-note";
+    node.append(label, note);
+    return { node, note };
+  }
+
+  // On an Instagram profile, story and highlights sit above the posts. Each
+  // story or highlight is a chip that opens into its tiles; the nodes are
+  // reused across renders so selections and live updates never reset them.
   function buildMediaNodes(images, rowFor = makeImageRow) {
-    const instagramProfile = Boolean(instagramProfileUsername(state.pageUrl));
-    elements["image-list"].classList.toggle("instagram-layout", instagramProfile);
-    if (!instagramProfile) {
+    const username = instagramProfileUsername(state.pageUrl);
+    elements["image-list"].classList.toggle("instagram-layout", Boolean(username));
+    if (!username) {
       return images.map((image) => rowFor(image));
     }
+    if (!instagramLayout || instagramLayout.username !== username) {
+      const collections = instagramSectionHeading("Story and highlights");
+      const toggleAll = document.createElement("button");
+      toggleAll.type = "button";
+      toggleAll.className = "text-button ig-expand-all";
+      toggleAll.dataset.focusKey = "ig-expand-all";
+      collections.node.appendChild(toggleAll);
+      const strip = document.createElement("div");
+      strip.className = "ig-strip";
+      strip.setAttribute("role", "presentation");
+      instagramLayout = {
+        username,
+        collections,
+        toggleAll,
+        strip,
+        posts: instagramSectionHeading("Posts and reels"),
+        groups: new Map()
+      };
+      instagramGroupExpansion.clear();
+      toggleAll.addEventListener("click", () => {
+        const keys = Array.from(instagramLayout.strip.children, (node) => node.anydownloadGroupKey).filter(Boolean);
+        setInstagramGroupsExpanded(keys, toggleAll.dataset.expand === "true");
+      });
+    }
+    const layout = instagramLayout;
     const target = [];
     const groups = new Map();
     const posts = [];
@@ -3115,52 +3226,44 @@
       if (!groups.has(group.key)) groups.set(group.key, { title: group.title, images: [] });
       groups.get(group.key).images.push(image);
     }
-    const heading = (text, count) => {
-      const node = document.createElement("div");
-      node.className = "ig-section-heading";
-      node.setAttribute("role", "presentation");
-      node.textContent = text;
-      if (count !== undefined) {
-        const note = document.createElement("span");
-        note.className = "ig-section-note";
-        note.textContent = count.toLocaleString();
-        node.appendChild(note);
-      }
-      return node;
-    };
     if (groups.size) {
-      target.push(heading("Story and highlights"));
-      const strip = document.createElement("div");
-      strip.className = "ig-strip";
-      strip.setAttribute("role", "presentation");
-      for (const group of groups.values()) {
-        const wrapper = document.createElement("div");
-        wrapper.className = "ig-group";
-        wrapper.setAttribute("role", "presentation");
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "ig-group-toggle";
-        const tick = document.createElement("span");
-        tick.className = "ig-tick";
-        tick.setAttribute("aria-hidden", "true");
-        const title = document.createElement("span");
-        title.textContent = group.title;
-        const count = document.createElement("span");
-        count.className = "ig-group-count";
-        count.textContent = group.images.length.toLocaleString();
-        button.append(tick, title, count);
-        const record = { button, tick, title: group.title, images: group.images };
-        button.addEventListener("click", () => toggleInstagramGroup(record));
+      const wrappers = [];
+      let anyCollapsed = false;
+      for (const [key, group] of groups) {
+        let record = layout.groups.get(key);
+        if (!record) {
+          record = makeInstagramGroupNode(key);
+          record.wrapper.anydownloadGroupKey = key;
+          layout.groups.set(key, record);
+        }
+        record.title = group.title;
+        record.images = group.images;
+        record.expanded = instagramGroupExpanded(key, groups.size);
+        anyCollapsed = anyCollapsed || !record.expanded;
+        record.titleNode.textContent = group.title;
+        record.countNode.textContent = group.images.length.toLocaleString();
+        record.wrapper.classList.toggle("expanded", record.expanded);
+        record.expand.setAttribute("aria-expanded", String(record.expanded));
+        record.expand.title = `${record.expanded ? "Hide" : "Show"} ${group.title}`;
+        record.tiles.hidden = !record.expanded;
+        // A closed group keeps its cards unbuilt, so many highlights stay cheap.
+        syncChildren(record.tiles, record.expanded ? group.images.map((image) => rowFor(image)) : []);
         renderedInstagramGroups.push(record);
-        const tiles = document.createElement("div");
-        tiles.className = "ig-group-tiles";
-        tiles.setAttribute("role", "presentation");
-        tiles.append(...group.images.map((image) => rowFor(image)));
-        wrapper.append(button, tiles);
-        strip.appendChild(wrapper);
+        wrappers.push(record.wrapper);
       }
-      target.push(strip);
-      if (posts.length) target.push(heading("Posts and reels", posts.length));
+      for (const key of layout.groups.keys()) {
+        if (!groups.has(key)) layout.groups.delete(key);
+      }
+      syncChildren(layout.strip, wrappers);
+      layout.collections.note.textContent = groups.size.toLocaleString();
+      layout.toggleAll.hidden = groups.size < 2;
+      layout.toggleAll.dataset.expand = String(anyCollapsed);
+      layout.toggleAll.textContent = anyCollapsed ? "Show all" : "Hide all";
+      target.push(layout.collections.node, layout.strip);
+      if (posts.length) {
+        layout.posts.note.textContent = posts.length.toLocaleString();
+        target.push(layout.posts.node);
+      }
     }
     for (const image of posts) target.push(rowFor(image));
     updateInstagramGroupToggles();
