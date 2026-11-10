@@ -1,6 +1,6 @@
 {
   "name": "page-image-downloader-firefox",
-  "version": "1.29.0",
+  "version": "1.30.0",
   "private": true,
   "scripts": {
     "benchmark": "node scripts/benchmark-performance.cjs",

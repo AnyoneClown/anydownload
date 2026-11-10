@@ -4,6 +4,16 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.30.0] - 2026-11-10
+
+### Added
+
+- Close any message at the bottom of the collection with its × button, such as the hint to scroll an Instagram profile to the end. A new message shows it again.
+
+### Fixed
+
+- Keep Page actions (⋯) reachable while a scan runs. Stop scanning is now a compact red stop icon, and a narrower Sidebar first shrinks Filters and the layout toggle to icons, then moves search to a second row, instead of pushing Page actions out of view.
+
 ## [1.29.0] - 2026-11-10
 
 ### Changed
