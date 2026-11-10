@@ -340,11 +340,18 @@ html.responsive-surface .app-shell {
   padding: 8px;
 }
 
+/* Wrapping is the fallback for long counts: no control is ever clipped. */
 .search-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+
+/* If Page actions ever wraps, it stays at the right edge where it is expected. */
+#collection-actions-button {
+  margin-left: auto;
 }
 
 .media-type-tabs,
@@ -455,6 +462,21 @@ html.responsive-surface .app-shell {
   background: var(--surface-subtle);
 }
 
+/* Stop is a compact icon so it never pushes Page actions out of the toolbar. */
+#stop-gallery-button {
+  flex: none;
+  width: 32px;
+  gap: 0;
+  padding: 0;
+  color: var(--danger);
+  font-size: 0;
+}
+
+#stop-gallery-button:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
 .filter-toggle-button[aria-expanded="true"],
 .filter-toggle-button.active {
   color: var(--brand-ink);
@@ -517,11 +539,12 @@ html.responsive-surface .app-shell {
 .notice {
   grid-area: media;
   z-index: 5;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
   align-self: end;
-  max-height: 64px;
   margin: 0 12px 10px;
-  padding: 6px 10px;
-  overflow-y: auto;
+  padding: 6px 4px 6px 10px;
   border-radius: 6px;
   box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
   cursor: default;
@@ -531,6 +554,45 @@ html.responsive-surface .app-shell {
   font-size: 12px;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.notice-text {
+  flex: 1;
+  min-width: 0;
+  max-height: 52px;
+  margin: 0;
+  overflow-y: auto;
+}
+
+/* Closes any notice; a new message brings the toast back. */
+.notice-dismiss {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: inherit;
+  background: transparent;
+  opacity: 0.75;
+  cursor: pointer;
+}
+
+.notice-dismiss:hover,
+.notice-dismiss:focus-visible {
+  opacity: 1;
+  background: rgb(127 127 127 / 18%);
+}
+
+.notice-dismiss svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
 }
 
 .notice.error {
@@ -1668,10 +1730,41 @@ html.responsive-surface .app-shell {
   }
 }
 
-@container (max-width: 520px) {
+/* The toolbar needs about 740px on one row. First Filters and the layout
+   toggle shrink to icons; when even that does not fit, it splits into a
+   tabs-and-actions row and a search row, so Page actions stays reachable. */
+@container (max-width: 760px) {
+  /* Filters keeps its label for assistive technology and its count as the active tint. */
+  .search-toolbar .filter-toggle-button {
+    width: 32px;
+    gap: 0;
+    padding: 0;
+    font-size: 0;
+  }
+
+  /* One toggle that offers the other layout. */
+  .view-switch {
+    padding: 0;
+    background: transparent;
+  }
+
+  .view-switch [aria-pressed="true"] {
+    display: none;
+  }
+}
+
+@container (max-width: 700px) {
+  /* A full-width break keeps search on its own row even when it would fit
+     beside the tabs, so Page actions stays at the end of the first row. */
   .search-toolbar {
-    flex-wrap: wrap;
-    row-gap: 6px;
+    row-gap: 0;
+  }
+
+  .search-toolbar::after {
+    content: "";
+    order: 4;
+    flex-basis: 100%;
+    height: 0;
   }
 
   .media-type-tabs {
@@ -1682,15 +1775,11 @@ html.responsive-surface .app-shell {
   .media-type-tabs button {
     flex: 1;
     justify-content: center;
+    padding: 0 7px;
   }
 
-  /* Filters keeps its label for assistive technology and its count as the active tint. */
   .search-toolbar .filter-toggle-button {
     order: 2;
-    width: 32px;
-    gap: 0;
-    padding: 0;
-    font-size: 0;
   }
 
   #stop-gallery-button {
@@ -1706,6 +1795,12 @@ html.responsive-surface .app-shell {
     flex: 1 1 110px;
   }
 
+  .search-box,
+  .sort-field,
+  .view-switch {
+    margin-top: 6px;
+  }
+
   .sort-field {
     order: 6;
   }
@@ -1714,17 +1809,12 @@ html.responsive-surface .app-shell {
     max-width: 120px;
   }
 
-  /* One toggle that offers the other layout keeps the second row on one line. */
   .view-switch {
     order: 7;
-    padding: 0;
-    background: transparent;
   }
+}
 
-  .view-switch [aria-pressed="true"] {
-    display: none;
-  }
-
+@container (max-width: 520px) {
   .filter-toolbar {
     flex-wrap: nowrap;
   }
@@ -1832,8 +1922,14 @@ html.responsive-surface .app-shell {
 
   .icon-button,
   .app-header .nav-link,
-  .action-buttons .download-options-button {
+  .action-buttons .download-options-button,
+  #stop-gallery-button {
     min-width: 44px;
+  }
+
+  .notice-dismiss {
+    width: 36px;
+    height: 36px;
   }
 
   .option-row {

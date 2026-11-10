@@ -1107,6 +1107,8 @@
       "instagram-collections-button",
       "media-type-filter-select",
       "notice",
+      "notice-text",
+      "notice-dismiss-button",
       "page-label",
       "photos-only-input",
       "queue-badge",
@@ -1161,15 +1163,24 @@
       clearTimeout(noticeTimer);
       noticeTimer = null;
     }
-    elements.notice.textContent = message || "";
+    elements["notice-text"].textContent = message || "";
     elements.notice.className = `notice${type ? ` ${type}` : ""}`;
     elements.notice.hidden = !message;
     if (message && type === "success") {
       noticeTimer = setTimeout(() => {
         noticeTimer = null;
-        if (elements.notice.textContent === message) elements.notice.hidden = true;
+        if (elements["notice-text"].textContent === message) elements.notice.hidden = true;
       }, SUCCESS_NOTICE_MS);
     }
+  }
+
+  // Every notice can be closed by hand; the next message shows it again.
+  function dismissNotice() {
+    if (noticeTimer !== null) {
+      clearTimeout(noticeTimer);
+      noticeTimer = null;
+    }
+    elements.notice.hidden = true;
   }
 
   function trackerPermissionPattern(pageUrl) {
@@ -6464,7 +6475,7 @@
         return;
       }
       if (liveRetryNoticeText && !state.busy) {
-        if (elements["notice"].textContent === liveRetryNoticeText) {
+        if (elements["notice-text"].textContent === liveRetryNoticeText) {
           setNotice("");
         }
         liveRetryNoticeText = "";
@@ -7093,6 +7104,7 @@
       });
     }
     elements["stop-gallery-button"].addEventListener("click", stopGalleryCollection);
+    elements["notice-dismiss-button"].addEventListener("click", dismissNotice);
     elements["refresh-media-button"].addEventListener("click", () => {
       hidePanel("collection-actions-panel");
       return refreshMedia().catch((error) => setNotice(error.message || String(error), "error"));
@@ -7501,11 +7513,12 @@
     const message = error && error.message ? error.message : String(error);
     const pageLabel = document.getElementById("page-label");
     const notice = document.getElementById("notice");
+    const noticeText = document.getElementById("notice-text");
     if (pageLabel) {
       pageLabel.textContent = "AnyDownload could not start";
     }
-    if (notice) {
-      notice.textContent = `Reload the extension and try again. (${message})`;
+    if (notice && noticeText) {
+      noticeText.textContent = `Reload the extension and try again. (${message})`;
       notice.className = "notice error";
       notice.hidden = false;
     }

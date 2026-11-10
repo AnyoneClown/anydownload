@@ -371,7 +371,7 @@ async function checkPopup() {
   assert.equal(JSON.stringify(Gallery.getSite(stored.local, "https://other.test")), otherGallery);
   assert.equal(clearing.elements.get("clear-gallery-button").disabled, true);
   assert.equal(clearing.elements.get("undo-clear-button").focused, true);
-  assert.match(clearing.elements.get("notice").textContent, /Downloaded files and history are kept/);
+  assert.match(clearing.elements.get("notice-text").textContent, /Downloaded files and history are kept/);
   const fresh = popupHarness(stored);
   fresh.setImages([photo("current-page")]);
   await fresh.popup.scanPage();
@@ -406,7 +406,7 @@ async function checkRefreshMedia() {
     assert.equal(popup.state.explicitRedownloads.size, 0);
     assert.equal(popup.state.showSelected, false);
     assert.equal(popup.state.liveCapture, true, "Live updates resume after the fresh scan");
-    assert.match(elements.get("notice").textContent, /Media refreshed/);
+    assert.match(elements.get("notice-text").textContent, /Media refreshed/);
     assert.equal(harness.scrolls, 0, "Refresh must not auto-scroll");
     assert.equal(harness.fetchedPages.length, 0, "Refresh must not crawl linked pages");
     assert.deepEqual(Gallery.getSite(stored[area], siteKey).records.map(item => item.url), [photo("current").url]);
@@ -435,7 +435,7 @@ async function checkRefreshMedia() {
     await harness.elements.get("refresh-media-button").listeners.get("click")();
     assert.equal(harness.popup.state.images.length, failure === "failClear" ? 1 : 0,
       "A failed clear preserves media; a failed scan must not resurrect cleared media");
-    assert.match(harness.elements.get("notice").textContent, /failed/);
+    assert.match(harness.elements.get("notice-text").textContent, /failed/);
     assert.equal(harness.popup.state.busy, false);
   }
 }
@@ -509,7 +509,7 @@ async function checkProfileSwitch() {
   assert.deepEqual([...popup.state.selected], [media("bob-1", "bob/").url]);
   assert.deepEqual(Array.from(Gallery.getSite(stored.local, instagram).records, (record) => record.pageTitle), ["bob-1"]);
   assert.equal(Gallery.getSite(stored.local, instagram).profileKey, "instagram:bob");
-  assert.match(elements.get("notice").textContent, /another profile/);
+  assert.match(elements.get("notice-text").textContent, /another profile/);
 
   tab.url = `${instagram}/p/CODE123/`;
   harness.setImages([media("bob-post", "p/CODE123/")]);
@@ -558,7 +558,7 @@ async function checkInstagramNetworkScope() {
   harness.setResultExtras({ profileCollection: { username: "alice", posts: 1, complete: true } });
   assert.equal(await popup.scanPage(), true);
   assert.deepEqual(instagramNetwork(), [true], "Opening the manager collects the profile through the network");
-  assert.match(elements.get("notice").textContent, /1 file from 1 post/);
+  assert.match(elements.get("notice-text").textContent, /1 file from 1 post/);
   assert.match(elements.get("notice").className, /success/);
 
   // Live updates on the same profile re-read only the loaded page and must not
@@ -584,7 +584,7 @@ async function checkInstagramNetworkScope() {
   assert.equal(await popup.scanPage({ live: true, preserveSelection: true }), true);
   assert.deepEqual(instagramNetwork().slice(-1), [true]);
   assert.match(elements.get("notice").className, /error/);
-  assert.match(elements.get("notice").textContent, /limiting requests/);
+  assert.match(elements.get("notice-text").textContent, /limiting requests/);
   tab.url = "https://www.instagram.com/carol/";
   harness.setResultExtras({});
   assert.equal(await popup.scanPage({ live: true, preserveSelection: true }), true);
@@ -597,7 +597,7 @@ async function checkInstagramNetworkScope() {
   assert.equal(await popup.scanPage({ preserveSelection: true }), true);
   assert.deepEqual(instagramNetwork().slice(-1), [true]);
   assert.match(elements.get("notice").className, /warning/, "Partial results after a block are a warning");
-  assert.match(elements.get("notice").textContent, /log in\. Kept 1 file collected before Instagram stopped/);
+  assert.match(elements.get("notice-text").textContent, /log in\. Kept 1 file collected before Instagram stopped/);
 
   // Firefox returns a collector that threw as { error }; the reason must reach the person.
   tab.url = "https://www.instagram.com/dave/";
@@ -610,8 +610,8 @@ async function checkInstagramNetworkScope() {
   } finally {
     console.error = consoleError;
   }
-  assert.match(elements.get("notice").textContent, /Instagram collection stopped with an error.*media is undefined/);
-  assert.doesNotMatch(elements.get("notice").textContent, /did not expose media for this exact route/);
+  assert.match(elements.get("notice-text").textContent, /Instagram collection stopped with an error.*media is undefined/);
+  assert.doesNotMatch(elements.get("notice-text").textContent, /did not expose media for this exact route/);
   harness.failCollector(null);
 }
 
@@ -724,7 +724,11 @@ async function checkProgressiveScan() {
   assert.deepEqual(Array.from(popup.state.images, (image) => image.url), [first.url, second.url, late.url]);
   assert.deepEqual(Array.from(popup.state.selected), [second.url, late.url],
     "Choices made during the run are kept; media found after it is selected");
-  assert.match(elements.get("notice").textContent, /^Stopped scanning\. Kept 3 media items found so far\./);
+  assert.match(elements.get("notice-text").textContent, /^Stopped scanning\. Kept 3 media items found so far\./);
+  assert.equal(elements.get("notice").hidden, false);
+  popup.wireEvents();
+  elements.get("notice-dismiss-button").listeners.get("click")();
+  assert.equal(elements.get("notice").hidden, true, "Any notice can be closed by hand");
   assert.equal(elements.get("stop-gallery-button").hidden, true);
   assert.equal(popup.state.liveScanning, false);
   const reads = harness.progressCalls.length;
@@ -748,7 +752,7 @@ async function checkProgressiveScan() {
   assert.equal(await failingScan, true);
   assert.deepEqual(Array.from(failing.popup.state.images, (image) => image.url), [kept.url],
     "Results shown before a collector error stay in the collection");
-  assert.match(failing.elements.get("notice").textContent, /stopped with an error/);
+  assert.match(failing.elements.get("notice-text").textContent, /stopped with an error/);
 }
 
 async function checkSavedCollectionView() {
@@ -800,7 +804,7 @@ async function checkFixedPageLimit() {
   assert.equal(harness.fetchedPages.length, Gallery.MAX_PAGES - 1,
     "A never-ending Next chain must stop at the fixed total page cap, including the source page");
   assert.equal(new Set(harness.fetchedPages).size, harness.fetchedPages.length);
-  assert.match(harness.elements.get("notice").textContent, /Stopped at the 10-page limit/);
+  assert.match(harness.elements.get("notice-text").textContent, /Stopped at the 10-page limit/);
 }
 
 async function checkAutomaticLargeCollection() {
@@ -862,8 +866,8 @@ async function checkFapelloPagination() {
     assert.equal(harness.fetchedPages.includes(pageUrl(startingPage)), false);
     assert.equal(harness.popup.state.images.length, 2738, "Every exposed profile page must contribute media");
     assert.equal(harness.popup.state.selected.size, 2738);
-    assert.match(harness.elements.get("notice").textContent, /2,738 media from 86 pages/);
-    assert.doesNotMatch(harness.elements.get("notice").textContent, /limit|repeated/);
+    assert.match(harness.elements.get("notice-text").textContent, /2,738 media from 86 pages/);
+    assert.doesNotMatch(harness.elements.get("notice-text").textContent, /limit|repeated/);
     const area = harness.tab.incognito ? "session" : "local";
     assert.equal(Gallery.getSite(harness.stored[area], fapelloSite).records.length, 2738);
     assert.equal(harness.stored[harness.tab.incognito ? "local" : "session"].length, 0);
@@ -1090,7 +1094,7 @@ function checkScrolling() {
   stoppable.popup.stopGalleryCollection();
   await collecting;
   assert.ok(stoppable.popup.state.images.length > 0);
-  assert.match(stoppable.elements.get("notice").textContent, /Scan stopped/);
+  assert.match(stoppable.elements.get("notice-text").textContent, /Scan stopped/);
   assert.ok(stoppable.scrolls < 10, "Stop must end automatic scrolling promptly");
   console.log("All saved-gallery and collection checks passed.");
 })().catch((error) => {

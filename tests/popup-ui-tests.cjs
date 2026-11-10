@@ -907,7 +907,7 @@ for (const embedded of [false, true]) {
     "Filename indices and duplicate resolution continue across batch boundaries");
   assert.equal(ui.state.selected.size, 0);
   assert.deepEqual(statusRequests.map(message => message.items.length), [1500, 1238]);
-  assert.match(get("notice").textContent, /Added 2,738 downloads/);
+  assert.match(get("notice-text").textContent, /Added 2,738 downloads/);
 
   requestedBatches = 0;
   rejectLaterBatch = true;
@@ -917,7 +917,7 @@ for (const embedded of [false, true]) {
   await ui.requestDownloads(largeSelection);
   assert.deepEqual(Array.from(ui.state.selected), largeSelection.slice(1500).map(item => item.url),
     "A later batch failure keeps only unaccepted items selected for retry");
-  assert.match(get("notice").textContent, /Added 1,500 of 2,738 downloads/);
+  assert.match(get("notice-text").textContent, /Added 1,500 of 2,738 downloads/);
   context.browser.runtime.sendMessage = originalSendMessage;
 
   // Instagram profile: stories and highlights fold into reusable chips.
