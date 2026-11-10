@@ -21,7 +21,7 @@ Run all checks with:
 
 ```bash
 npm test
-npx --yes web-ext@10.6.0 lint --source-dir extension
+npx --yes web-ext@10.8.0 lint --source-dir extension
 ```
 
 Preserve minimal permissions, strict validation, bounded storage/network work, and normal/private-context separation.

@@ -19,12 +19,15 @@ jobs:
 
     steps:
       - name: Check out tagged source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 26
+          # The project has no dependencies to cache, and a release job
+          # holding signing secrets should not restore a shared cache.
+          package-manager-cache: false
 
       - name: Validate tag and package versions
         shell: bash
@@ -65,11 +68,11 @@ jobs:
         run: npm test
 
       - name: Lint extension
-        run: npx --yes web-ext@10.6.0 lint --source-dir extension
+        run: npx --yes web-ext@10.8.0 lint --source-dir extension
 
       - name: Build extension package
         run: |
-          npx --yes web-ext@10.6.0 build \
+          npx --yes web-ext@10.8.0 build \
             --source-dir extension \
             --artifacts-dir release-artifacts
 
@@ -93,7 +96,7 @@ jobs:
           WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
           WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
         run: |
-          npx --yes web-ext@10.6.0 sign \
+          npx --yes web-ext@10.8.0 sign \
             --source-dir extension \
             --artifacts-dir amo-artifacts \
             --channel listed \

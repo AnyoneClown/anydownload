@@ -2,10 +2,10 @@
 
 ## Launch locally
 
-Use Node.js 22 (matching CI) and Firefox desktop 140+. Run commands from the repository root.
+Use Node.js 26 (matching CI) and Firefox desktop 140+. Run commands from the repository root.
 
 ```bash
-npx --yes web-ext@10.6.0 run --source-dir extension --devtools
+npx --yes web-ext@10.8.0 run --source-dir extension --devtools
 ```
 
 This opens a temporary Firefox profile and reloads the extension when source files change. Open a media page and click the AnyDownload toolbar button.
@@ -30,7 +30,7 @@ The Node tests require no dependency installation.
 
 ```bash
 npm test
-npx --yes web-ext@10.6.0 lint --source-dir extension
+npx --yes web-ext@10.8.0 lint --source-dir extension
 ```
 
 ## Code structure and performance
@@ -94,7 +94,7 @@ Every opening retained all 5,000 selections. Full initialization includes galler
 ## Build
 
 ```bash
-npx --yes web-ext@10.6.0 build --source-dir extension --artifacts-dir release-artifacts
+npx --yes web-ext@10.8.0 build --source-dir extension --artifacts-dir release-artifacts
 ```
 
 The ZIP is written to `release-artifacts/`. For permanent installation, submit it for Mozilla signing through the [Firefox Add-on Developer Hub](https://addons.mozilla.org/developers/).
