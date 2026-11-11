@@ -152,8 +152,33 @@ async function testOriginalMetadata() {
   await assert.rejects(Telegram.transfer(api, { url: original.url, source: PAGE }, false, Media.mediaBlob, cancelled.signal), /cancelled/);
 }
 
+async function testScanStopsAtItemLimit() {
+  // Once 300 originals are listed, later messages must not cost previews.
+  const nodes = Array.from({ length: 450 }, (_unused, index) => ({
+    getAttribute: () => String(index + 1),
+    closest: () => ({ getAttribute: () => "-123" }),
+    querySelector: () => ({ naturalWidth: 320, naturalHeight: 200 })
+  }));
+  let canvases = 0;
+  let lookups = 0;
+  const context = { location: { href: PAGE }, URL, URLSearchParams, setTimeout, clearTimeout,
+    document: { title: "Telegram", querySelectorAll: () => nodes,
+      createElement: () => { canvases++; return { getContext: () => ({ drawImage() {} }), toDataURL: () => "data:image/jpeg;base64,/9j/" }; } },
+    apiManagerProxy: { getMessageByPeer: (_peer, mid) => {
+      lookups++;
+      return { media: { photo: { _: "photo", id: String(mid), sizes: [{ _: "photoSize", w: 10, h: 10, size: 100 }] } } };
+    } }
+  };
+  const scan = vm.runInNewContext(`(${Telegram.pageMedia.toString()})`, context);
+  const result = await scan({ expectedPage: PAGE });
+  assert.equal(result.images.length, 300);
+  assert.equal(canvases, 300, "No preview may be drawn after the item limit");
+  assert.equal(lookups, 300, "No message may be inspected after the item limit");
+}
+
 async function main() {
   await testOriginalMetadata();
+  await testScanStopsAtItemLimit();
   for (const value of [URL_VALUE, STREAM, LEGACY_DOCUMENT]) assert(Telegram.isMediaUrl(value));
   for (const value of ["blob:https://evil.test/123", "blob:https://web.telegram.org.evil/123", "blob:null/123", "https://web.telegram.org/k/hls/file", "https://web.telegram.org/k/stream/a/b"]) {
     assert.equal(Telegram.isMediaUrl(value), false, value);

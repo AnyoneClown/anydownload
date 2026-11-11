@@ -679,6 +679,17 @@
     return storageOperation(Boolean(tab && tab.incognito), () => storeContextIgnoreRuleLocked(image, info, tab));
   }
 
+  async function ignoreRuleEntries(area) {
+    // get(null) also reads the multi-megabyte gallery, queue and ledger
+    // records. Read only ignore rules where Firefox can list keys first.
+    if (typeof area.getKeys !== "function") {
+      return area.get(null);
+    }
+    const keys = (await area.getKeys())
+      .filter((key) => typeof key === "string" && key.startsWith(IGNORE_STORAGE_PREFIX));
+    return keys.length ? area.get(keys) : {};
+  }
+
   async function storeContextIgnoreRuleLocked(image, info, tab) {
     const siteKey = Core.siteKeyForUrl(
       info && (info.pageUrl || info.frameUrl) || tab && tab.url || ""
@@ -690,7 +701,7 @@
     const area = tab && tab.incognito ? browser.storage.session : browser.storage.local;
     const storageKey = `${ignoreStoragePrefix(siteKey)}${imageKey}`;
     await area.set({ [storageKey]: Date.now() });
-    const stored = await area.get(null);
+    const stored = await ignoreRuleEntries(area);
     const sitePrefix = ignoreStoragePrefix(siteKey);
     const siteEntries = Object.entries(stored)
       .filter(([key]) => key.startsWith(sitePrefix))
@@ -812,18 +823,51 @@
     });
   }
 
-  browser.downloads.onChanged.addListener((change) => {
-    if (
-      change &&
-      change.state &&
-      ["complete", "interrupted"].includes(change.state.current)
-    ) {
-      finishRetainedDownload(
-        change.id,
-        change.state.current,
-        change.error && change.error.current
-      );
+  function retainedDownloadIsTerminal(item) {
+    // Firefox reports a user pause as state "interrupted" with paused: true.
+    // That download can still resume from its blob: source, so keep it.
+    return Boolean(item) && (
+      item.state === "complete" ||
+      (item.state === "interrupted" && item.paused !== true)
+    );
+  }
+
+  function settleRetainedDownloadFromChange(change) {
+    if (!change || !retainedObjectUrls.has(change.id)) {
+      return;
     }
+    const state = change.state && change.state.current;
+    const paused = change.paused && typeof change.paused.current === "boolean"
+      ? change.paused.current
+      : null;
+    if (state === "complete") {
+      finishRetainedDownload(change.id, "complete", "");
+      return;
+    }
+    if (state === "interrupted" && paused === true) {
+      return;
+    }
+    if (state === "interrupted" && paused === false) {
+      finishRetainedDownload(change.id, "interrupted", change.error && change.error.current);
+      return;
+    }
+    if (state !== "interrupted" && paused !== false) {
+      return;
+    }
+    // Either an interruption without a paused delta, or a paused download
+    // that was cancelled (paused -> false while still interrupted). Confirm.
+    browser.downloads.search({ id: change.id }).then((matches) => {
+      const item = matches && matches[0];
+      if (!item) {
+        finishRetainedDownload(change.id, "interrupted", "Download no longer exists.");
+      } else if (retainedDownloadIsTerminal(item)) {
+        finishRetainedDownload(change.id, item.state, item.error);
+      }
+    }).catch(() => undefined);
+  }
+
+  browser.downloads.onChanged.addListener((change) => {
+    settleRetainedDownloadFromChange(change);
     return handleQueuedDownloadChange(change).catch((error) => {
       console.error("AnyDownload could not update its download queue.", error);
     });
@@ -875,7 +919,7 @@
         try {
           const matches = await browser.downloads.search({ id: downloadId });
           const item = matches[0];
-          if (item && ["complete", "interrupted"].includes(item.state)) {
+          if (retainedDownloadIsTerminal(item)) {
             finishRetainedDownload(downloadId, item.state, item.error);
             return;
           }
@@ -1551,11 +1595,51 @@
     return safe;
   }
 
+  function queueFilenameStem(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/\.[a-z0-9]{1,8}$/, "")
+      .replace(/\s*\(\d{1,6}\)$/, "")
+      .trim();
+  }
+
+  function downloadSnapshotMatchesTask(task, snapshot, userNamed) {
+    // Firefox restarts download ids every browser session, so a stored id can
+    // name an unrelated download after a restart. Trust it only when the URL
+    // or the file name (allowing Firefox's "(1)" suffix, a changed extension
+    // or truncation) still matches the queued task.
+    if (!snapshot || typeof snapshot !== "object") {
+      return false;
+    }
+    if (typeof snapshot.url === "string" && snapshot.url === task.url) {
+      return true;
+    }
+    const expected = queueFilenameStem(task.filename);
+    const actual = queueFilenameStem(snapshot.filename);
+    if (!expected || !actual) {
+      // Nothing to compare against; keep the previous trusting behavior.
+      return true;
+    }
+    if (expected === actual) {
+      return true;
+    }
+    const shorter = expected.length < actual.length ? expected : actual;
+    const longer = shorter === expected ? actual : expected;
+    if (shorter.length >= 16 && longer.startsWith(shorter)) {
+      return true;
+    }
+    // A Save As dialog lets the user choose any name, so it cannot be checked.
+    return Boolean(userNamed);
+  }
+
   async function reconcileQueueLocked(context, markMissing) {
     const tasks = queueTasksWithDownloadIds(context.state);
     if (!tasks.length) {
       return false;
     }
+    const userNamedTaskIds = new Set(context.state.jobs
+      .filter((job) => job.saveAs)
+      .flatMap((job) => job.tasks.map((task) => task.id)));
     const snapshots = [];
     const missingTasks = [];
     const taskSignatures = new Map(
@@ -1571,8 +1655,12 @@
         searchCursor += 1;
         try {
           const matches = await browser.downloads.search({ id: task.downloadId });
-          if (matches && matches[0]) {
-            const snapshot = withoutLocalFilename(matches[0]);
+          const snapshot = matches && matches[0] ? withoutLocalFilename(matches[0]) : null;
+          if (snapshot && !downloadSnapshotMatchesTask(task, snapshot, userNamedTaskIds.has(task.id))) {
+            if (markMissing) {
+              missingTasks[taskIndex] = task;
+            }
+          } else if (snapshot) {
             if (
               task.needsReconciliation === true
               && ["complete", "interrupted", "cancelled"].includes(task.status)
@@ -2147,7 +2235,9 @@
       method: "GET",
       credentials: "include",
       cache: "no-store",
-      redirect: "error",
+      // Follow redirects (http -> https, a trailing slash) and validate where
+      // the request ended below instead of failing every redirect.
+      redirect: "follow",
       signal,
       headers: { Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1" }
     });
@@ -2168,8 +2258,26 @@
       throw trackerRunError(`The tracked page returned HTTP ${response.status}.`, code, response.status);
     }
     const responseUrl = Tracker.normalizePageUrl(response.url || pageUrl);
-    if (!responseUrl || new URL(responseUrl).origin !== new URL(tracker.url).origin) {
+    const finalUrl = responseUrl ? new URL(responseUrl) : null;
+    const trackedUrl = new URL(tracker.url);
+    if (
+      !finalUrl ||
+      finalUrl.hostname.toLowerCase() !== trackedUrl.hostname.toLowerCase() ||
+      (trackedUrl.protocol === "https:" && finalUrl.protocol !== "https:")
+    ) {
       throw trackerRunError("The tracked page redirected to a different website.", "redirect");
+    }
+    if (
+      responseUrl !== pageUrl &&
+      browser.permissions && typeof browser.permissions.contains === "function" &&
+      !await browser.permissions.contains({
+        origins: [Tracker.permissionPatternForUrl(responseUrl)]
+      })
+    ) {
+      throw trackerRunError(
+        "The tracked page redirected to an address AnyDownload has no access to.",
+        "redirect"
+      );
     }
     const contentType = String(response.headers.get("content-type") || "").toLowerCase();
     if (contentType && !/(?:text\/html|application\/xhtml\+xml)/.test(contentType)) {
@@ -2320,7 +2428,9 @@
     const finishedAt = Date.now();
     return updateStoredTracker(id, (current) => ({
       ...current,
-      ...changes,
+      // A function reads the stored tracker, so settings changed while this
+      // run was fetching (for example, a pause) are not overwritten.
+      ...(typeof changes === "function" ? changes(current) : changes),
       updatedAt: finishedAt,
       lastDurationMs: Math.max(0, finishedAt - startedAt),
       activity: Tracker.appendActivity(current.activity, {
@@ -2694,8 +2804,8 @@
       const displayMessage = autoPausedReason
         ? `${message} ${autoPausedReason}`
         : `${message} Next automatic retry is delayed for ${backoffMinutes} minutes.`;
-      const updated = await finishTrackerRun(id, startedAt, reason, {
-        enabled: shouldAutoPause ? false : tracker.enabled,
+      const updated = await finishTrackerRun(id, startedAt, reason, (current) => ({
+        enabled: shouldAutoPause ? false : current.enabled,
         nextRunAt,
         backoffUntil: shouldAutoPause ? 0 : nextRunAt,
         consecutiveErrors,
@@ -2707,7 +2817,7 @@
         lastQueued: 0,
         lastPagesChecked: pagesChecked,
         lastError: displayMessage
-      }, {
+      }), {
         status: "error",
         pagesChecked,
         found: 0,
@@ -2716,7 +2826,7 @@
         queued: 0,
         message: displayMessage
       });
-      if (consecutiveErrors === 1 || shouldAutoPause) {
+      if (updated && (consecutiveErrors === 1 || shouldAutoPause)) {
         await notifyTracker(updated, "error", `${updated.pageTitle}: ${displayMessage}`)
           .catch(() => undefined);
       }
@@ -3590,8 +3700,12 @@
           updated.push(next);
           paused.push(next);
         }
-        await saveTrackers(updated);
-        return { updated, paused };
+        if (paused.length) {
+          // Unrelated permission removals must not rewrite every tracker and
+          // wake each open tracking page through storage.onChanged.
+          await saveTrackers(updated);
+        }
+        return { updated: paused, paused };
       }).then(({ updated, paused }) => Promise.all([
         ...updated.map(syncTrackerAlarm),
         ...paused.map((tracker) => notifyTracker(tracker, "error", `${tracker.pageTitle}: ${tracker.lastError}`))

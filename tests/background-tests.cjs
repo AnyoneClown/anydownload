@@ -454,6 +454,31 @@ function storageArea(initial = {}) {
   assert.ok(ignoredKeys[0].includes(encodeURIComponent("https://example.test")));
   assert.ok(ignoredKeys[0].endsWith(Core.ignoreKeyForUrl("https://cdn.example.test/full/photo.jpg")));
 
+  // With storage.getKeys, ignore-rule eviction must not read every stored
+  // record (galleries, queue and ledger) through get(null).
+  const originalLocalGet = local.get;
+  const localGetQueries = [];
+  local.data["ignoredImage:https%3A%2F%2Fother.test:old"] = 1;
+  const scriptingBeforeKeyedIgnore = scriptingCalls.length;
+  local.getKeys = async () => Object.keys(local.data);
+  local.get = async (keys) => {
+    localGetQueries.push(keys);
+    return originalLocalGet.call(local, keys);
+  };
+  try {
+    await menuClicked({ ...contextInfo, menuItemId: "anydownload-ignore-image" }, tab);
+  } finally {
+    local.get = originalLocalGet;
+    delete local.getKeys;
+    delete local.data["ignoredImage:https%3A%2F%2Fother.test:old"];
+    // Keep the later context-menu assertions independent of this extra click.
+    scriptingCalls.length = scriptingBeforeKeyedIgnore;
+  }
+  assert.ok(localGetQueries.every((keys) => keys != null), "Ignore rules must not read all of storage when keys can be listed");
+  assert.ok(localGetQueries.some((keys) => Array.isArray(keys) &&
+    keys.length === 2 && keys.every((key) => key.startsWith("ignoredImage:"))));
+  assert.equal(Object.keys(local.data).filter((key) => key.startsWith("ignoredImage:")).length, 1);
+
   await menuClicked({ ...contextInfo, menuItemId: "anydownload-preview-image" }, tab);
   assert.equal(createdTabs.length, 1);
   assert.match(createdTabs[0].url, /^moz-extension:\/\/fixture\/preview\/preview\.html\?id=/);

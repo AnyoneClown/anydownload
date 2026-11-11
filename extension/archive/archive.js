@@ -22,6 +22,7 @@
   const MAX_ERROR_REPORT_BYTES = 512 * 1024;
   const ZIP_END_RECORD_BYTES = 22;
   const ZIP_ENTRY_OVERHEAD_BYTES = 76;
+  const ERROR_REPORT_NAME = "anydownload-errors.txt";
   const JOB_ID_PATTERN = /^[a-z0-9-]{8,80}$/i;
   const VIDEO_FILE_EXTENSION = /\.(?:m4v|mkv|mov|mp4|ogg|ogv|webm)$/i;
   const VIDEO_FILE_FORMATS = new Set(["m4v", "mkv", "mov", "mp4", "ogg", "ogv", "webm"]);
@@ -532,7 +533,12 @@
         if (!change || change.id !== downloadId || !change.state) {
           return;
         }
-        if (["complete", "interrupted"].includes(change.state.current)) {
+        // Firefox reports a paused download as "interrupted" with paused set.
+        // It can still resume, so keep waiting and keep its blob URL alive.
+        if (
+          change.state.current === "complete" ||
+          (change.state.current === "interrupted" && !(change.paused && change.paused.current === true))
+        ) {
           finish(change.state.current, change.error && change.error.current);
         }
       }
@@ -555,7 +561,7 @@
         try {
           const matches = await downloadsApi.search({ id: downloadId });
           const item = matches && matches[0];
-          if (item && ["complete", "interrupted"].includes(item.state)) {
+          if (item && (item.state === "complete" || (item.state === "interrupted" && item.paused !== true))) {
             finish(item.state, item.error);
             return;
           }
@@ -824,7 +830,9 @@
       if (!StoredZip || typeof StoredZip.createStoredZip !== "function") {
         throw new Error("The local ZIP builder is unavailable.");
       }
-      const usedNames = new Set();
+      // Reserve the failure report's entry name so an image cannot claim it
+      // and make the final part fail with a duplicate ZIP entry.
+      const usedNames = new Set([ERROR_REPORT_NAME]);
       const candidates = request.items.map((item) => ({
         ...item,
         filename: requireCore().uniquifyFilename(
@@ -890,7 +898,7 @@
 
       if (state.failures.length) {
         const report = archiveErrorReport(state.failures);
-        const reportContribution = storedZipEntryFootprint("anydownload-errors.txt", report.byteLength);
+        const reportContribution = storedZipEntryFootprint(ERROR_REPORT_NAME, report.byteLength);
         if (currentEntries.length && currentSize + reportContribution > maximumPartBytes) {
           multipart = true;
           await finalizePart(currentEntries, partNumber, true, baseFilename);
@@ -898,7 +906,7 @@
           currentEntries = [];
           currentSize = ZIP_END_RECORD_BYTES;
         }
-        currentEntries.push({ name: "anydownload-errors.txt", data: report });
+        currentEntries.push({ name: ERROR_REPORT_NAME, data: report });
         currentSize += reportContribution;
       }
 

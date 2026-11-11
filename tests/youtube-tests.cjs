@@ -127,6 +127,28 @@ assert.equal(YouTube.isYouTubeUrl("javascript:alert(1)"), false);
   assert.ok(result.warnings.some((warning) => /links expire/i.test(warning)));
 }
 
+// After YouTube's in-page navigation the initial player response still
+// describes the previous video; it must not be listed for the current one.
+{
+  const staleResponse = pageResponse({
+    videoDetails: { videoId: "AAAAAAAAAAA", title: "Previous video" }
+  });
+  const result = await YouTube.collectYouTubeMediaFromPage({
+    pageUrl: `https://www.youtube.com/watch?v=${VIDEO_ID}`,
+    playerResponses: [staleResponse],
+    requestPlayerApi: false
+  });
+  assert.equal(result.images.length, 0, "A stale player response must be ignored");
+  const matching = await YouTube.collectYouTubeMediaFromPage({
+    pageUrl: `https://www.youtube.com/watch?v=${VIDEO_ID}`,
+    playerResponses: [staleResponse, pageResponse()],
+    requestPlayerApi: false
+  });
+  assert.equal(matching.images.length, 1);
+  assert.equal(matching.images[0].identityKey, `youtube:${VIDEO_ID}:18`);
+  assert.doesNotMatch(matching.images[0].alt, /Previous video/);
+}
+
 // Video-only variants can be requested explicitly, but audio-only formats are
 // never mislabeled as downloadable videos.
 {

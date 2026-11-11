@@ -35,7 +35,8 @@ function harness(options = {}) {
           if (intercepted !== undefined) return intercepted;
         }
         if (value.action === "status") return { ok: true, signedIn: state.signedIn, ownerId: state.ownerId, email: "user@example.test" };
-        if (value.action === "list") return { ok: true, connections: state.connection ? [{ ...state.connection, apiKey: KEY }] : [] };
+        if (value.action === "list") return { ok: true, connections: state.connections ||
+          (state.connection ? [{ ...state.connection, apiKey: KEY }] : []) };
         if (value.action === "credential") return { ok: true, connection: state.connection, apiKey: KEY, ownerId: state.ownerId };
         if (value.action === "save") {
           state.connection ||= { ...saved, serverUrl: value.serverUrl };
@@ -265,6 +266,23 @@ async function settingsChecks() {
     assert.equal(failed.nodes["api-key"].value, "");
     failed.lifecycle.pagehide();
   }
+}
+
+async function connectionLimitChecks() {
+  const many = Array.from({ length: 20 }, (_value, index) =>
+    ({ ...saved, id: `33333333-3333-4333-8333-${String(index).padStart(12, "0")}`, serverUrl: `http://10.0.0.${index + 1}` }));
+  const page = await openPage({ connections: many });
+  page.nodes.connections.value = "";
+  page.nodes.connections.listeners.change();
+  page.nodes["server-url"].value = "http://10.0.1.1";
+  page.nodes["api-key"].value = KEY;
+  await page.nodes["connection-form"].listeners.submit({ preventDefault() {} });
+  assert.match(page.nodes.error.textContent, /connection limit/, "A full account explains the limit instead of a generic failure");
+  assert.equal(page.requests.length, 0, "No host permission is requested for a connection that cannot be saved");
+  assert.equal(page.tests.length, 0);
+  assert.equal(page.messages.some(value => value.action === "save"), false);
+  assert.equal(page.nodes["api-key"].value, "");
+  page.lifecycle.pagehide();
 }
 
 async function compactPageChecks() {
@@ -563,5 +581,6 @@ async function setupGuidanceChecks() {
   await disconnectAndLoadFailureChecks();
   await asyncFocusChecks();
   await setupGuidanceChecks();
+  await connectionLimitChecks();
   console.log("Integration client and settings tests passed: scoped credentials, origin binding, invalidation, privacy, permissions and tested saves.");
 })().catch(error => { console.error(error); process.exitCode = 1; });

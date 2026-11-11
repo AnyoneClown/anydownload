@@ -127,6 +127,13 @@
     const focusOrigin = document.activeElement;
     const restoreFocus = [elements.save, elements["api-key"]].includes(focusOrigin);
     error();
+    // The backend reports its 20-connection bound as a generic 400, so check it
+    // here before asking for a permission and testing a key that cannot be saved.
+    if (!selected() && connections.length >= 20) {
+      elements["api-key"].value = "";
+      error("The account connection limit was reached. Disconnect an unused server first.");
+      return;
+    }
     let credential;
     let permission;
     try {

@@ -34,6 +34,9 @@
     let needsRecovery = true;
     let syncing = false;
     let autoSyncQueued = false;
+    // Synced local keys changed since the last snapshot. Starts dirty so the
+    // first exchange after a background restart always compares local data.
+    let localDirty = true;
 
     const load = async () => (await browser.storage.local.get(STATE_KEY))[STATE_KEY] || {};
     const save = (state) => browser.storage.local.set({ [STATE_KEY]: state });
@@ -204,12 +207,29 @@
       if (!state.owner || state.owner.userId !== state.session.userId || state.owner.project !== state.config.url) {
         throw new Error("The cloud account does not match this installation.");
       }
-      const initial = await local(async () => Model.snapshot(await browser.storage.local.get(null)));
+      const clean = !localDirty && Boolean(state.base) && !state.journal && Number.isSafeInteger(state.revision);
+      localDirty = false;
+      try {
+        await exchangeRows(state, clean);
+      } catch (error) {
+        localDirty = true;
+        throw error;
+      }
+    }
+
+    async function exchangeRows(state, clean) {
       const base = Model.normalizeSnapshot(state.base || {});
       const table = `/rest/v1/anydownload_sync?user_id=eq.${state.session.userId}`;
+      let initial;
       for (let attempt = 0; attempt < 3; attempt += 1) {
         let rows = await api(state, `${table}&select=revision&limit=1`);
         if (!Array.isArray(rows) || rows.length > 1) throw new Error("Invalid cloud sync record.");
+        if (clean && attempt === 0 && rows[0] && rows[0].revision === state.revision) {
+          // Neither side changed: skip the full local snapshot and merge on idle polls.
+          await local(async () => save({ ...await load(), lastSync: Date.now(), error: "" }));
+          return;
+        }
+        if (!initial) initial = await local(async () => Model.snapshot(await browser.storage.local.get(null)));
         if (rows[0] && rows[0].revision !== state.revision) {
           rows = await api(state, `${table}&select=revision,payload&limit=1`);
           if (!Array.isArray(rows) || rows.length > 1) throw new Error("Invalid cloud sync record.");
@@ -539,7 +559,10 @@
         invalidateIntegrations();
       }
       if (applying) return;
-      if (Object.keys(changes).some((key) => Model.SETTINGS_KEYS.includes(key) || key.startsWith("ignoredImage:") || key === "downloadLedger:v1")) {
+      // Rewrites of identical values (journal recovery, idempotent saves) are not local edits.
+      if (Object.keys(changes).some((key) => (Model.SETTINGS_KEYS.includes(key) || key.startsWith("ignoredImage:") || key === "downloadLedger:v1") &&
+          !Model.equal(changes[key].oldValue, changes[key].newValue))) {
+        localDirty = true;
         return scheduleChanges().catch(() => undefined);
       }
     });

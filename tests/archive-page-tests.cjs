@@ -766,8 +766,69 @@ async function exerciseFailedImageRetry() {
   }
 }
 
+async function exercisePausedDownloadKeepsWaiting() {
+  // Firefox reports a paused download as "interrupted" with paused: true.
+  const listeners = new Set();
+  let item = { id: 44, state: "interrupted", paused: true, error: "USER_CANCELED" };
+  const downloads = {
+    onChanged: {
+      addListener(listener) { listeners.add(listener); },
+      removeListener(listener) { listeners.delete(listener); }
+    },
+    async search() { return [item]; }
+  };
+  let settled = false;
+  const terminalPromise = ArchivePage.waitForDownloadTerminal(
+    downloads, 44, new AbortController().signal, { pollIntervalMs: 1 }
+  ).then((value) => { settled = true; return value; });
+  for (const listener of listeners) {
+    listener({ id: 44, state: { current: "interrupted" }, paused: { current: true } });
+  }
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(settled, false, "A paused archive download must keep its Blob URL alive for resume");
+  item = { id: 44, state: "complete", paused: false };
+  const terminal = await terminalPromise;
+  assert.equal(terminal.state, "complete");
+  assert.equal(listeners.size, 0);
+}
+
+async function exerciseErrorReportNameIsReserved() {
+  const documentObject = new FakeDocument(ARCHIVE_ELEMENT_IDS);
+  const request = {
+    createdAt: Date.now(), folder: "reserved", incognito: false,
+    items: [
+      { url: "data:image/png;base64,AA==", filename: "anydownload-errors.txt" },
+      { url: "https://images.example/missing.png", filename: "missing.png" }
+    ]
+  };
+  const browserObject = {
+    storage: { session: { async get(key) { return { [key]: request }; }, async remove() {} } },
+    downloads: {
+      async download() { return 1; },
+      onChanged: { addListener() {}, removeListener() {} },
+      async search({ id }) { return [{ id, state: "complete" }]; }
+    }
+  };
+  const originalFetch = global.fetch;
+  global.fetch = async () => { throw new Error("Simulated failure"); };
+  try {
+    await ArchivePage.initializeArchivePage({
+      browser: browserObject, document: documentObject,
+      location: { search: "?job=reserved-name-job" }, window: { addEventListener() {} }
+    });
+  } finally {
+    global.fetch = originalFetch;
+  }
+  assert.equal(documentObject.getElementById("fatal-panel").hidden, true,
+    "An image named like the failure report must not cause a duplicate ZIP entry");
+  assert.equal(documentObject.getElementById("status-heading").textContent,
+    "Archive complete with skipped images");
+}
+
 Promise.resolve()
   .then(exerciseCancellationFallback)
+  .then(exercisePausedDownloadKeepsWaiting)
+  .then(exerciseErrorReportNameIsReserved)
   .then(exerciseRetentionTimeout)
   .then(exerciseCancellationCopyTracksSavedParts)
   .then(exerciseFiveHundredItemPage)

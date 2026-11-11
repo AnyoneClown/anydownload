@@ -270,6 +270,29 @@
     };
   }
 
+  function hasNormalizedRecordShape(record) {
+    return Boolean(record) && typeof record === "object" && typeof record.url === "string" && record.url &&
+      typeof record.previewUrl === "string" && typeof record.pageUrl === "string" &&
+      typeof record.identityKey === "string" && typeof record.selected === "boolean" &&
+      Array.isArray(record.kinds) && Array.isArray(record.instagramCollections);
+  }
+
+  // The background replies with, and stores, normalizeSite output. Re-running
+  // the full normalization (a stringify and encode per record) on every popup
+  // open or storage echo costs tens of milliseconds for a large gallery, so a
+  // value that already has that shape for the expected site is used as is.
+  function normalizedSite(value, siteKey) {
+    if (value && typeof value === "object" && typeof siteKey === "string" && value.siteKey === siteKey &&
+      Number.isSafeInteger(value.epoch) && value.epoch >= 0 && typeof value.profileKey === "string" &&
+      (!value.profileKey || validProfileKey(value.profileKey) === value.profileKey) &&
+      Number.isFinite(value.updatedAt) && typeof value.trimmed === "boolean" &&
+      Array.isArray(value.records) && value.records.length <= MAX_ITEMS &&
+      value.records.every(hasNormalizedRecordShape)) {
+      return value;
+    }
+    return normalizeSite(value);
+  }
+
   function getSite(sites, siteKey) {
     return normalizeSite((Array.isArray(sites) ? sites : []).find((site) => site && site.siteKey === siteKey) ||
       { siteKey, records: [] });
@@ -400,6 +423,6 @@
     STORAGE_KEY, MAX_SITES, MAX_BYTES, MAX_ITEMS, MAX_PAGES, MAX_FAPELLO_PAGES, MAX_STEPS, MAX_DURATION_MS,
     pageUrl, isFapelloUrl, fapelloProfileUrl, fapelloNextPageUrl,
     profileKeyForUrl, galleryProfileKey, profileChanged,
-    youtubeUrl, normalizeRecord, recordKey, normalizeSite, getSite, updateSites, scrollPage, fetchPage
+    youtubeUrl, normalizeRecord, recordKey, normalizeSite, normalizedSite, getSite, updateSites, scrollPage, fetchPage
   };
 });

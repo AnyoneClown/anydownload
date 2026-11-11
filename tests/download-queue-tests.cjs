@@ -1006,4 +1006,55 @@ assert.equal(boundedHistory.history[boundedHistory.history.length - 1].label, "H
 assert.equal(boundedHistory.stats.lifetime.completed, 107);
 assert.equal(boundedHistory.stats.lifetime.enqueued, 107);
 
+// Firefox pauses by cancelling with partial data: the download reports
+// state "interrupted" with paused: true. That must stay a resumable pause.
+{
+  let paused = enqueue(Queue.emptyState(BASE_TIME), 1, { idFactory: (kind, i) => `${kind}-ffpause-${i}` }).state;
+  const started = Queue.claimNextTasks(paused, { concurrency: 1, now: BASE_TIME + 1 });
+  paused = Queue.bindDownload(started.state, started.tasks[0].id, 7001, { now: BASE_TIME + 2 });
+  paused = Queue.applyDownloadChange(paused, 7001, {
+    state: { previous: "in_progress", current: "interrupted" },
+    paused: { previous: false, current: true },
+    error: { current: "USER_CANCELED" }
+  }, { now: BASE_TIME + 3 });
+  assert.equal(paused.jobs[0].tasks[0].status, "paused");
+  assert.equal(paused.jobs[0].tasks[0].error, "");
+  assert.equal(paused.stats.lifetime.interrupted, 0, "A pause must not count as a failure");
+  paused = Queue.applyDownloadSnapshot(paused, {
+    id: 7001, state: "interrupted", paused: true, error: "USER_CANCELED"
+  }, { now: BASE_TIME + 4 });
+  assert.equal(paused.jobs[0].tasks[0].status, "paused");
+  paused = Queue.applyDownloadChange(paused, 7001, {
+    state: { previous: "interrupted", current: "in_progress" },
+    paused: { previous: true, current: false }
+  }, { now: BASE_TIME + 5 });
+  assert.equal(paused.jobs[0].tasks[0].status, "in_progress");
+  paused = Queue.applyDownloadSnapshot(paused, {
+    id: 7001, state: "interrupted", paused: false, error: "NETWORK_FAILED"
+  }, { now: BASE_TIME + 6 });
+  assert.equal(paused.jobs[0].tasks[0].status, "interrupted");
+}
+
+// Firefox download ids restart every browser session, so a new download can
+// reuse the id still stored on a task from an earlier session.
+{
+  let reused = enqueue(Queue.emptyState(BASE_TIME), 1, { idFactory: (kind, i) => `${kind}-old-${i}` }).state;
+  let claimed = Queue.claimNextTasks(reused, { concurrency: 1, now: BASE_TIME + 1 });
+  reused = Queue.bindDownload(claimed.state, claimed.tasks[0].id, 5, { now: BASE_TIME + 2 });
+  reused = Queue.applyDownloadSnapshot(reused, { id: 5, state: "complete", bytesReceived: 9, totalBytes: 9 }, { now: BASE_TIME + 3 });
+  reused = Queue.hydrate(JSON.parse(JSON.stringify(reused)), { now: BASE_TIME + 4 });
+  reused = enqueue(reused, 1, { idFactory: (kind, i) => `${kind}-new-${i}` }).state;
+  claimed = Queue.claimNextTasks(reused, { concurrency: 1, now: BASE_TIME + 5 });
+  assert.equal(claimed.tasks[0].id, "task-new-0");
+  reused = Queue.bindDownload(claimed.state, "task-new-0", 5, { now: BASE_TIME + 6 });
+  const oldTask = reused.jobs[0].tasks[0];
+  assert.equal(oldTask.status, "complete");
+  assert.equal(oldTask.downloadId, null, "The stale task must release the reused download id");
+  assert.equal(oldTask.bytesReceived, 9);
+  reused = Queue.applyDownloadSnapshot(reused, { id: 5, state: "complete", bytesReceived: 4, totalBytes: 4 }, { now: BASE_TIME + 7 });
+  assert.equal(reused.jobs[1].tasks[0].status, "complete", "Events for a reused id must reach the new task");
+  assert.equal(reused.jobs[1].tasks[0].bytesReceived, 4);
+  assert.equal(reused.jobs[0].tasks[0].bytesReceived, 9);
+}
+
 console.log("All durable download queue/history checks passed.");

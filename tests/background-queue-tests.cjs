@@ -316,10 +316,13 @@ function createHarness(options = {}) {
       : async () => {
           throw new Error("Unexpected fetch");
         },
-    setTimeout
+    setTimeout,
+    ...(options.contextExtras || {})
   };
   vm.createContext(context);
-  for (const relativePath of SCRIPT_PATHS) {
+  const scriptPaths = SCRIPT_PATHS.slice(0, -1)
+    .concat(options.extraScripts || [], SCRIPT_PATHS.slice(-1));
+  for (const relativePath of scriptPaths) {
     vm.runInContext(
       fs.readFileSync(path.resolve(__dirname, relativePath), "utf8"),
       context,
@@ -1659,7 +1662,215 @@ async function testTelegramSourceTransfer() {
   assert.deepEqual(harness.revokedObjectUrls, harness.createdObjectUrls);
 }
 
+async function testTrackerRunKeepsConcurrentPauseAndDeletion() {
+  let onFetch = null;
+  const harness = createHarness({
+    extraScripts: ["../extension/shared/filters.js", "../extension/shared/tracker.js"],
+    fetch: async (url) => {
+      if (onFetch) {
+        await onFetch();
+      }
+      return {
+        ok: false,
+        status: 500,
+        url,
+        headers: { get: () => null }
+      };
+    }
+  });
+  const created = await harness.send({
+    type: "UPSERT_TRACKER",
+    incognito: false,
+    tracker: {
+      url: "https://tracked.example/gallery",
+      pageTitle: "Tracked gallery",
+      folder: "Tracked/race",
+      intervalMinutes: 15,
+      filters: { mediaType: "image", photosOnly: false, format: "jpeg" },
+      query: "",
+      filenameTemplate: "{index}-{filename}",
+      downloadInitial: false
+    }
+  });
+  assert.equal(created.ok, true, created.error);
+  const id = created.tracker.id;
+  await harness.send({ type: "SET_TRACKER_ENABLED", id, enabled: true });
+
+  onFetch = async () => {
+    const paused = await harness.send({ type: "SET_TRACKER_ENABLED", id, enabled: false });
+    assert.equal(paused.tracker.enabled, false);
+  };
+  const run = await harness.send({ type: "RUN_TRACKER", id });
+  assert.equal(run.ok, true, run.error);
+  assert.equal(run.tracker.enabled, false, "A failing run must not re-enable a tracker paused while it ran");
+
+  await harness.send({ type: "SET_TRACKER_ENABLED", id, enabled: true });
+  onFetch = async () => {
+    await harness.send({ type: "DELETE_TRACKER", id });
+  };
+  const deleted = await harness.send({ type: "RUN_TRACKER", id });
+  assert.equal(deleted.ok, true, "A failing run of a tracker deleted mid-run must not crash");
+  assert.equal(deleted.tracker, null);
+  const listed = await harness.send({ type: "GET_TRACKERS" });
+  assert.equal(listed.trackers.length, 0);
+}
+
+async function testStaleDownloadIdsFromEarlierSessionsAreNotTrusted() {
+  const first = createHarness();
+  await first.send({
+    type: "DOWNLOAD_BATCH",
+    folder: "AnyDownload/stale-id",
+    items: [
+      { url: "https://stale.example/old-photo.jpg", filename: "old-photo.jpg" },
+      { url: "https://stale.example/renamed.jpg", filename: "renamed.jpg" }
+    ]
+  });
+  assert.equal(first.downloadCalls.length, 2);
+  const [staleId, renamedId] = first.downloadCalls.map((call) => call.id);
+  // After a browser restart Firefox reuses the first id for an unrelated
+  // download; the second keeps its identity under Firefox's "(1)" suffix.
+  const restarted = createHarness({
+    local: first.local.dump(),
+    downloads: [{
+      id: staleId,
+      url: "https://unrelated.example/archive.zip",
+      filename: "/Users/tester/Downloads/archive.zip",
+      state: "complete",
+      paused: false,
+      bytesReceived: 10,
+      totalBytes: 10,
+      error: ""
+    }, {
+      id: renamedId,
+      url: "https://cdn.example/redirected-elsewhere.jpg",
+      filename: "/Users/tester/Downloads/AnyDownload/stale-id/renamed(1).jpg",
+      state: "complete",
+      paused: false,
+      bytesReceived: 5,
+      totalBytes: 5,
+      error: ""
+    }]
+  });
+  const dashboard = await restarted.send({ type: "GET_DOWNLOAD_DASHBOARD", incognito: false });
+  const tasks = dashboard.snapshot.jobs[0].tasks;
+  assert.equal(tasks[0].status, "interrupted", "An unrelated download reusing a stored id must not complete the task");
+  assert.equal(tasks[1].status, "complete", "Firefox's uniquified file name must still identify the task");
+  assert.equal(dashboard.snapshot.summary.complete, 1);
+}
+
+async function testPausedObjectUrlDownloadsKeepTheirSource() {
+  const harness = createHarness();
+  await harness.send({
+    type: "DOWNLOAD_BATCH",
+    folder: "AnyDownload/paused-blob",
+    items: [{ url: "data:image/png;base64,AQID", filename: "embedded.png" }]
+  });
+  assert.equal(harness.downloadCalls.length, 1);
+  assert.equal(harness.createdObjectUrls.length, 1);
+  const objectUrl = harness.createdObjectUrls[0];
+  const id = harness.downloadCalls[0].id;
+  await harness.emitDownloadChange(id, { state: "interrupted", paused: true, error: "USER_CANCELED" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(harness.revokedObjectUrls.includes(objectUrl), false, "A paused blob download must stay resumable");
+  await harness.emitDownloadChange(id, { state: "in_progress", paused: false, error: "" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(harness.revokedObjectUrls.includes(objectUrl), false);
+  await harness.emitDownloadChange(id, { state: "complete" });
+  await waitFor(() => harness.revokedObjectUrls.includes(objectUrl), "A completed blob download must release its URL");
+
+  await harness.send({
+    type: "DOWNLOAD_BATCH",
+    folder: "AnyDownload/paused-blob",
+    items: [{ url: "data:image/png;base64,BAUG", filename: "cancelled.png" }]
+  });
+  const secondUrl = harness.createdObjectUrls[1];
+  const secondId = harness.downloadCalls[harness.downloadCalls.length - 1].id;
+  await harness.emitDownloadChange(secondId, { state: "interrupted", paused: true, error: "USER_CANCELED" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(harness.revokedObjectUrls.includes(secondUrl), false);
+  // Cancelling a paused download only flips paused back to false.
+  await harness.emitDownloadChange(secondId, { paused: false });
+  await waitFor(() => harness.revokedObjectUrls.includes(secondUrl), "A cancelled paused blob download must release its URL");
+}
+
+async function testTrackerFollowsSameSiteRedirectsOnly() {
+  const requests = [];
+  let finalUrl = "";
+  const html = "<title>Redirected gallery</title>";
+  const harness = createHarness({
+    extraScripts: ["../extension/shared/filters.js", "../extension/shared/tracker.js"],
+    contextExtras: {
+      DOMParser: class {
+        parseFromString() {
+          return {
+            documentElement: {},
+            title: "Redirected gallery",
+            querySelectorAll: () => [],
+            querySelector: () => null
+          };
+        }
+      }
+    },
+    fetch: async (url, fetchOptions) => {
+      requests.push({ url, options: fetchOptions });
+      const bytes = new TextEncoder().encode(html);
+      return {
+        ok: true,
+        status: 200,
+        url: finalUrl || url,
+        headers: {
+          get: (name) => String(name).toLowerCase() === "content-type" ? "text/html" : null
+        },
+        async arrayBuffer() {
+          return bytes.buffer;
+        }
+      };
+    }
+  });
+  const granted = new Set(["http://redirect.example/*", "https://redirect.example/*"]);
+  harness.browser.permissions = {
+    async contains(details) {
+      return details.origins.every((origin) => granted.has(origin));
+    }
+  };
+  const payload = {
+    pageTitle: "Redirected gallery",
+    folder: "Tracked/redirect",
+    intervalMinutes: 15,
+    filters: { mediaType: "image", photosOnly: false, format: "jpeg" },
+    query: "",
+    filenameTemplate: "{index}-{filename}",
+    downloadInitial: false
+  };
+
+  finalUrl = "https://redirect.example/gallery/";
+  const slash = await harness.send({
+    type: "UPSERT_TRACKER",
+    incognito: false,
+    tracker: { ...payload, url: "http://redirect.example/gallery" }
+  });
+  assert.equal(slash.ok, true, slash.error);
+  assert.equal(requests[0].options.redirect, "follow");
+  assert.equal(slash.tracker.lastError, "", "An http -> https or trailing-slash redirect on the same host must succeed");
+  assert.equal(slash.tracker.activity[0].status, "baseline");
+  const id = slash.tracker.id;
+
+  finalUrl = "https://elsewhere.example/gallery";
+  let run = await harness.send({ type: "RUN_TRACKER", id });
+  assert.match(run.tracker.lastError, /redirected to a different website/);
+  assert.equal(run.tracker.enabled, true, "A cross-site redirect must not auto-pause the tracker");
+
+  granted.delete("https://redirect.example/*");
+  finalUrl = "https://redirect.example/gallery/";
+  run = await harness.send({ type: "RUN_TRACKER", id });
+  assert.match(run.tracker.lastError, /no access to/, "The final host must be covered by a granted permission");
+}
+
 (async () => {
+  await testTrackerFollowsSameSiteRedirectsOnly();
+  await testStaleDownloadIdsFromEarlierSessionsAreNotTrusted();
+  await testPausedObjectUrlDownloadsKeepTheirSource();
+  await testTrackerRunKeepsConcurrentPauseAndDeletion();
   await testTelegramSourceTransfer();
   const galleries = createHarness();
   const galleryMessage = { type: "SITE_GALLERY", siteKey: "https://gallery.test", epoch: 0 };

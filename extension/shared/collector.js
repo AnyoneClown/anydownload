@@ -335,7 +335,7 @@
       if (!url) {
         return;
       }
-      const normalizedPreviewUrl = normalizeUrl(details.previewUrl, "image");
+      const normalizedPreviewUrl = normalizeUrl(details.previewUrl, "image", false);
       const previewUrl = normalizedPreviewUrl && normalizedPreviewUrl !== url
         ? normalizedPreviewUrl
         : "";
@@ -391,7 +391,7 @@
       if (!url) {
         return;
       }
-      const normalizedPreviewUrl = normalizeUrl(details.previewUrl, "image");
+      const normalizedPreviewUrl = normalizeUrl(details.previewUrl, "image", false);
       const previewUrl = normalizedPreviewUrl && normalizedPreviewUrl !== url
         ? normalizedPreviewUrl
         : "";
@@ -686,7 +686,9 @@
       const naturalWidth = Math.max(0, Number(element.naturalWidth) || 0);
       const naturalHeight = Math.max(0, Number(element.naturalHeight) || 0);
       const rawCurrentUrl = element.currentSrc || element.src || element.getAttribute("src") || "";
-      const currentUrl = normalizeUrl(rawCurrentUrl);
+      // Skipped blob/data/long sources are counted once, by consider(); the
+      // lookups below only compare or reuse already-considered values.
+      const currentUrl = normalizeUrl(rawCurrentUrl, "image", false);
       const lazyValues = LAZY_IMAGE_ATTRIBUTES
         .map((attribute) => element.getAttribute(attribute))
         .filter(Boolean);
@@ -775,7 +777,8 @@
             source.getAttribute("data-srcset") ||
             source.getAttribute("data-lazy-srcset");
           const sourceCandidates = parseSrcset(sourceSet);
-          if (currentUrl && sourceCandidates.some((candidate) => normalizeUrl(candidate.url) === currentUrl)) {
+          if (currentUrl && sourceCandidates.some((candidate) =>
+            normalizeUrl(candidate.url, "image", false) === currentUrl)) {
             activeSource = source;
             break;
           }
@@ -814,7 +817,7 @@
       let anchor = element;
       for (let depth = 0; anchor && depth <= 5; depth += 1) {
         if (String(anchor.localName || "").toLowerCase() === "a") {
-          const href = normalizeUrl(anchor.getAttribute && anchor.getAttribute("href"));
+          const href = normalizeUrl(anchor.getAttribute && anchor.getAttribute("href"), "image", false);
           if (isClearlyImageLink(anchor, href)) {
             consider(href, { kind: "Linked full-size image", priority: 500 });
           }
@@ -843,7 +846,7 @@
       let previewUrl = !looksLikePlaceholder ? currentUrl : "";
       if (!previewUrl) {
         for (const lazyUrl of lazyValues) {
-          previewUrl = normalizeUrl(lazyUrl);
+          previewUrl = normalizeUrl(lazyUrl, "image", false);
           if (previewUrl) {
             break;
           }

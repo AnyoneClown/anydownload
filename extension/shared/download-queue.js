@@ -813,11 +813,38 @@
   function bindDownload(inputState, taskId, downloadId, options) {
     const now = resolveNow(read(options, "now", undefined));
     const safeTaskId = safeId(taskId);
-    const state = cloneState(inputState, now, (task) => task.id === safeTaskId);
-    const found = locateTask(state, safeTaskId);
     const safeDownloadId = normalizeDownloadId(downloadId);
+    const state = cloneState(inputState, now, (task) => (
+      task.id === safeTaskId || (safeDownloadId !== null && task.downloadId === safeDownloadId)
+    ));
+    const found = locateTask(state, safeTaskId);
     if (!found || safeDownloadId === null || TERMINAL_STATUSES.has(found.task.status)) {
       return state;
+    }
+    // Firefox assigns download ids per browser session, so a task from an
+    // earlier session can still hold the id just handed to this download.
+    // Detach it: otherwise first-match lookups route this download's events
+    // to the stale task and the new one stays "in_progress" forever.
+    for (const job of state.jobs) {
+      let jobChanged = false;
+      for (const task of job.tasks) {
+        if (task === found.task || task.downloadId !== safeDownloadId) {
+          continue;
+        }
+        task.downloadId = null;
+        task.needsReconciliation = false;
+        if (!TERMINAL_STATUSES.has(task.status)) {
+          task.status = "interrupted";
+          task.error = "Download no longer exists in Firefox history.";
+          task.completedAt = now;
+          recordOutcome(state, task, now);
+          jobChanged = true;
+        }
+        task.updatedAt = now;
+      }
+      if (jobChanged && job !== found.job) {
+        refreshJob(state, job, now);
+      }
     }
     found.task.downloadId = safeDownloadId;
     found.task.status = "in_progress";
@@ -974,14 +1001,24 @@
     if (TERMINAL_STATUSES.has(task.status)) {
       return enrichTerminalTask(state, found, snapshot, now, reconciled);
     }
-    const snapshotState = boundedString(read(snapshot, "state", ""), 32, "");
+    let snapshotState = boundedString(read(snapshot, "state", ""), 32, "");
     const pausedValue = read(snapshot, "paused", undefined);
+    // Firefox pauses by cancelling with partial data kept, so a paused
+    // download reports state "interrupted" plus paused: true and the
+    // USER_CANCELED error. It is still resumable and must not become a
+    // terminal failure that frees its slot and ignores the later resume.
+    const pausedInFirefox = snapshotState === "interrupted" && pausedValue === true;
+    if (pausedInFirefox) {
+      snapshotState = "";
+    }
     const bytesReceived = finiteInteger(read(snapshot, "bytesReceived", task.bytesReceived), task.bytesReceived, Number.MAX_SAFE_INTEGER);
     const totalBytes = snapshotTotalBytes(snapshot, task.totalBytes);
     task.bytesReceived = totalBytes > 0 ? Math.min(bytesReceived, totalBytes) : bytesReceived;
     task.totalBytes = totalBytes;
     task.filename = boundedString(read(snapshot, "filename", task.filename), MAX_FILENAME_LENGTH, task.filename);
-    task.error = boundedString(read(snapshot, "error", task.error), MAX_ERROR_LENGTH, task.error);
+    task.error = pausedInFirefox
+      ? task.error
+      : boundedString(read(snapshot, "error", task.error), MAX_ERROR_LENGTH, task.error);
     if (snapshotState === "complete") {
       task.status = "complete";
       if (task.totalBytes > 0) {

@@ -438,6 +438,7 @@
       duration: 0,
       posterUrl: ""
     };
+    const pageVideoId = metadata.videoId;
     let playabilityReason = "";
 
     function considerFormat(format, progressive) {
@@ -493,6 +494,15 @@
 
     function analyzeResponse(response) {
       if (!response || typeof response !== "object") {
+        return;
+      }
+      // YouTube is a single-page app: after in-page navigation the original
+      // ytInitialPlayerResponse script still describes the first video. Never
+      // list another video's formats for the page's current video ID.
+      const responseVideoId = validVideoId(
+        safeObjectProperty(safeObjectProperty(response, "videoDetails"), "videoId")
+      );
+      if (pageVideoId && responseVideoId && responseVideoId !== pageVideoId) {
         return;
       }
       metadata = responseMetadata(response, metadata);

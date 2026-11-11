@@ -161,6 +161,22 @@ assert.equal(extracted[1].mediaType, "video");
 assert.equal(extracted[1].previewUrl, "https://example.test/media/poster.jpg");
 assert.ok(!extracted.some((item) => item.url.endsWith("poster.jpg")), "A video poster is not a video download");
 
+const commaSrcset = Tracker.extractMediaFromDocument(new DocumentFixture([
+  new NodeFixture("img", {
+    srcset: "https://cdn.example.test/upload/w_300,c_fill/a.jpg 300w, https://cdn.example.test/upload/w_1200,c_fill/a.jpg 1200w"
+  })
+]), "https://example.test/gallery/");
+assert.deepEqual(commaSrcset.map((item) => item.url), ["https://cdn.example.test/upload/w_1200,c_fill/a.jpg"],
+  "Commas inside srcset URLs are not candidate separators");
+const based = Tracker.extractMediaFromDocument(new DocumentFixture([
+  new NodeFixture("img", { src: "photo.jpg" }),
+  new NodeFixture("video", { src: "clip.mp4", poster: "poster.jpg" })
+], null, new NodeFixture("base", { href: "https://example.test/static/" })), "https://example.test/gallery/page.html");
+assert.deepEqual(based.map((item) => item.url),
+  ["https://example.test/static/photo.jpg", "https://example.test/static/clip.mp4"],
+  "Relative tracked media resolves against <base href> like the page itself");
+assert.equal(based[1].previewUrl, "https://example.test/static/poster.jpg");
+
 const now = Date.UTC(2026, 7, 13, 10, 0, 0);
 const normalized = Tracker.normalizeTracker({
   id: "tracker-12345678",

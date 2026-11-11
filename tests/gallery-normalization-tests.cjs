@@ -81,4 +81,19 @@ assert.equal(invalidUrlConstructions, 0, "Empty optional previews must not throw
 assert.ok(urlConstructions <= 16000,
   `A shared-page gallery should reuse source validation; constructed ${urlConstructions} URLs`);
 
+// An already-normalized background reply is reused; anything else is normalized.
+{
+  const site = Gallery.normalizeSite({ siteKey, epoch: 2, records: records.slice(0, 3) });
+  assert.equal(Gallery.normalizedSite(site, siteKey), site);
+  assert.notEqual(Gallery.normalizedSite(site, "https://other.test"), site);
+  const raw = { siteKey, epoch: 2, records: [photo] };
+  const fixed = Gallery.normalizedSite(raw, siteKey);
+  assert.notEqual(fixed, raw);
+  assert.deepEqual(fixed, Gallery.normalizeSite(raw));
+  const missingCollections = { ...site, records: [{ ...site.records[0], instagramCollections: undefined }] };
+  assert.deepEqual(Gallery.normalizedSite(missingCollections, siteKey).records[0].instagramCollections, []);
+  assert.equal(Gallery.normalizedSite({ ...site, epoch: -1 }, siteKey).epoch, 0);
+  assert.equal(Gallery.normalizedSite(null, siteKey), null);
+}
+
 console.log(`Gallery normalization checks passed (${urlConstructions.toLocaleString("en-US")} URL parses, no invalid parses).`);

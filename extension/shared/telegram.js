@@ -211,6 +211,7 @@
       nodes = messageNode ? [messageNode] : [];
     }
     for (const node of Array.from(nodes).slice(0, 500)) {
+      if (result.images.length >= 300 || payload > 1900000) break;
       const peerNode = node.closest("[data-peer-id]");
       const peer = peerNode && peerNode.getAttribute("data-peer-id");
       const mid = node.getAttribute("data-mid");
@@ -219,6 +220,9 @@
       const messageMedia = mediaCandidates(peer, mid);
       lockedPaidMedia += messageMedia.locked;
       for (const candidate of messageMedia.candidates) try {
+        // Stop before drawing previews once the result is full; later
+        // messages cannot be listed, so their canvases are wasted page work.
+        if (result.images.length >= 300 || payload > 1900000) break;
         const original = details(candidate);
         if (!original) continue;
         const reference = new URL("https://web.telegram.org/k/");

@@ -4,6 +4,26 @@ All notable changes to AnyDownload are documented here.
 
 ## [Unreleased]
 
+## [1.30.1] - 2026-11-11
+
+### Fixed
+
+- Resume paused downloads. Pausing a download in Firefox no longer counts it as failed, frees its queue slot or discards its data, so resuming finishes it and the queue still tracks it. A paused ZIP download keeps waiting instead of being treated as finished.
+- Keep the queue accurate after a browser restart. A task left from an earlier session no longer takes over an unrelated new download because Firefox reused its number.
+- Show the right files after switching videos on YouTube without reloading the page, instead of the previous video's files.
+- Let tracked pages redirect within the same website, such as from http to https or to an address with a trailing slash. Pausing a tracker during a failing check keeps it paused, and deleting a tracker during a check no longer causes an error.
+- Find tracked images whose srcset addresses contain commas, and resolve relative addresses on pages that set a base address.
+- Count each skipped image once in scan messages.
+- Keep a ZIP part when one of its images is named anydownload-errors.txt.
+- Show the connection-limit message as soon as 20 connections exist.
+
+### Performance
+
+- Read only ignore rules from storage instead of the whole store when the popup opens, a scan starts, or a rule changes.
+- Skip the full local snapshot in cloud sync when nothing changed locally or remotely.
+- Open saved collections faster by not re-processing data the background already prepared.
+- Stop a Telegram scan once it reaches its item limit.
+
 ## [1.30.0] - 2026-11-10
 
 ### Added

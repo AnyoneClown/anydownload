@@ -296,7 +296,7 @@ function errorResponse(url, status, retryAfter) {
   assert.ok(alarms.has(`${Tracker.ALARM_PREFIX}${created.tracker.id}`));
   assert.equal(fetchRequests[0].options.credentials, "include");
   assert.equal(fetchRequests[0].options.cache, "no-store");
-  assert.equal(fetchRequests[0].options.redirect, "error");
+  assert.equal(fetchRequests[0].options.redirect, "follow");
   const initialList = await runtimeMessage({ type: "GET_TRACKERS" });
   assert.equal(initialList.ok, true);
   assert.equal(initialList.trackers.length, 1);

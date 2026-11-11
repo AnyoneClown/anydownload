@@ -1073,4 +1073,22 @@ withFakePage([element("img", { src: "/current.jpg" })], () => {
   });
 }
 
+// Each skipped image source is reported once, even though candidate ranking,
+// preview selection and picture matching all inspect the same source.
+{
+  const blobImage = element(
+    "img",
+    { src: "blob:https://gallery.test/page-owned" },
+    { currentSrc: "blob:https://gallery.test/page-owned", naturalWidth: 100, naturalHeight: 100 }
+  );
+  const largeData = `data:image/png;base64,${"A".repeat(600000)}`;
+  const largeImage = element("img", { src: largeData }, { currentSrc: largeData, naturalWidth: 100, naturalHeight: 100 });
+  const result = scan([blobImage, largeImage]);
+  assert.equal(result.images.length, 0);
+  assert.ok(result.warnings.includes(
+    "1 page-owned blob image was skipped because Firefox cannot download it from an extension."
+  ), result.warnings.join("\n"));
+  assert.ok(result.warnings.includes("1 very large embedded image was skipped."), result.warnings.join("\n"));
+}
+
 console.log("All collector fixture checks passed.");

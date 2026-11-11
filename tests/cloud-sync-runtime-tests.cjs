@@ -589,7 +589,36 @@ async function integrationsSecurity() {
   assert.equal(wrongOwner.calls.length, 0, "A mismatched owner cannot retrieve another account's key");
 }
 
+async function idlePollSkipsLocalSnapshot() {
+  let remote = { revision: 4, payload: { includeBackgrounds: true } };
+  const h = harness({ stored: { includeBackgrounds: true, [STATE]: signedState({ base: { includeBackgrounds: true }, revision: 4, lastSync: 0 }) },
+    fetch(call) {
+      if (call.method === "PATCH") { remote = { revision: call.body.revision, payload: call.body.payload }; return response([{ revision: remote.revision }]); }
+      return response([call.url.includes("payload") ? remote : { revision: remote.revision }]);
+    } });
+  await h.runtime.ready;
+  const get = h.browser.storage.local.get;
+  let fullReads = 0;
+  h.browser.storage.local.get = (keys) => { if (keys === null) fullReads += 1; return get(keys); };
+  const before = h.calls.length;
+  await h.browser.alarms.onAlarm.emit({ name: "anydownload-cloud-sync" });
+  assert.equal(fullReads, 0, "An idle poll does not read all of storage.local");
+  assert.equal(h.calls.length - before, 1, "An idle poll only checks the remote revision");
+  assert.ok(h.local[STATE].lastSync > 0);
+  await h.browser.storage.local.set({ includeBackgrounds: true });
+  await h.browser.alarms.onAlarm.emit({ name: "anydownload-cloud-sync" });
+  assert.equal(fullReads, 0, "Rewriting an identical value is not a local edit");
+  await h.write({ mediaLayout: "list" });
+  await h.browser.alarms.onAlarm.emit({ name: "anydownload-cloud-sync" });
+  assert.ok(fullReads > 0, "A real local edit triggers a full snapshot");
+  assert.equal(remote.revision, 5);
+  assert.equal(remote.payload.mediaLayout, "list", "The local edit is uploaded");
+  remote = { revision: 6, payload: { includeBackgrounds: false, mediaLayout: "list" } };
+  await h.browser.alarms.onAlarm.emit({ name: "anydownload-cloud-sync" });
+  assert.equal(h.local.includeBackgrounds, false, "A remote revision change is still applied on an otherwise idle poll");
+}
+
 (async () => {
-  for (const check of [consentAndTrust, sharedProjectMigration, authentication, refreshAndOwnership, syncConflictsAndConcurrentEdits, revokedPermissions, journalRecovery, automaticDevices, syncProgressAndCancellation, integrationsSecurity]) await check();
+  for (const check of [consentAndTrust, sharedProjectMigration, authentication, refreshAndOwnership, syncConflictsAndConcurrentEdits, revokedPermissions, journalRecovery, automaticDevices, syncProgressAndCancellation, integrationsSecurity, idlePollSkipsLocalSnapshot]) await check();
   console.log("Cloud sync runtime tests passed.");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -205,7 +205,7 @@ source = source.replace(entry, `  globalThis.ui = { cacheElements, wireEvents, a
     markFilenamePreviewsDirty, applyDimensionResult, refreshDownloadStatuses,
     filteredImages, selectedDownloadableImages, resetMediaFilters, openGalleryPreview, openImagePreview,
     moveGalleryPreview, initializeTrackerEditor, initializeTrackerCreator, saveTracker, focusIgnoredToggle, persistSettings, ignoreStorageArea,
-    handleSettingsStorageChanges, showWorkspace, setIncognitoContext, beginSidebarTransition, state, elements };
+    handleSettingsStorageChanges, showWorkspace, setIncognitoContext, beginSidebarTransition, loadIgnoredKeys, state, elements };
 ${entry}`);
 vm.runInContext(source, context);
 const ui = context.ui;
@@ -608,6 +608,25 @@ for (const embedded of [false, true]) {
   await ui.ignoreStorageArea(true).set({ privateRule: 1 });
   assert.equal(previewSession.privateRule, 1);
   assert.equal(settingsMessages.length, writesBeforePrivate, "Private ignores must stay in session storage");
+  {
+    // Loading ignore rules must not read the whole local area (galleries, queue, ledger).
+    const local = context.browser.storage.local;
+    const siteKeyBefore = ui.state.siteKey;
+    const ruleKey = `ignoredImage:${encodeURIComponent("https://photos.example")}:${Core.ignoreKeyForUrl("https://photos.example/a.jpg")}`;
+    const reads = [];
+    context.browser.storage.local = { ...local,
+      getKeys: async () => ["siteGalleries:v1", "downloadLedger:v1", ruleKey],
+      get: async (keys) => { reads.push(keys); return keys === null ? { "siteGalleries:v1": [], [ruleKey]: 1 } : { [ruleKey]: 1 }; } };
+    ui.state.siteKey = "https://photos.example";
+    ui.state.incognito = false;
+    await ui.loadIgnoredKeys();
+    ui.state.incognito = true;
+    assert.deepEqual(reads.map((keys) => keys && Array.from(keys)), [[ruleKey]], "Only ignore-rule keys are read");
+    assert.equal(ui.state.ignoredKeys.has(ruleKey.split(":").slice(-3).join(":")), true);
+    context.browser.storage.local = local;
+    ui.state.siteKey = siteKeyBefore;
+    ui.state.ignoredKeys.clear();
+  }
   ui.state.incognito = false;
   context.browser.extension = { inIncognitoContext: true };
   await ui.persistSettings({ filenameTemplate: "still-private-{name}.{ext}" });

@@ -510,16 +510,40 @@
   }
 
   function candidateFromSrcset(value) {
-    const entries = safeText(value, 65536).split(",").map((entry) => {
-      const parts = entry.trim().split(/\s+/);
-      const descriptor = parts[1] || "";
+    // HTML srcset splitting: a URL runs to whitespace, so commas inside URLs
+    // (for example CDN transforms such as "w_300,h_200") are not separators.
+    const input = safeText(value, 65536);
+    const raw = [];
+    let position = 0;
+    while (position < input.length && raw.length < 64) {
+      while (position < input.length && /[\s,]/.test(input[position])) position += 1;
+      const start = position;
+      while (position < input.length && !/\s/.test(input[position])) position += 1;
+      let url = input.slice(start, position);
+      let descriptor = "";
+      if (/,$/.test(url)) {
+        url = url.replace(/,+$/, "");
+      } else {
+        const descriptorStart = position;
+        let depth = 0;
+        while (position < input.length && (input[position] !== "," || depth > 0)) {
+          if (input[position] === "(") depth += 1;
+          else if (input[position] === ")" && depth > 0) depth -= 1;
+          position += 1;
+        }
+        descriptor = input.slice(descriptorStart, position).trim();
+        position += 1;
+      }
+      if (url) raw.push({ url, descriptor });
+    }
+    const entries = raw.map(({ url, descriptor }) => {
       const score = descriptor.endsWith("w")
         ? Number(descriptor.slice(0, -1)) || 0
         : descriptor.endsWith("x")
           ? (Number(descriptor.slice(0, -1)) || 0) * 10000
           : 0;
-      return { url: parts[0] || "", score };
-    }).filter((entry) => entry.url);
+      return { url, score };
+    });
     entries.sort((left, right) => right.score - left.score);
     return entries[0] && entries[0].url || "";
   }
@@ -531,6 +555,17 @@
     const found = new Map();
     let payloadLength = 0;
     let nodes = [];
+    // Resolve relative media against <base href> like the live page does.
+    let baseUrl = pageUrl;
+    try {
+      const baseHref = getAttribute(documentObject.querySelector("base[href]"), "href");
+      const resolved = baseHref ? new URL(baseHref, pageUrl) : null;
+      if (resolved && ["http:", "https:"].includes(resolved.protocol)) {
+        baseUrl = resolved.href;
+      }
+    } catch (_error) {
+      baseUrl = pageUrl;
+    }
     try {
       nodes = Array.from(documentObject.querySelectorAll([
         "img", "picture source", "svg image", "video", "video source", "input[type='image']",
@@ -547,7 +582,7 @@
       }
       let normalized = "";
       try {
-        const parsed = new URL(safeText(rawUrl, 16384), pageUrl);
+        const parsed = new URL(safeText(rawUrl, 16384), baseUrl);
         if (!["http:", "https:"].includes(parsed.protocol)) {
           return false;
         }
@@ -578,7 +613,7 @@
           if (!posterValue) {
             throw new Error("No poster");
           }
-          const poster = new URL(posterValue, pageUrl);
+          const poster = new URL(posterValue, baseUrl);
           previewUrl = ["http:", "https:"].includes(poster.protocol) ? poster.href : "";
         } catch (_error) {
           previewUrl = "";

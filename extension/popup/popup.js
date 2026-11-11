@@ -2197,11 +2197,24 @@
   }
 
   function ignoreStorageArea(incognito) {
+    const local = browser.storage.local;
     return incognito ? browser.storage.session : {
-      get: (keys) => browser.storage.local.get(keys),
+      get: (keys) => local.get(keys),
+      getKeys: typeof local.getKeys === "function" ? () => local.getKeys() : undefined,
       set: (values) => writeNormalStorage("set", values),
       remove: (keys) => writeNormalStorage("remove", Array.isArray(keys) ? keys : [keys])
     };
+  }
+
+  // get(null) also reads the multi-megabyte gallery, queue and ledger records.
+  // Read only ignore rules where Firefox can list keys first.
+  async function ignoreRuleEntries(area) {
+    if (typeof area.getKeys !== "function") {
+      return area.get(null);
+    }
+    const keys = (await area.getKeys())
+      .filter((key) => typeof key === "string" && key.startsWith(IGNORE_STORAGE_PREFIX));
+    return keys.length ? area.get(keys) : {};
   }
 
   function ignoreStoragePrefix(siteKey) {
@@ -2255,7 +2268,7 @@
     const loadedFor = `${state.incognito ? "session" : "local"}\u0000${state.siteKey}`;
     const area = ignoreStorageArea(state.incognito);
     const prefix = ignoreStoragePrefix(state.siteKey);
-    const stored = await pruneIgnoredStorage(area, await area.get(null));
+    const stored = await pruneIgnoredStorage(area, await ignoreRuleEntries(area));
     const keys = Object.keys(stored || {})
       .filter((key) => key.startsWith(prefix))
       .map((key) => key.slice(prefix.length))
@@ -2355,7 +2368,7 @@
         }
 
         await area.set({ [storageKey]: Date.now() });
-        let stored = await area.get(null);
+        let stored = await ignoreRuleEntries(area);
         stored = await pruneIgnoredStorage(area, stored);
         await pruneSiteIgnoredStorage(area, stored, siteKey);
       });
@@ -2374,7 +2387,7 @@
       .catch(() => undefined)
       .then(async () => {
         const area = ignoreStorageArea(incognito);
-        const stored = await area.get(null);
+        const stored = await ignoreRuleEntries(area);
         const keys = Object.keys(stored || {}).filter((key) => key.startsWith(prefix));
         if (keys.length) {
           await area.remove(keys);
@@ -4738,7 +4751,7 @@
     if (!result || !result.ok) {
       throw new Error(result && result.error || "Firefox could not restore this website's gallery.");
     }
-    let gallery = Gallery.normalizeSite(result.gallery);
+    let gallery = Gallery.normalizedSite(result.gallery, siteKey);
     let profileCleared = false;
     if (Gallery.profileChanged(gallery, profileKey)) {
       // Another profile's media must not carry over into this one. Detach the
@@ -4755,7 +4768,7 @@
       if (!cleared || !cleared.ok) {
         throw new Error(cleared && cleared.error || "Firefox could not clear the previous profile's media.");
       }
-      gallery = Gallery.normalizeSite(cleared.gallery);
+      gallery = Gallery.normalizedSite(cleared.gallery, siteKey);
       profileCleared = true;
     }
     galleryContext = {
@@ -4873,7 +4886,9 @@
     if (!galleryContext || areaName !== (state.incognito ? "session" : "local") || !changes[Gallery.STORAGE_KEY]) {
       return;
     }
-    const gallery = Gallery.getSite(changes[Gallery.STORAGE_KEY].newValue, state.siteKey);
+    const sites = changes[Gallery.STORAGE_KEY].newValue;
+    const stored = Array.isArray(sites) && sites.find((site) => site && site.siteKey === state.siteKey);
+    const gallery = stored ? Gallery.normalizedSite(stored, state.siteKey) : Gallery.getSite(sites, state.siteKey);
     if (gallery && ((!state.busy && !galleryContext.pending) || gallery.epoch !== galleryContext.epoch)) {
       applySavedGallery(gallery);
     }
@@ -6511,6 +6526,10 @@
           if (state.liveCapture && generation === liveCaptureGeneration) {
             scheduleLiveCapturePoll(generation, LIVE_RETRY_INTERVAL_MS);
           }
+          return;
+        }
+        // A stop or restart during the scan owns the live state now.
+        if (!state.liveCapture || generation !== liveCaptureGeneration) {
           return;
         }
         liveLastFullScanAt = Date.now();
